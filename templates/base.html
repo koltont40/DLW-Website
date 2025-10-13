@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}DixieLand Wireless LLC Portal{% endblock %}</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+    {% if branding_assets.get('favicon') %}
+    <link rel="icon" href="{{ url_for('branding_file', asset_type='favicon') }}" />
+    {% endif %}
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container header-content">
+        <a class="brand" href="{{ url_for('index') }}">
+          {% if branding_assets.get('logo') %}
+          <img src="{{ url_for('branding_file', asset_type='logo') }}" alt="DixieLand Wireless LLC logo" />
+          {% else %}
+          DIXIELAND WIRELESS LLC
+          {% endif %}
+        </a>
+        <nav class="nav-sections">
+          {% set current_path = request.path %}
+          <div class="nav-primary">
+            <a
+              class="nav-pill{% if current_path == url_for('index') %} active{% endif %}"
+              href="{{ url_for('index') }}"
+              >Home</a
+            >
+            {% for item in navigation_items if item.label|lower not in ['sign up', 'client portal'] %}
+            {% set is_active = current_path == item.url or current_path.startswith(item.url ~ '/') %}
+            {% set label_lower = item.label|lower %}
+            {% if label_lower == 'service plans' %}
+            <div class="nav-menu">
+              <a
+                class="nav-pill nav-menu-toggle{% if is_active %} active{% endif %}"
+                href="{{ item.url }}"
+                aria-haspopup="true"
+                aria-expanded="false"
+              >
+                {{ item.label }}
+                <span class="nav-menu-icon" aria-hidden="true">▾</span>
+              </a>
+              <div class="nav-dropdown">
+                <a class="nav-dropdown-link" href="{{ item.url }}">All Service Plans</a>
+                {% for link in plan_category_links %}
+                <a class="nav-dropdown-link" href="{{ link.url }}">{{ link.label }}</a>
+                {% endfor %}
+              </div>
+            </div>
+            {% else %}
+            <a
+              class="nav-pill{% if is_active %} active{% endif %}"
+              href="{{ item.url }}"
+              {% if item.open_in_new_tab %}target="_blank" rel="noopener"{% endif %}
+              >{{ item.label }}</a
+            >
+            {% endif %}
+            {% endfor %}
+            <div class="nav-menu">
+              <button class="nav-pill nav-menu-toggle" type="button" aria-haspopup="true" aria-expanded="false">
+                Contact/Support
+                <span class="nav-menu-icon" aria-hidden="true">▾</span>
+              </button>
+              <div class="nav-dropdown">
+                {% for link in support_links %}
+                <a
+                  class="nav-dropdown-link"
+                  href="{{ link.url }}"
+                  {% if link.external %}target="_blank" rel="noopener"{% endif %}
+                  >{{ link.label }}</a
+                >
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+          <div class="nav-cta-group">
+            <a class="cta-button secondary" href="{{ url_for('portal_login') }}">My Account</a>
+            <a class="cta-button primary" href="{{ url_for('signup') }}">Get Service</a>
+          </div>
+        </nav>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="flash-wrapper">
+              {% for category, message in messages %}
+                <div class="flash flash-{{ category }}">{{ message }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-content">
+        <p>&copy; {{ current_year | default(2024) }} DIXIELAND WIRELESS LLC. All rights reserved.</p>
+        <div class="footer-links">
+          <a class="admin-login" href="{{ url_for('login') }}">Admin</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

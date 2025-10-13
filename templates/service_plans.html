@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Service Plans | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="hero card">
+  <h1>Service Plans</h1>
+  <p class="subtle">
+    Choose the DixieLand Wireless package that fits your home or business. All plans include friendly local
+    support and access to the customer portal for billing, appointments, and equipment details.
+  </p>
+  <a class="button primary" href="{{ url_for('signup') }}">Start your signup</a>
+</section>
+{% if plans_by_category %}
+  {% for category, plans in plans_by_category %}
+  {% set anchor_id = 'plans-' ~ category|slugify %}
+  <section class="plan-category" id="{{ anchor_id }}">
+    <header class="plan-category-header">
+      <h2>{{ category }} Plans</h2>
+      {% if category == 'Phone Service' %}
+      <p class="subtle">Reliable voice lines and calling features that integrate with your DixieLand Wireless account.</p>
+      {% else %}
+      <p class="subtle">Tailored {{ category|lower }} connectivity with portal access and hometown support.</p>
+      {% endif %}
+    </header>
+    <div class="plans-grid">
+      {% for plan in plans %}
+      <article class="plan-card card">
+        <header>
+          <h3>{{ plan.name }}</h3>
+          {% if plan.speed %}
+          <p class="plan-speed">{{ plan.speed }}</p>
+          {% endif %}
+          <p class="plan-price">{{ plan.price_cents|currency }}/mo</p>
+        </header>
+        {% if plan.description %}
+        <p class="plan-description">{{ plan.description }}</p>
+        {% endif %}
+        {% set features = plan.feature_list %}
+        {% if features %}
+        <ul class="plan-features">
+          {% for feature in features %}
+          <li>{{ feature }}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+        <footer class="plan-footer">
+          <a class="button secondary" href="{{ url_for('signup') }}?plan={{ plan.name | urlencode }}">Select plan</a>
+        </footer>
+      </article>
+      {% endfor %}
+    </div>
+    {% if category == 'Phone Service' %}
+    <p class="plan-note subtle">
+      Looking for a deeper dive into calling features and hardware options?
+      <a href="{{ url_for('phone_service') }}">Explore our dedicated phone service overview</a>.
+    </p>
+    {% endif %}
+  </section>
+  {% endfor %}
+{% else %}
+<section class="plans-grid">
+  <article class="plan-card card">
+    <header>
+      <h2>Custom Plans</h2>
+    </header>
+    <p class="plan-description">We are tuning up our plan catalog. Reach out and our team will craft the perfect package.</p>
+    <footer class="plan-footer">
+      <a class="button secondary" href="mailto:{{ contact_email }}">Contact sales</a>
+    </footer>
+  </article>
+</section>
+{% endif %}
+<section class="card plan-help">
+  <h2>Need something custom?</h2>
+  <p>
+    Enterprise and community deployments are welcome. Reach out at
+    <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
+    and we'll design a solution for your coverage, transport, and voice needs.
+  </p>
+</section>
+{% endblock %}

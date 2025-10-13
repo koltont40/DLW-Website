@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Customer Portal Login | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="hero hero-compact">
+  <h1>Customer Portal</h1>
+  <p class="lead">Use the password you created during signup (or the most recent reset) to monitor billing, equipment, and support.</p>
+</section>
+<section class="card narrow">
+  <form method="post" class="stacked-form">
+    <label>
+      Email address
+      <input type="email" name="email" placeholder="you@example.com" required />
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" placeholder="Enter your portal password" required />
+    </label>
+    <button class="button primary" type="submit">Log in</button>
+    <p class="subtle">
+      Lost your password? Contact <a href="mailto:{{ contact_email }}">support</a> so we can issue a new one.
+    </p>
+    <p class="subtle">
+      Need an account? <a href="{{ url_for('signup') }}">Sign up here</a> to create your portal credentials.
+    </p>
+  </form>
+</section>
+{% endblock %}
