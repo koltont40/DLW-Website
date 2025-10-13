@@ -7,8 +7,8 @@
   <div class="section-header">
     <h1>Legal Policies</h1>
     <p>
-      Stay informed about the agreements that govern your DIXIELAND WIRELESS LLC internet and phone services. Download
-      the latest policies below or visit the client portal for account-specific documents.
+      Stay informed about the agreements that govern your DIXIELAND WIRELESS LLC internet and phone services. View the
+      latest policies right in your browser or visit the client portal for account-specific documents.
     </p>
   </div>
 
@@ -21,7 +21,10 @@
       {% if document %}
       <div class="legal-meta">
         <span class="subtle">Updated {{ document.uploaded_at.strftime('%b %d, %Y') }}</span>
-        <a class="button small" href="{{ url_for('download_document', doc_type=key) }}">Download latest</a>
+      </div>
+      <div class="legal-actions">
+        <a class="button small" href="{{ url_for('view_document', doc_type=key) }}">View online</a>
+        <a class="button small secondary" href="{{ url_for('download_document', doc_type=key) }}">Download</a>
       </div>
       {% else %}
       <p class="subtle">Document coming soon.</p>

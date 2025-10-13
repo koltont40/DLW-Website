@@ -2,6 +2,7 @@ import os
 import secrets
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 from flask import (
@@ -63,9 +64,17 @@ LEGAL_DOCUMENT_TYPES = {
 ALLOWED_DOCUMENT_EXTENSIONS = {"pdf", "doc", "docx"}
 
 
+DOCUMENT_MIME_TYPES = {
+    "pdf": "application/pdf",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+
 DEFAULT_NAVIGATION_ITEMS = [
     ("Sign Up", "/signup", False),
     ("Legal", "/legal", False),
+    ("Contact", "mailto:hello@example.com", False),
     (
         "Client Portal",
         "https://dixielandwireless.uisp.com/crm/login",
@@ -184,19 +193,35 @@ def init_db() -> None:
 
 
 def ensure_default_navigation() -> None:
-    if NavigationItem.query.count():
-        return
+    max_position = db.session.query(db.func.max(NavigationItem.position)).scalar() or 0
+    changed = False
 
-    for index, (label, url, new_tab) in enumerate(DEFAULT_NAVIGATION_ITEMS, start=1):
-        item = NavigationItem(
-            label=label,
-            url=url,
-            position=index,
-            open_in_new_tab=new_tab,
+    for label, url, new_tab in DEFAULT_NAVIGATION_ITEMS:
+        existing_item = NavigationItem.query.filter_by(label=label).first()
+
+        if existing_item:
+            if (
+                existing_item.url != url
+                or existing_item.open_in_new_tab != new_tab
+            ):
+                existing_item.url = url
+                existing_item.open_in_new_tab = new_tab
+                changed = True
+            continue
+
+        max_position += 1
+        db.session.add(
+            NavigationItem(
+                label=label,
+                url=url,
+                position=max_position,
+                open_in_new_tab=new_tab,
+            )
         )
-        db.session.add(item)
+        changed = True
 
-    db.session.commit()
+    if changed:
+        db.session.commit()
 
 
 def login_required(func):
@@ -213,6 +238,22 @@ def login_required(func):
 
 
 def register_routes(app: Flask) -> None:
+    def _resolve_document(doc_type: str):
+        if doc_type not in LEGAL_DOCUMENT_TYPES:
+            abort(404)
+
+        document = Document.query.filter_by(doc_type=doc_type).first()
+        if not document:
+            abort(404)
+
+        upload_folder = Path(app.config["LEGAL_UPLOAD_FOLDER"])
+        file_path = upload_folder / document.stored_filename
+
+        if not file_path.exists():
+            abort(404)
+
+        return document, upload_folder, file_path
+
     @app.context_processor
     def inject_status_options():
         navigation_items = (
@@ -385,26 +426,57 @@ def register_routes(app: Flask) -> None:
         flash(f"{LEGAL_DOCUMENT_TYPES[doc_type]['label']} uploaded successfully.", "success")
         return redirect(url_for("dashboard"))
 
+    @app.get("/documents/<doc_type>/file")
+    def serve_document_file(doc_type: str):
+        document, upload_folder, file_path = _resolve_document(doc_type)
+        extension = file_path.suffix.lower().lstrip(".")
+        mimetype = DOCUMENT_MIME_TYPES.get(extension, "application/octet-stream")
+
+        return send_from_directory(
+            str(upload_folder),
+            document.stored_filename,
+            mimetype=mimetype,
+            as_attachment=False,
+            download_name=document.original_filename,
+        )
+
     @app.get("/documents/<doc_type>")
     def download_document(doc_type: str):
-        if doc_type not in LEGAL_DOCUMENT_TYPES:
-            abort(404)
-
-        document = Document.query.filter_by(doc_type=doc_type).first()
-        if not document:
-            abort(404)
-
-        upload_folder = Path(app.config["LEGAL_UPLOAD_FOLDER"])
-        file_path = upload_folder / document.stored_filename
-
-        if not file_path.exists():
-            abort(404)
+        document, upload_folder, _ = _resolve_document(doc_type)
 
         return send_from_directory(
             str(upload_folder),
             document.stored_filename,
             as_attachment=True,
             download_name=document.original_filename,
+        )
+
+    @app.get("/documents/<doc_type>/view")
+    def view_document(doc_type: str):
+        document, _, file_path = _resolve_document(doc_type)
+        extension = file_path.suffix.lower().lstrip(".")
+        file_url = url_for("serve_document_file", doc_type=doc_type, _external=True)
+
+        if extension == "pdf":
+            embed_url = file_url
+            viewer = "pdf"
+        else:
+            embed_url = (
+                "https://view.officeapps.live.com/op/embed.aspx?src="
+                + quote_plus(file_url)
+            )
+            viewer = "office"
+
+        metadata = LEGAL_DOCUMENT_TYPES.get(doc_type)
+        if not metadata:
+            abort(404)
+
+        return render_template(
+            "document_viewer.html",
+            document=document,
+            metadata=metadata,
+            embed_url=embed_url,
+            viewer=viewer,
         )
 
     @app.post("/navigation/add")

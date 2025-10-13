@@ -121,6 +121,11 @@ def test_admin_can_upload_and_download_documents(app, client):
     assert download_response.status_code == 200
     assert download_response.data == b"policy"
 
+    inline_response = client.get("/documents/aup/file")
+    assert inline_response.status_code == 200
+    content_disposition = inline_response.headers.get("Content-Disposition", "")
+    assert "attachment" not in content_disposition.lower()
+
 
 def test_admin_can_add_navigation_item(app, client):
     client.post(
@@ -172,3 +177,57 @@ def test_admin_can_upload_branding_asset(app, client):
         asset = BrandingAsset.query.filter_by(asset_type="logo").first()
         assert asset is not None
         assert asset.original_filename == "logo.png"
+
+
+def test_default_navigation_includes_contact(app):
+    with app.app_context():
+        labels = [
+            item.label
+            for item in NavigationItem.query.order_by(NavigationItem.position.asc()).all()
+        ]
+        assert "Contact" in labels
+
+
+def test_document_viewer_renders_pdf_inline(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    client.post(
+        "/documents/upload",
+        data={
+            "doc_type": "privacy",
+            "document": (io.BytesIO(b"pdf-bytes"), "privacy.pdf"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    response = client.get("/documents/privacy/view")
+    assert response.status_code == 200
+    assert b"iframe" in response.data
+    assert b"privacy.pdf" in response.data or b"Privacy Policy" in response.data
+
+
+def test_document_viewer_uses_office_embed_for_word(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    client.post(
+        "/documents/upload",
+        data={
+            "doc_type": "tos",
+            "document": (io.BytesIO(b"word-bytes"), "terms.docx"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    response = client.get("/documents/tos/view")
+    assert response.status_code == 200
+    assert b"view.officeapps.live.com" in response.data

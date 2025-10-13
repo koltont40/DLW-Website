@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}{{ metadata.label }} | Legal | DIXIELAND WIRELESS LLC{% endblock %}
+
+{% block content %}
+<section class="section legal-viewer">
+  <div class="section-header">
+    <h1>{{ metadata.label }}</h1>
+    <p class="subtle">Last updated {{ document.uploaded_at.strftime('%B %d, %Y') }}</p>
+    <div class="legal-actions">
+      <a class="button small" href="{{ url_for('download_document', doc_type=document.doc_type) }}">Download</a>
+      <a class="button small secondary" href="{{ url_for('legal') }}">Back to legal overview</a>
+    </div>
+  </div>
+
+  <div class="document-viewer-frame">
+    <iframe src="{{ embed_url }}" title="{{ metadata.label }}" allowfullscreen></iframe>
+  </div>
+
+  {% if viewer == "office" %}
+  <p class="subtle">
+    Document preview provided via Microsoft Office web viewer. Use the download button above if you need an offline copy.
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

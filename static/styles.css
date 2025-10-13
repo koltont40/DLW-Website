@@ -594,6 +594,27 @@ body {
   flex-wrap: wrap;
 }
 
+.legal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.document-viewer-frame {
+  margin-top: 1.5rem;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.18);
+  background: #0f172a;
+}
+
+.document-viewer-frame iframe {
+  width: 100%;
+  min-height: 70vh;
+  border: 0;
+  background: #fff;
+}
+
 .card-grid.legal-grid {
   gap: 1.5rem;
 }

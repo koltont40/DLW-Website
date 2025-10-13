@@ -47,9 +47,8 @@
       <div class="container footer-content">
         <p>&copy; {{ current_year | default(2024) }} DIXIELAND WIRELESS LLC. All rights reserved.</p>
         <div class="footer-links">
-          <a href="mailto:hello@example.com">Contact</a>
           <a href="{{ url_for('signup') }}">Become a client</a>
-          <a class="admin-login" href="{{ url_for('login') }}">ADMIN LOGIN</a>
+          <a class="admin-login" href="{{ url_for('login') }}">Admin</a>
         </div>
       </div>
     </footer>
