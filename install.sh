@@ -5,13 +5,57 @@ if [ -n "${DEBUG_INSTALL:-}" ]; then
   set -x
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "Python 3 is required. Please install it and re-run this script." >&2
-  exit 1
+missing_packages=()
+
+add_missing() {
+  local pkg="$1"
+  for existing in "${missing_packages[@]:-}"; do
+    if [[ "$existing" == "$pkg" ]]; then
+      return
+    fi
+  done
+  missing_packages+=("$pkg")
+}
+
+require_command() {
+  local cmd="$1"
+  local pkg="$2"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    add_missing "$pkg"
+  fi
+}
+
+require_python_module() {
+  local module="$1"
+  local pkg="$2"
+  if ! python3 -c "import ${module}" >/dev/null 2>&1; then
+    add_missing "$pkg"
+  fi
+}
+
+require_command python3 python3
+require_command pip3 python3-pip
+
+if command -v python3 >/dev/null 2>&1; then
+  if ! python3 -m venv --help >/dev/null 2>&1; then
+    add_missing "python3-venv"
+  fi
+else
+  add_missing "python3"
 fi
 
-if ! command -v pip3 >/dev/null 2>&1; then
-  echo "python3-pip is required. Install it with 'sudo apt install python3-pip'." >&2
+if command -v python3 >/dev/null 2>&1; then
+  require_python_module sqlite3 libsqlite3-dev
+fi
+
+if ((${#missing_packages[@]})); then
+  echo "The following system packages are required before installation can continue:" >&2
+  printf '  - %s\n' "${missing_packages[@]}" >&2
+  if command -v apt-get >/dev/null 2>&1; then
+    echo >&2
+    echo "Install them with:" >&2
+    echo "  sudo apt-get update && sudo apt-get install -y ${missing_packages[*]}" >&2
+  fi
   exit 1
 fi
 
