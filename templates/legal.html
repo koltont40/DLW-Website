@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Legal | DIXIELAND WIRELESS LLC{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="section-header">
+    <h1>Legal Policies</h1>
+    <p>
+      Stay informed about the agreements that govern your DIXIELAND WIRELESS LLC internet and phone services. Download
+      the latest policies below or visit the client portal for account-specific documents.
+    </p>
+  </div>
+
+  <div class="card-grid legal-grid">
+    {% for key, metadata in legal_document_types.items() %}
+    {% set document = documents[key] %}
+    <article class="card">
+      <h2 class="card-title">{{ metadata.label }}</h2>
+      <p class="card-text">{{ metadata.description }}</p>
+      {% if document %}
+      <div class="legal-meta">
+        <span class="subtle">Updated {{ document.uploaded_at.strftime('%b %d, %Y') }}</span>
+        <a class="button small" href="{{ url_for('download_document', doc_type=key) }}">Download latest</a>
+      </div>
+      {% else %}
+      <p class="subtle">Document coming soon.</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+
+  <div class="cta-panel">
+    <h2>Need a signed copy?</h2>
+    <p>Log in to the client portal to review account-specific paperwork or submit completed forms.</p>
+    <a
+      class="button"
+      href="https://dixielandwireless.uisp.com/crm/login"
+      target="_blank"
+      rel="noopener"
+      >Open Client Portal</a
+    >
+  </div>
+</section>
+{% endblock %}

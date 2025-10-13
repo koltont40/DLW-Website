@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}Client Dashboard | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="dashboard-header">
+  <div>
+    <h1>Client Dashboard</h1>
+    <p class="lead">Monitor onboarding progress and manage client relationships in one place.</p>
+  </div>
+  <div class="dashboard-actions">
+    <a class="button secondary" href="{{ url_for('logout') }}">Log out</a>
+  </div>
+</section>
+
+<section class="metrics">
+  <div class="metric-card">
+    <span class="metric-label">Total Clients</span>
+    <span class="metric-value">{{ total_clients }}</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label">New (7 days)</span>
+    <span class="metric-value">{{ new_this_week }}</span>
+  </div>
+</section>
+
+<section class="card navigation-management">
+  <div class="section-header">
+    <div>
+      <h2>Header Navigation</h2>
+      <p class="subtle">Control the links that appear at the top of the public website.</p>
+    </div>
+  </div>
+  <form class="nav-add-form" method="post" action="{{ url_for('add_navigation_item') }}">
+    <div class="field-grid">
+      <label>
+        Link label
+        <input type="text" name="label" placeholder="Example: Coverage Map" required />
+      </label>
+      <label>
+        URL
+        <input type="text" name="url" placeholder="https://example.com" required />
+      </label>
+    </div>
+    <label class="checkbox">
+      <input type="checkbox" name="open_in_new_tab" />
+      <span>Open in new tab</span>
+    </label>
+    <button class="button small primary" type="submit">Add Link</button>
+  </form>
+  <div class="navigation-list">
+    {% if navigation_items %}
+    {% for item in navigation_items %}
+    <form class="navigation-item" method="post" action="{{ url_for('update_navigation_item', item_id=item.id) }}">
+      <div class="field-grid">
+        <label>
+          Link label
+          <input type="text" name="label" value="{{ item.label }}" required />
+        </label>
+        <label>
+          URL
+          <input type="text" name="url" value="{{ item.url }}" required />
+        </label>
+      </div>
+      <label class="checkbox">
+        <input type="checkbox" name="open_in_new_tab" {% if item.open_in_new_tab %}checked{% endif %} />
+        <span>Open in new tab</span>
+      </label>
+      <div class="navigation-item-actions">
+        <button class="button small primary" type="submit">Save</button>
+        <button class="button small" type="submit" form="move-nav-{{ item.id }}-up">Move Up</button>
+        <button class="button small" type="submit" form="move-nav-{{ item.id }}-down">Move Down</button>
+        <button
+          class="button small danger"
+          type="submit"
+          form="delete-nav-{{ item.id }}"
+          onclick="return confirm('Remove this link from the header?');"
+        >
+          Remove
+        </button>
+      </div>
+    </form>
+    <form id="move-nav-{{ item.id }}-up" class="inline-form" method="post" action="{{ url_for('move_navigation_item', item_id=item.id) }}">
+      <input type="hidden" name="direction" value="up" />
+    </form>
+    <form id="move-nav-{{ item.id }}-down" class="inline-form" method="post" action="{{ url_for('move_navigation_item', item_id=item.id) }}">
+      <input type="hidden" name="direction" value="down" />
+    </form>
+    <form id="delete-nav-{{ item.id }}" class="inline-form" method="post" action="{{ url_for('delete_navigation_item', item_id=item.id) }}"></form>
+    {% endfor %}
+    {% else %}
+    <p class="subtle">No navigation links configured yet.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card branding-management">
+  <div class="section-header compact">
+    <div>
+      <h2>Branding Assets</h2>
+      <p class="subtle">Upload the latest logos, favicons, and wordmarks for DIXIELAND WIRELESS LLC.</p>
+    </div>
+  </div>
+  <div class="branding-grid">
+    {% for key, metadata in branding_asset_types.items() %}
+    {% set asset = branding_assets.get(key) %}
+    <article class="branding-asset">
+      <header>
+        <h3>{{ metadata.label }}</h3>
+        <p>{{ metadata.description }}</p>
+      </header>
+      {% if asset %}
+      <p class="subtle">Last updated {{ asset.uploaded_at.strftime('%b %d, %Y') }}</p>
+      {% if key in ['logo', 'favicon', 'wordmark'] %}
+      <div class="branding-preview-wrapper">
+        <img class="branding-preview" src="{{ url_for('branding_file', asset_type=key) }}" alt="{{ metadata.label }} preview" />
+      </div>
+      {% endif %}
+      {% else %}
+      <p class="subtle">No file uploaded yet.</p>
+      {% endif %}
+      <form class="upload-form" method="post" action="{{ url_for('upload_branding') }}" enctype="multipart/form-data">
+        <input type="hidden" name="asset_type" value="{{ key }}" />
+        <label class="file-input">
+          <span>Choose file</span>
+          <input type="file" name="asset" required />
+        </label>
+        <button class="button small primary" type="submit">Upload</button>
+      </form>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card legal-management">
+  <div class="section-header compact">
+    <div>
+      <h2>Legal Document Library</h2>
+      <p class="subtle">
+        Upload the latest Acceptable Use Policy, Privacy Policy, and Terms of Service for your subscribers.
+      </p>
+    </div>
+  </div>
+  <div class="legal-documents-grid">
+    {% for key, metadata in legal_document_types.items() %}
+    {% set document = legal_documents[key] %}
+    <article class="legal-document">
+      <header>
+        <h3>{{ metadata.label }}</h3>
+        <p>{{ metadata.description }}</p>
+      </header>
+      {% if document %}
+      <p class="subtle">Last updated {{ document.uploaded_at.strftime('%b %d, %Y') }}</p>
+      <a class="button small" href="{{ url_for('download_document', doc_type=key) }}">Download current</a>
+      {% else %}
+      <p class="subtle">No file uploaded yet.</p>
+      {% endif %}
+      <form class="upload-form" method="post" action="{{ url_for('upload_document') }}" enctype="multipart/form-data">
+        <input type="hidden" name="doc_type" value="{{ key }}" />
+        <label class="file-input">
+          <span>Choose file</span>
+          <input type="file" name="document" required />
+        </label>
+        <button class="button small primary" type="submit">Upload</button>
+      </form>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="filters card">
+  <form method="get" class="filter-form">
+    <label>
+      Filter by status
+      <select name="status" onchange="this.form.submit()">
+        <option value="">All statuses</option>
+        {% for option in status_options %}
+          <option value="{{ option }}" {% if status_filter == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if status_filter %}
+      <a class="button link" href="{{ url_for('dashboard') }}">Clear</a>
+    {% endif %}
+  </form>
+</section>
+
+<section class="card table-card">
+  {% if clients %}
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Company</th>
+          <th>Project</th>
+          <th>Status</th>
+          <th>Notes</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for client in clients %}
+          <tr>
+            <td>
+              <strong>{{ client.name }}</strong>
+              <div class="subtle">Joined {{ client.created_at.strftime('%b %d, %Y') }}</div>
+            </td>
+            <td>{{ client.email }}</td>
+            <td>{{ client.company or '—' }}</td>
+            <td>{{ client.project_type or '—' }}</td>
+            <td>
+              <select name="status" form="client-form-{{ client.id }}">
+                {% for option in status_options %}
+                  <option value="{{ option }}" {% if client.status == option %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td class="notes-cell">
+              <textarea name="notes" rows="3" placeholder="Add context" form="client-form-{{ client.id }}">{{ client.notes or '' }}</textarea>
+            </td>
+            <td class="action-cell">
+              <form
+                id="client-form-{{ client.id }}"
+                class="inline-form"
+                method="post"
+                action="{{ url_for('update_client', client_id=client.id, status=request.args.get('status')) }}"
+              >
+                <button class="button small primary" type="submit">Save</button>
+              </form>
+              <form
+                class="inline-form"
+                method="post"
+                action="{{ url_for('delete_client', client_id=client.id, status=request.args.get('status')) }}"
+                onsubmit="return confirm('Remove this client?');"
+              >
+                <button class="button small danger" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty-state">
+      <h3>No clients found</h3>
+      <p>Once a prospect completes the signup form, they will appear here for follow-up.</p>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}
