@@ -64,6 +64,79 @@ body {
   gap: 1rem;
 }
 
+.nav-menu {
+  position: relative;
+}
+
+.nav-menu-toggle {
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid transparent;
+  color: var(--secondary);
+  font-weight: 600;
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.nav-menu-toggle:hover {
+  background: rgba(56, 189, 248, 0.2);
+}
+
+.nav-menu-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.nav-menu-icon {
+  font-size: 0.85rem;
+}
+
+.nav-dropdown {
+  position: absolute;
+  top: calc(100% + 0.75rem);
+  right: 0;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 220px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-6px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 20;
+}
+
+.nav-menu:hover .nav-dropdown,
+.nav-menu:focus-within .nav-dropdown {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.nav-dropdown-link {
+  display: block;
+  padding: 0.45rem 0.6rem;
+  border-radius: 12px;
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.nav-dropdown-link:hover,
+.nav-dropdown-link:focus-visible {
+  color: var(--secondary);
+  background: rgba(56, 189, 248, 0.08);
+  outline: none;
+}
+
 .nav-link {
   color: var(--muted);
   text-decoration: none;
@@ -1607,6 +1680,28 @@ body {
   gap: 1.25rem;
 }
 
+.down-detector-panel {
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  background: rgba(15, 23, 42, 0.3);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.down-detector-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.down-detector-panel .stacked-form {
+  gap: 1rem;
+}
+
 .snmp-settings-header {
   display: flex;
   justify-content: space-between;
@@ -1886,6 +1981,229 @@ body {
   margin-top: 0;
 }
 
+/* Support & status pages */
+.support-hero {
+  display: grid;
+  gap: 2rem;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr);
+  align-items: stretch;
+  margin-bottom: 2.5rem;
+}
+
+.support-highlights {
+  display: flex;
+  align-items: stretch;
+}
+
+.support-hero h1 {
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  margin-bottom: 0.75rem;
+}
+
+.support-hero p {
+  color: var(--muted);
+  max-width: 60ch;
+}
+
+.support-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.support-highlights .card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.support-list,
+.support-contact-list,
+.support-link-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.support-link-list a {
+  color: var(--secondary);
+  text-decoration: none;
+}
+
+.support-link-list a:hover {
+  color: var(--primary);
+}
+
+.support-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin-bottom: 2.5rem;
+}
+
+.support-grid .card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  height: 100%;
+}
+
+.uptime-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  flex-wrap: wrap;
+  margin-bottom: 2rem;
+}
+
+.uptime-hero p {
+  max-width: 60ch;
+  color: var(--muted);
+}
+
+.uptime-status-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface-elevated);
+  box-shadow: var(--card-shadow);
+}
+
+.status-indicator {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--muted);
+  box-shadow: 0 0 0 6px rgba(148, 163, 184, 0.15);
+}
+
+.status-operational {
+  background: var(--success);
+  box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.2);
+}
+
+.status-maintenance {
+  background: var(--warning);
+  box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.2);
+}
+
+.metric-label {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.uptime-metrics {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-bottom: 2.5rem;
+}
+
+.uptime-metric {
+  padding: 1.25rem;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  box-shadow: var(--card-shadow);
+}
+
+.incident-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.incident-card {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  padding: 1.5rem;
+  box-shadow: var(--card-shadow);
+}
+
+.incident-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.incident-card h3 {
+  margin: 0 0 0.35rem;
+}
+
+.incident-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+  min-width: 120px;
+}
+
+.incident-status {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.incident-footer {
+  margin-top: 0.5rem;
+}
+
+.cancellation-hero {
+  max-width: 70ch;
+  margin-bottom: 2rem;
+}
+
+.cancellation-hero p {
+  color: var(--muted);
+}
+
+.cancellation-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin-bottom: 2.5rem;
+}
+
+.cancellation-grid .card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  height: 100%;
+}
+
+.cancellation-help {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 2rem;
+}
+
+.down-detector {
+  max-width: 680px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
 @media (max-width: 768px) {
   .blog-post {
     padding: 1.75rem;
@@ -1893,5 +2211,21 @@ body {
 
   .blog-post-header h1 {
     font-size: 1.85rem;
+  }
+
+  .support-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .uptime-status-card {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .incident-meta {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
   }
 }

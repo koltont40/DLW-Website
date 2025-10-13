@@ -168,14 +168,14 @@ PORTAL_SESSION_KEY = "client_portal_id"
 
 
 def get_default_navigation_items() -> list[tuple[str, str, bool]]:
-    contact_email = current_app.config.get("CONTACT_EMAIL", "hello@example.com")
     return [
         ("Sign Up", "/signup", False),
         ("Service Plans", "/services", False),
+        ("Service Cancellation", "/cancellation", False),
+        ("Uptime", "/uptime", False),
         ("Blog", "/blog", False),
         ("About", "/about", False),
         ("Legal", "/legal", False),
-        ("Contact", f"mailto:{contact_email}", False),
         ("Client Portal", "/portal/login", False),
     ]
 
@@ -359,6 +359,19 @@ class SNMPConfig(db.Model):
         return f"<SNMPConfig host={self.host} port={self.port}>"
 
 
+class DownDetectorConfig(db.Model):
+    __tablename__ = "down_detector_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    target_url = db.Column(db.String(500))
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<DownDetectorConfig target={self.target_url}>"
+
+
 class BlogPost(db.Model):
     __tablename__ = "blog_posts"
 
@@ -426,6 +439,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_client_portal_fields()
         ensure_default_navigation()
         ensure_snmp_configuration()
+        ensure_down_detector_configuration()
 
     return app
 
@@ -438,6 +452,8 @@ def init_db() -> None:
         db.create_all()
         ensure_client_portal_fields()
         ensure_default_navigation()
+        ensure_snmp_configuration()
+        ensure_down_detector_configuration()
 
 
 def send_email_via_snmp(app: Flask, recipient: str, subject: str, body: str) -> bool:
@@ -616,6 +632,16 @@ def ensure_snmp_configuration() -> None:
     db.session.commit()
 
 
+def ensure_down_detector_configuration() -> None:
+    config = DownDetectorConfig.query.first()
+    if config:
+        return
+
+    config = DownDetectorConfig(target_url=None)
+    db.session.add(config)
+    db.session.commit()
+
+
 def get_effective_snmp_settings(app: Flask) -> dict[str, str | int | None]:
     settings: dict[str, str | int | None] = {
         "host": app.config.get("SNMP_TRAP_HOST"),
@@ -735,6 +761,27 @@ def register_routes(app: Flask) -> None:
             NavigationItem.query.order_by(NavigationItem.position.asc()).all()
         )
         branding_assets = {asset.asset_type: asset for asset in BrandingAsset.query.all()}
+        down_detector_config = DownDetectorConfig.query.first()
+        contact_email = app.config.get("CONTACT_EMAIL", "hello@example.com")
+        support_links = [
+            {
+                "label": "Contact Support",
+                "url": f"mailto:{contact_email}",
+                "external": True,
+            },
+            {"label": "Support Center", "url": url_for("support"), "external": False},
+            {"label": "Uptime Status", "url": url_for("uptime"), "external": False},
+            {
+                "label": "Service Cancellation",
+                "url": url_for("service_cancellation"),
+                "external": False,
+            },
+            {
+                "label": "Down Detector",
+                "url": url_for("down_detector"),
+                "external": bool(down_detector_config and down_detector_config.target_url),
+            },
+        ]
 
         return {
             "status_options": STATUS_OPTIONS,
@@ -747,7 +794,9 @@ def register_routes(app: Flask) -> None:
             "ticket_status_options": TICKET_STATUS_OPTIONS,
             "service_offerings": SERVICE_OFFERINGS,
             "appointment_status_options": APPOINTMENT_STATUS_OPTIONS,
-            "contact_email": app.config.get("CONTACT_EMAIL", "hello@example.com"),
+            "contact_email": contact_email,
+            "support_links": support_links,
+            "down_detector_config": down_detector_config,
         }
 
     @app.route("/")
@@ -761,6 +810,50 @@ def register_routes(app: Flask) -> None:
     @app.route("/about")
     def about():
         return render_template("about.html")
+
+    @app.route("/support")
+    def support():
+        return render_template("support.html")
+
+    @app.route("/uptime")
+    def uptime():
+        uptime_metrics = {
+            "current_status": "Operational",
+            "uptime_30": "99.982%",
+            "uptime_90": "99.965%",
+            "next_window": "June 15, 10:00 PM - 12:00 AM",
+        }
+        incidents = [
+            {
+                "title": "Scheduled tower maintenance",
+                "date": "May 20",
+                "status": "Completed",
+                "summary": (
+                    "Preventative maintenance on Sector 3 tower. Customers experienced"
+                    " brief interruptions overnight."
+                ),
+            },
+            {
+                "title": "Fiber backhaul interruption",
+                "date": "April 04",
+                "status": "Resolved",
+                "summary": "Carrier fiber splice caused packet loss for south region subscribers.",
+            },
+        ]
+        return render_template(
+            "uptime.html", uptime_metrics=uptime_metrics, incidents=incidents
+        )
+
+    @app.route("/cancellation")
+    def service_cancellation():
+        return render_template("cancellation.html")
+
+    @app.route("/status/down-detector")
+    def down_detector():
+        config = DownDetectorConfig.query.first()
+        if config and config.target_url:
+            return redirect(config.target_url)
+        return render_template("down_detector.html")
 
     @app.route("/blog")
     def blog():
@@ -1265,6 +1358,7 @@ def register_routes(app: Flask) -> None:
         snmp_settings = get_effective_snmp_settings(app)
         snmp_enabled = bool(snmp_settings.get("host") or app.config.get("SNMP_EMAIL_SENDER"))
         snmp_config = SNMPConfig.query.first()
+        down_detector_config = DownDetectorConfig.query.first()
 
         blog_posts = BlogPost.query.order_by(BlogPost.created_at.desc()).all()
 
@@ -1300,6 +1394,7 @@ def register_routes(app: Flask) -> None:
             snmp_config=snmp_config,
             snmp_settings=snmp_settings,
             blog_posts=blog_posts,
+            down_detector_config=down_detector_config,
         )
 
     @app.post("/documents/upload")
@@ -1902,6 +1997,27 @@ def register_routes(app: Flask) -> None:
         app.config["SNMP_ADMIN_EMAIL"] = config.admin_email
 
         flash("SNMP settings updated.", "success")
+        return _redirect_back_to_dashboard("support")
+
+    @app.post("/down-detector/config")
+    @login_required
+    def update_down_detector_config():
+        target_url = request.form.get("target_url", "").strip()
+
+        config = DownDetectorConfig.query.first()
+        if not config:
+            config = DownDetectorConfig()
+            db.session.add(config)
+
+        config.target_url = target_url or None
+        config.updated_at = utcnow()
+        db.session.commit()
+
+        if config.target_url:
+            flash("Down detector redirect updated.", "success")
+        else:
+            flash("Down detector redirect cleared.", "info")
+
         return _redirect_back_to_dashboard("support")
 
     @app.post("/navigation/add")

@@ -11,6 +11,7 @@ from app import (
     Invoice,
     Appointment,
     SNMPConfig,
+    DownDetectorConfig,
     NavigationItem,
     BlogPost,
     SupportTicket,
@@ -66,6 +67,44 @@ def test_about_page_highlights_mission(client):
     assert response.status_code == 200
     assert b"Our Mission" in response.data
     assert b"local experts" in response.data
+
+
+def test_support_page_offers_resources(client):
+    response = client.get("/support")
+    assert response.status_code == 200
+    assert b"Support center" in response.data
+    assert b"Email support" in response.data
+
+
+def test_uptime_page_displays_metrics(client):
+    response = client.get("/uptime")
+    assert response.status_code == 200
+    assert b"Network uptime" in response.data
+    assert b"30-day uptime" in response.data
+
+
+def test_service_cancellation_page_outlines_steps(client):
+    response = client.get("/cancellation")
+    assert response.status_code == 200
+    assert b"Service cancellation" in response.data
+    assert b"Submit your request" in response.data
+
+
+def test_down_detector_placeholder_when_missing(client):
+    response = client.get("/status/down-detector")
+    assert response.status_code == 200
+    assert b"live outage feed" in response.data
+
+
+def test_down_detector_redirects_when_configured(app, client):
+    with app.app_context():
+        config = DownDetectorConfig.query.first()
+        config.target_url = "https://status.example.com"
+        db.session.commit()
+
+    response = client.get("/status/down-detector")
+    assert response.status_code == 302
+    assert response.headers["Location"] == "https://status.example.com"
 
 
 def test_legal_page_lists_documents(client):
@@ -247,13 +286,14 @@ def test_admin_can_upload_branding_asset(app, client):
         assert asset.original_filename == "logo.png"
 
 
-def test_default_navigation_includes_contact(app):
+def test_default_navigation_includes_service_pages(app):
     with app.app_context():
         labels = [
             item.label
             for item in NavigationItem.query.order_by(NavigationItem.position.asc()).all()
         ]
-        assert "Contact" in labels
+        assert "Service Cancellation" in labels
+        assert "Uptime" in labels
 
 
 def test_admin_can_create_blog_post_and_publish(app, client):

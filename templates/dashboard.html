@@ -772,6 +772,38 @@
         </p>
         {% endif %}
       </div>
+      <div class="down-detector-panel">
+        <div class="down-detector-header">
+          <h3>Down detector redirect</h3>
+          {% if down_detector_config and down_detector_config.target_url %}
+          <span class="status-pill status-active">Active</span>
+          {% else %}
+          <span class="status-pill status-disabled">Not set</span>
+          {% endif %}
+        </div>
+        <p class="subtle">
+          Choose the public status page customers should visit when selecting the down detector link from the
+          website or client portal.
+        </p>
+        <form
+          class="stacked-form"
+          method="post"
+          action="{{ url_for('update_down_detector_config', section='support', status=request.args.get('status')) }}"
+        >
+          <label>
+            Target URL
+            <input
+              type="url"
+              name="target_url"
+              placeholder="https://status.example.com"
+              value="{{ down_detector_config.target_url if down_detector_config else '' }}"
+            />
+          </label>
+          <div class="snmp-settings-actions">
+            <button class="button secondary" type="submit">Save redirect</button>
+          </div>
+        </form>
+      </div>
       {% if clients %}
       <div class="client-stack">
         {% for client in clients %}
