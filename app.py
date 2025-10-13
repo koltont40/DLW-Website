@@ -1,4 +1,5 @@
 import os
+import re
 import secrets
 import string
 from collections import defaultdict
@@ -35,6 +36,12 @@ db = SQLAlchemy()
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def slugify_segment(value: str) -> str:
+    if not value:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
 
 def generate_portal_password() -> str:
@@ -149,7 +156,7 @@ DEFAULT_SERVICE_PLANS = [
     },
     {
         "name": "Phone Service",
-        "category": "Residential",
+        "category": "Phone Service",
         "price_cents": 2999,
         "speed": "Digital voice",
         "description": "Crystal clear home and small business voice with enhanced emergency calling.",
@@ -157,6 +164,18 @@ DEFAULT_SERVICE_PLANS = [
             "Unlimited local and long-distance calling",
             "Voicemail-to-email and caller ID",
             "Battery-backed customer premise equipment",
+        ],
+    },
+    {
+        "name": "Business Voice Essentials",
+        "category": "Phone Service",
+        "price_cents": 4999,
+        "speed": "Digital voice",
+        "description": "Scalable VoIP lines for offices, point-of-sale, and dispatch desks.",
+        "features": [
+            "Unlimited nationwide calling",
+            "Auto attendants and hunt groups",
+            "Priority dispatch with 4-hour response",
         ],
     },
     {
@@ -437,6 +456,8 @@ class BlogPost(db.Model):
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, instance_relative_config=True)
 
+    app.jinja_env.filters.setdefault("slugify", slugify_segment)
+
     instance_path = Path(app.instance_path)
     db_path = instance_path / "clients.db"
     os.makedirs(instance_path, exist_ok=True)
@@ -611,24 +632,61 @@ def ensure_default_navigation() -> None:
 
 
 def ensure_service_plans_seeded() -> None:
-    if ServicePlan.query.count() > 0:
+    existing_plans = {
+        plan.name: plan for plan in ServicePlan.query.order_by(ServicePlan.position.asc()).all()
+    }
+    if not existing_plans:
+        position = 0
+        for plan_data in DEFAULT_SERVICE_PLANS:
+            position += 1
+            plan = ServicePlan(
+                name=plan_data["name"],
+                category=plan_data.get("category", "Residential"),
+                price_cents=plan_data.get("price_cents", 0),
+                speed=plan_data.get("speed"),
+                description=plan_data.get("description"),
+                position=position,
+            )
+            plan.set_features_from_text("\n".join(plan_data.get("features", [])))
+            db.session.add(plan)
+
+        db.session.commit()
         return
 
-    position = 0
-    for plan_data in DEFAULT_SERVICE_PLANS:
-        position += 1
-        plan = ServicePlan(
-            name=plan_data["name"],
-            category=plan_data.get("category", "Residential"),
-            price_cents=plan_data.get("price_cents", 0),
-            speed=plan_data.get("speed"),
-            description=plan_data.get("description"),
-            position=position,
-        )
-        plan.set_features_from_text("\n".join(plan_data.get("features", [])))
-        db.session.add(plan)
+    changed = False
+    max_position = (
+        db.session.query(db.func.max(ServicePlan.position)).scalar() or len(existing_plans)
+    )
 
-    db.session.commit()
+    for plan_data in DEFAULT_SERVICE_PLANS:
+        name = plan_data["name"]
+        plan = existing_plans.get(name)
+        if not plan:
+            max_position += 1
+            plan = ServicePlan(
+                name=name,
+                category=plan_data.get("category", "Residential"),
+                price_cents=plan_data.get("price_cents", 0),
+                speed=plan_data.get("speed"),
+                description=plan_data.get("description"),
+                position=max_position,
+            )
+            plan.set_features_from_text("\n".join(plan_data.get("features", [])))
+            db.session.add(plan)
+            changed = True
+            continue
+
+        desired_category = plan_data.get("category")
+        if (
+            plan.name == "Phone Service"
+            and desired_category
+            and plan.category != desired_category
+        ):
+            plan.category = desired_category
+            changed = True
+
+    if changed:
+        db.session.commit()
 
 
 def get_service_offerings() -> list[str]:
@@ -871,6 +929,28 @@ def register_routes(app: Flask) -> None:
 
         service_offerings = get_service_offerings()
 
+        plan_categories_raw = (
+            ServicePlan.query.with_entities(ServicePlan.category)
+            .filter(ServicePlan.category.isnot(None))
+            .distinct()
+            .all()
+        )
+        category_order = {"Residential": 0, "Phone Service": 1, "Business": 2}
+        categories = sorted(
+            [category for (category,) in plan_categories_raw if category],
+            key=lambda category: (
+                category_order.get(category, len(category_order)),
+                category,
+            ),
+        )
+        plan_category_links = [
+            {
+                "label": f"{category} Plans",
+                "url": f"{url_for('service_plans')}#plans-{slugify_segment(category)}",
+            }
+            for category in categories
+        ]
+
         return {
             "status_options": STATUS_OPTIONS,
             "current_year": utcnow().year,
@@ -885,6 +965,7 @@ def register_routes(app: Flask) -> None:
             "contact_email": contact_email,
             "support_links": support_links,
             "down_detector_config": down_detector_config,
+            "plan_category_links": plan_category_links,
         }
 
     @app.route("/")
@@ -902,7 +983,7 @@ def register_routes(app: Flask) -> None:
         for plan in plans:
             plans_by_category[plan.category].append(plan)
 
-        category_order = {"Residential": 0, "Business": 1}
+        category_order = {"Residential": 0, "Phone Service": 1, "Business": 2}
         ordered_categories = sorted(
             plans_by_category.items(),
             key=lambda item: (category_order.get(item[0], len(category_order)), item[0]),
@@ -911,6 +992,15 @@ def register_routes(app: Flask) -> None:
         return render_template(
             "service_plans.html", plans_by_category=ordered_categories
         )
+
+    @app.route("/phone-service")
+    def phone_service():
+        plans = (
+            ServicePlan.query.filter_by(category="Phone Service")
+            .order_by(ServicePlan.position.asc(), ServicePlan.id.asc())
+            .all()
+        )
+        return render_template("phone_service.html", plans=plans)
 
     @app.route("/about")
     def about():
@@ -1477,7 +1567,7 @@ def register_routes(app: Flask) -> None:
         for plan in service_plans:
             plans_by_category[plan.category].append(plan)
 
-        category_order = {"Residential": 0, "Business": 1}
+        category_order = {"Residential": 0, "Phone Service": 1, "Business": 2}
         ordered_plan_categories = sorted(
             plans_by_category.items(),
             key=lambda item: (category_order.get(item[0], len(category_order)), item[0]),

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Phone Service | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="phone-hero card">
+  <div>
+    <h1>Crystal-Clear Phone Built for the Wire-Free Frontier</h1>
+    <p class="subtle">
+      Keep crews connected and families in touch with VoIP that rides the same resilient DixieLand Wireless network as
+      our WISP service. Manage numbers, voicemail, and billing from the same secure customer portal.
+    </p>
+    <div class="hero-actions">
+      <a class="button primary" href="{{ url_for('signup') }}">Start service</a>
+      <a class="button secondary" href="{{ url_for('portal_login') }}">Customer login</a>
+      <a class="button ghost" href="mailto:{{ contact_email }}">Talk with sales</a>
+    </div>
+  </div>
+  <div class="phone-highlight">
+    <h2>Why our voice network stands out</h2>
+    <ul>
+      <li>Emergency-ready E911 routing on every line</li>
+      <li>Power-fail safe equipment so dial tone stays up</li>
+      <li>Local technicians ready for dispatch 24/7</li>
+    </ul>
+  </div>
+</section>
+
+<section class="phone-benefits">
+  <div class="benefit-card">
+    <h3>Flexible deployments</h3>
+    <p>Scale from a single handset to enterprise PBX trunks with zero on-site controllers to manage.</p>
+  </div>
+  <div class="benefit-card">
+    <h3>Managed features</h3>
+    <p>Auto attendants, hunt groups, voicemail-to-email, and call recording configured from our dashboard.</p>
+  </div>
+  <div class="benefit-card">
+    <h3>Unified billing</h3>
+    <p>Voice and internet invoices sync into one portal so accounting teams always know what is due.</p>
+  </div>
+</section>
+
+<section class="phone-plans card">
+  <header class="section-header">
+    <div>
+      <h2>Phone Service Plans</h2>
+      <p class="subtle">Choose the right number of lines and features, or mix and match with our internet bundles.</p>
+    </div>
+  </header>
+  {% if plans %}
+  <div class="plans-grid">
+    {% for plan in plans %}
+    <article class="plan-card card">
+      <header>
+        <h3>{{ plan.name }}</h3>
+        {% if plan.speed %}
+        <p class="plan-speed">{{ plan.speed }}</p>
+        {% endif %}
+        <p class="plan-price">{{ plan.price_cents|currency }}/mo</p>
+      </header>
+      {% if plan.description %}
+      <p class="plan-description">{{ plan.description }}</p>
+      {% endif %}
+      {% set features = plan.feature_list %}
+      {% if features %}
+      <ul class="plan-features">
+        {% for feature in features %}
+        <li>{{ feature }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      <footer class="plan-footer">
+        <a class="button secondary" href="{{ url_for('signup') }}?plan={{ plan.name | urlencode }}">Select plan</a>
+      </footer>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="subtle">
+    We are customizing our phone packages right now. <a href="mailto:{{ contact_email }}">Contact the team</a> and we will
+    tailor the perfect voice deployment for you.
+  </p>
+  {% endif %}
+</section>
+
+<section class="phone-cta">
+  <div class="cta-card">
+    <h2>Need to bundle internet and phone?</h2>
+    <p>Combine WISP access with hosted voice on one invoice, with unified support from engineers who know your network.</p>
+    <div class="cta-actions">
+      <a class="button primary" href="{{ url_for('service_plans') }}">Compare all plans</a>
+      <a class="button secondary" href="mailto:{{ contact_email }}">Schedule a consultation</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

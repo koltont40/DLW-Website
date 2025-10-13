@@ -18,6 +18,8 @@ This project provides a self-hosted client onboarding, billing, and support port
 - **Customer Portal** – Clients log in with a password to see balances, hardware details, appointments, and submit new support tickets.
 - **Field Appointments** – Schedule installs or service calls, capture customer responses, and approve reschedules from the admin dashboard.
 - **SNMP Notifications** – Stream appointment updates and on-demand emails to your operations tooling via configurable SNMP traps.
+- **Service Plan Management** – Update residential, business, and phone offerings that power signup flows and public pricing pages.
+- **Phone Service Landing** – Share hosted voice benefits and plan details on a dedicated page that links straight into signup and the customer portal.
 - **Configurable Contact Details** – Set a single contact email that powers navigation links, portal reminders, and signup confirmations.
 - **Blog Publishing** – Draft, publish, and manage updates from the admin dashboard that surface on the public blog.
 - **One-Command Install** – Run `./install.sh` on Ubuntu 24.04 to provision dependencies, initialize the SQLite database, and start the development server.

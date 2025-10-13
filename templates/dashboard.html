@@ -863,12 +863,13 @@
       <header class="section-header">
         <div>
           <h2>Service Plans</h2>
-          <p class="subtle">Curate residential and business offerings that appear on the public site and signup flow.</p>
+          <p class="subtle">Curate residential, business, and phone offerings that appear on the public site and signup flow.</p>
         </div>
       </header>
       <datalist id="plan-category-suggestions">
         <option value="Residential"></option>
         <option value="Business"></option>
+        <option value="Phone Service"></option>
       </datalist>
       <form class="plan-create-form" method="post" action="{{ url_for('create_service_plan_admin', section='plans') }}">
         <div class="field-grid">

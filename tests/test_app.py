@@ -54,15 +54,27 @@ def test_index_page_renders(client):
     response = client.get("/")
     assert response.status_code == 200
     assert b"Wireless Internet" in response.data
+    assert b"/services#plans-phone-service" in response.data
 
 
 def test_service_plans_page_lists_offerings(client):
     response = client.get("/services")
     assert response.status_code == 200
     assert b"Residential Plans" in response.data
+    assert b"Phone Service Plans" in response.data
+    assert b'id="plans-phone-service"' in response.data
     assert b"Wireless Internet (WISP)" in response.data
     assert b"Internet + Phone Bundle" in response.data
     assert b"Business Wireless Pro" in response.data
+    assert b"Business Voice Essentials" in response.data
+
+
+def test_phone_service_page_lists_offerings(client):
+    response = client.get("/phone-service")
+    assert response.status_code == 200
+    assert b"Phone Service Plans" in response.data
+    assert b"Phone Service" in response.data
+    assert b"Business Voice Essentials" in response.data
 
 
 def test_about_page_highlights_mission(client):
@@ -360,10 +372,12 @@ def test_default_navigation_excludes_support_dropdown_links(app):
         assert "/uptime" not in urls
         assert "/cancellation" not in urls
         assert "/status/down-detector" not in urls
+        assert "/phone-service" not in urls
 
         labels = {item.label for item in navigation_items}
         assert "Sign Up" in labels
         assert "Service Plans" in labels
+        assert "Phone Service" not in labels
 
 
 def test_admin_can_create_blog_post_and_publish(app, client):

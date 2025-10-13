@@ -30,12 +30,33 @@
             >
             {% for item in navigation_items if item.label|lower not in ['sign up', 'client portal'] %}
             {% set is_active = current_path == item.url or current_path.startswith(item.url ~ '/') %}
+            {% set label_lower = item.label|lower %}
+            {% if label_lower == 'service plans' %}
+            <div class="nav-menu">
+              <a
+                class="nav-pill nav-menu-toggle{% if is_active %} active{% endif %}"
+                href="{{ item.url }}"
+                aria-haspopup="true"
+                aria-expanded="false"
+              >
+                {{ item.label }}
+                <span class="nav-menu-icon" aria-hidden="true">▾</span>
+              </a>
+              <div class="nav-dropdown">
+                <a class="nav-dropdown-link" href="{{ item.url }}">All Service Plans</a>
+                {% for link in plan_category_links %}
+                <a class="nav-dropdown-link" href="{{ link.url }}">{{ link.label }}</a>
+                {% endfor %}
+              </div>
+            </div>
+            {% else %}
             <a
               class="nav-pill{% if is_active %} active{% endif %}"
               href="{{ item.url }}"
               {% if item.open_in_new_tab %}target="_blank" rel="noopener"{% endif %}
               >{{ item.label }}</a
             >
+            {% endif %}
             {% endfor %}
             <div class="nav-menu">
               <button class="nav-pill nav-menu-toggle" type="button" aria-haspopup="true" aria-expanded="false">

@@ -11,10 +11,15 @@
 </section>
 {% if plans_by_category %}
   {% for category, plans in plans_by_category %}
-  <section class="plan-category">
+  {% set anchor_id = 'plans-' ~ category|slugify %}
+  <section class="plan-category" id="{{ anchor_id }}">
     <header class="plan-category-header">
       <h2>{{ category }} Plans</h2>
+      {% if category == 'Phone Service' %}
+      <p class="subtle">Reliable voice lines and calling features that integrate with your DixieLand Wireless account.</p>
+      {% else %}
       <p class="subtle">Tailored {{ category|lower }} connectivity with portal access and hometown support.</p>
+      {% endif %}
     </header>
     <div class="plans-grid">
       {% for plan in plans %}
@@ -43,6 +48,12 @@
       </article>
       {% endfor %}
     </div>
+    {% if category == 'Phone Service' %}
+    <p class="plan-note subtle">
+      Looking for a deeper dive into calling features and hardware options?
+      <a href="{{ url_for('phone_service') }}">Explore our dedicated phone service overview</a>.
+    </p>
+    {% endif %}
   </section>
   {% endfor %}
 {% else %}
