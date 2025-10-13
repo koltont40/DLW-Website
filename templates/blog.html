@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Blog | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="blog-hero">
+  <h1>DIXIELAND WIRELESS LLC Blog</h1>
+  <p class="subtle">
+    Stay informed about network upgrades, community events, and helpful tips for getting the most out of your wireless and
+    phone services.
+  </p>
+</section>
+<section class="blog-listing">
+  {% if posts %}
+  <div class="blog-grid">
+    {% for post in posts %}
+    <article class="blog-card">
+      <header>
+        <p class="blog-date">{{ (post.published_at or post.created_at).strftime('%b %d, %Y') }}</p>
+        <h2><a href="{{ url_for('blog_post', slug=post.slug) }}">{{ post.title }}</a></h2>
+      </header>
+      {% if post.summary %}
+      <p>{{ post.summary }}</p>
+      {% else %}
+      <p>{{ post.content | truncate(200, True, '…') }}</p>
+      {% endif %}
+      <div class="blog-card-footer">
+        <a class="button ghost" href="{{ url_for('blog_post', slug=post.slug) }}">Read more</a>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h2>No posts yet</h2>
+    <p class="subtle">
+      Check back soon for the latest from the DIXIELAND WIRELESS LLC team. Need help today? <a href="mailto:{{ contact_email }}">Contact
+      support</a> any time.
+    </p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

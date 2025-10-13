@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Service Plans | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="hero card">
+  <h1>Service Plans</h1>
+  <p class="subtle">
+    Choose the DixieLand Wireless package that fits your home or business. All plans include friendly local
+    support and access to the customer portal for billing, appointments, and equipment details.
+  </p>
+  <a class="button primary" href="{{ url_for('signup') }}">Start your signup</a>
+</section>
+<section class="plans-grid">
+  {% for plan in plans %}
+  <article class="plan-card card">
+    <header>
+      <h2>{{ plan.name }}</h2>
+      <p class="plan-speed">{{ plan.speed }}</p>
+      <p class="plan-price">{{ plan.price_cents|currency }}/mo</p>
+    </header>
+    <p class="plan-description">{{ plan.description }}</p>
+    <ul class="plan-features">
+      {% for feature in plan.features %}
+      <li>{{ feature }}</li>
+      {% endfor %}
+    </ul>
+    <footer class="plan-footer">
+      <a class="button secondary" href="{{ url_for('signup') }}?plan={{ plan.name | urlencode }}">Select plan</a>
+    </footer>
+  </article>
+  {% endfor %}
+</section>
+<section class="card plan-help">
+  <h2>Need something custom?</h2>
+  <p>
+    Enterprise and community deployments are welcome. Reach out at
+    <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>
+    and we'll design a solution for your coverage, transport, and voice needs.
+  </p>
+</section>
+{% endblock %}
