@@ -25,9 +25,7 @@
       <select name="service_plan">
         <option value="">Select a service</option>
         {% for offering in service_offerings %}
-        <option value="{{ offering }}" {% if preselected_plan and preselected_plan == offering %}selected{% endif %}>
-          {{ offering }}
-        </option>
+        <option value="{{ offering }}">{{ offering }}</option>
         {% endfor %}
       </select>
     </label>

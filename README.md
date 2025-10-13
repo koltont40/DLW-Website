@@ -15,11 +15,7 @@ This project provides a self-hosted client onboarding, billing, and support port
 - **Billing Operations** – Create, edit, and delete invoices with due dates and lifecycle statuses that sync to the customer portal.
 - **Equipment Tracking** – Record installed hardware (model, serial, install date, notes) for each account.
 - **Support Ticketing** – Monitor and update customer-submitted tickets with resolution notes from the admin dashboard.
-- **Customer Portal** – Clients log in with a password to see balances, hardware details, appointments, and submit new support tickets.
-- **Field Appointments** – Schedule installs or service calls, capture customer responses, and approve reschedules from the admin dashboard.
-- **SNMP Notifications** – Stream appointment updates and on-demand emails to your operations tooling via configurable SNMP traps.
-- **Configurable Contact Details** – Set a single contact email that powers navigation links, portal reminders, and signup confirmations.
-- **Blog Publishing** – Draft, publish, and manage updates from the admin dashboard that surface on the public blog.
+- **Customer Portal** – Clients log in with a password to see balances, hardware details, and submit new support tickets.
 - **One-Command Install** – Run `./install.sh` on Ubuntu 24.04 to provision dependencies, initialize the SQLite database, and start the development server.
 
 ## Quick Start (Ubuntu 24.04)
@@ -56,10 +52,6 @@ Each client can be issued a customer-portal password from the admin dashboard. G
     ├── document_viewer.html # Inline legal viewer
     ├── index.html      # Landing page
     ├── login.html      # Admin login form
-    ├── about.html      # Company story
-    ├── service_plans.html # Public service plans
-    ├── blog.html       # Public blog listing
-    ├── blog_post.html  # Individual blog article
     ├── portal_dashboard.html # Customer portal home
     ├── portal_login.html     # Customer login form
     └── signup.html     # Client signup form
@@ -73,23 +65,6 @@ Each client can be issued a customer-portal password from the admin dashboard. G
 | `ADMIN_USERNAME` | Dashboard login username | `admin` |
 | `ADMIN_PASSWORD` | Dashboard login password | `admin123` |
 | `PORT` | Server port | `8000` |
-| `CONTACT_EMAIL` | Primary support/contact email surfaced throughout the site | `hello@example.com` |
-| `SNMP_TRAP_HOST` | Hostname/IP for SNMP trap delivery | unset (disabled) |
-| `SNMP_TRAP_PORT` | UDP port for SNMP trap delivery | `162` |
-| `SNMP_COMMUNITY` | SNMP community string | `public` |
-| `SNMP_ENTERPRISE_OID` | Enterprise OID prefix for emitted traps | `1.3.6.1.4.1.8072.9999` |
-| `SNMP_ADMIN_EMAIL` | Operations email to notify on client responses | unset |
-
-### SNMP Email Notifications
-
-When `SNMP_TRAP_HOST` is provided the application emits SNMP traps for appointment events (new bookings, customer reschedules, and approvals). Many network monitoring platforms can translate these traps into emails or tickets. Customize delivery with:
-
-- `SNMP_TRAP_PORT`, `SNMP_COMMUNITY`, and `SNMP_ENTERPRISE_OID` to match your monitoring stack.
-- `SNMP_ADMIN_EMAIL` so client responses trigger a notification to your operations inbox.
-
-Administrators can also compose ad-hoc SNMP-backed emails from the Support section of the dashboard to broadcast outage updates or reminders.
-
-During automated testing you can override the trap sender by assigning a callable to `app.config["SNMP_EMAIL_SENDER"]`.
 
 ## Development Notes
 

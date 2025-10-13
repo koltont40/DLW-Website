@@ -1,5 +1,5 @@
 import io
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 
@@ -9,11 +9,7 @@ from app import (
     Document,
     Equipment,
     Invoice,
-    Appointment,
-    SNMPConfig,
-    DownDetectorConfig,
     NavigationItem,
-    BlogPost,
     SupportTicket,
     create_app,
     db,
@@ -53,58 +49,6 @@ def test_index_page_renders(client):
     response = client.get("/")
     assert response.status_code == 200
     assert b"Wireless Internet" in response.data
-
-
-def test_service_plans_page_lists_offerings(client):
-    response = client.get("/services")
-    assert response.status_code == 200
-    assert b"Wireless Internet (WISP)" in response.data
-    assert b"Internet + Phone Bundle" in response.data
-
-
-def test_about_page_highlights_mission(client):
-    response = client.get("/about")
-    assert response.status_code == 200
-    assert b"Our Mission" in response.data
-    assert b"local experts" in response.data
-
-
-def test_support_page_offers_resources(client):
-    response = client.get("/support")
-    assert response.status_code == 200
-    assert b"Support center" in response.data
-    assert b"Email support" in response.data
-
-
-def test_uptime_page_displays_metrics(client):
-    response = client.get("/uptime")
-    assert response.status_code == 200
-    assert b"Network uptime" in response.data
-    assert b"30-day uptime" in response.data
-
-
-def test_service_cancellation_page_outlines_steps(client):
-    response = client.get("/cancellation")
-    assert response.status_code == 200
-    assert b"Service cancellation" in response.data
-    assert b"Submit your request" in response.data
-
-
-def test_down_detector_placeholder_when_missing(client):
-    response = client.get("/status/down-detector")
-    assert response.status_code == 200
-    assert b"live outage feed" in response.data
-
-
-def test_down_detector_redirects_when_configured(app, client):
-    with app.app_context():
-        config = DownDetectorConfig.query.first()
-        config.target_url = "https://status.example.com"
-        db.session.commit()
-
-    response = client.get("/status/down-detector")
-    assert response.status_code == 302
-    assert response.headers["Location"] == "https://status.example.com"
 
 
 def test_legal_page_lists_documents(client):
@@ -286,131 +230,13 @@ def test_admin_can_upload_branding_asset(app, client):
         assert asset.original_filename == "logo.png"
 
 
-def test_default_navigation_includes_service_pages(app):
+def test_default_navigation_includes_contact(app):
     with app.app_context():
         labels = [
             item.label
             for item in NavigationItem.query.order_by(NavigationItem.position.asc()).all()
         ]
-        assert "Service Cancellation" in labels
-        assert "Uptime" in labels
-
-
-def test_admin_can_create_blog_post_and_publish(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
-
-    response = client.post(
-        "/blog/posts",
-        data={
-            "title": "Tower Expansion",
-            "summary": "We are lighting up new coverage north of town.",
-            "content": "Crews completed a new sector to boost speeds across the county.",
-            "publish": "on",
-        },
-        follow_redirects=True,
-    )
-
-    assert response.status_code == 200
-    assert b"Blog post created." in response.data
-
-    with app.app_context():
-        post = BlogPost.query.filter_by(title="Tower Expansion").one()
-        assert post.is_published is True
-        assert post.slug
-        slug = post.slug
-
-    list_response = client.get("/blog")
-    assert list_response.status_code == 200
-    assert b"Tower Expansion" in list_response.data
-
-    detail_response = client.get(f"/blog/{slug}")
-    assert detail_response.status_code == 200
-    assert b"Crews completed a new sector" in detail_response.data
-
-
-def test_blog_draft_hidden_from_public(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
-
-    client.post(
-        "/blog/posts",
-        data={
-            "title": "Draft Update",
-            "summary": "Behind-the-scenes prep.",
-            "content": "Technicians are preparing for the next deployment.",
-        },
-        follow_redirects=True,
-    )
-
-    client.get("/logout", follow_redirects=True)
-
-    with app.app_context():
-        draft = BlogPost.query.filter_by(title="Draft Update").one()
-        slug = draft.slug
-        assert draft.is_published is False
-
-    list_response = client.get("/blog")
-    assert list_response.status_code == 200
-    assert b"Draft Update" not in list_response.data
-
-    detail_response = client.get(f"/blog/{slug}")
-    assert detail_response.status_code == 404
-
-
-def test_admin_can_update_blog_post_status(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
-
-    client.post(
-        "/blog/posts",
-        data={
-            "title": "Status Check",
-            "summary": "Initial summary",
-            "content": "Initial content",
-            "publish": "on",
-        },
-        follow_redirects=True,
-    )
-
-    with app.app_context():
-        post = BlogPost.query.filter_by(title="Status Check").one()
-        post_id = post.id
-        original_slug = post.slug
-
-    update_response = client.post(
-        f"/blog/posts/{post_id}",
-        data={
-            "title": "Status Check Updated",
-            "summary": "Revised summary",
-            "content": "Revised content",
-        },
-        follow_redirects=True,
-    )
-
-    assert update_response.status_code == 200
-    assert b"Blog post updated." in update_response.data
-
-    with app.app_context():
-        updated = BlogPost.query.get(post_id)
-        assert updated.title == "Status Check Updated"
-        assert updated.is_published is False
-        assert updated.published_at is None
-        assert updated.slug != original_slug
-
-    client.get("/logout", follow_redirects=True)
-
-    detail_response = client.get(f"/blog/{updated.slug}")
-    assert detail_response.status_code == 404
+        assert "Contact" in labels
 
 
 def test_document_viewer_renders_pdf_inline(app, client):
@@ -570,6 +396,53 @@ def test_admin_can_manage_billing_equipment_and_tickets(app, client):
         follow_redirects=True,
     )
 
+    assert ticket_update.status_code == 200
+
+    with app.app_context():
+        refreshed_ticket = SupportTicket.query.get(ticket_id)
+        assert refreshed_ticket.status == "In Progress"
+        assert refreshed_ticket.resolution_notes == "Technician scheduled."
+
+    reset_response = client.post(
+        f"/clients/{customer_id}/portal/reset-password",
+        follow_redirects=True,
+    )
+
+    assert reset_response.status_code == 200
+    assert b"Temporary portal password" in reset_response.data
+
+    with app.app_context():
+        updated_client = Client.query.get(customer_id)
+        assert updated_client.portal_password_hash is not None
+        assert updated_client.portal_password_updated_at is not None
+
+    delete_invoice = client.post(
+        f"/invoices/{invoice.id}/delete",
+        follow_redirects=True,
+    )
+
+    assert delete_invoice.status_code == 200
+
+    delete_equipment = client.post(
+        f"/equipment/{equipment.id}/delete",
+        follow_redirects=True,
+    )
+
+    assert delete_equipment.status_code == 200
+
+    delete_ticket = client.post(
+        f"/tickets/{ticket_id}/delete",
+        follow_redirects=True,
+    )
+
+    assert delete_ticket.status_code == 200
+
+    with app.app_context():
+        assert Invoice.query.filter_by(client_id=customer_id).count() == 0
+        assert Equipment.query.filter_by(client_id=customer_id).count() == 0
+        assert SupportTicket.query.filter_by(client_id=customer_id).count() == 0
+
+
 def test_client_portal_login_and_ticket_creation(app, client):
     with app.app_context():
         portal_client = Client(
@@ -630,228 +503,3 @@ def test_client_portal_login_and_ticket_creation(app, client):
         tickets = SupportTicket.query.filter_by(client_id=portal_client_id).all()
         assert len(tickets) == 1
         assert tickets[0].subject == "Need help"
-
-
-def test_portal_highlights_missing_service_plan(app, client):
-    app.config["CONTACT_EMAIL"] = "activate@example.com"
-    with app.app_context():
-        portal_client = Client(
-            name="No Plan Customer",
-            email="noplan@example.com",
-            status="Active",
-        )
-        portal_client.portal_password_hash = generate_password_hash("PortalPass123")
-        db.session.add(portal_client)
-        db.session.commit()
-
-    login_response = client.post(
-        "/portal/login",
-        data={"email": "noplan@example.com", "password": "PortalPass123"},
-        follow_redirects=True,
-    )
-
-    assert login_response.status_code == 200
-    assert b"No service plan on file" in login_response.data
-    assert b"Contact us to set up your service" in login_response.data
-    assert b"mailto:activate@example.com" in login_response.data
-
-
-def test_client_can_request_reschedule_and_notify_admin(app, client):
-    notifications: list[tuple[str, str, str]] = []
-    app.config["SNMP_ADMIN_EMAIL"] = "ops@example.com"
-    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
-        (recipient, subject, body)
-    ) or True
-
-    with app.app_context():
-        portal_client = Client(
-            name="Schedule Tester",
-            email="schedule@example.com",
-            status="Active",
-            project_type="Wireless Internet (WISP)",
-        )
-        portal_client.portal_password_hash = generate_password_hash("PortalPass123")
-        db.session.add(portal_client)
-        db.session.flush()
-
-        appointment = Appointment(
-            client_id=portal_client.id,
-            title="Initial Install",
-            scheduled_for=utcnow(),
-            notes="Bring ladder",
-        )
-        db.session.add(appointment)
-        db.session.commit()
-        appointment_id = appointment.id
-
-    client.post(
-        "/portal/login",
-        data={"email": "schedule@example.com", "password": "PortalPass123"},
-        follow_redirects=True,
-    )
-
-    new_time = (utcnow() + timedelta(days=2)).replace(microsecond=0)
-
-    reschedule_response = client.post(
-        f"/portal/appointments/{appointment_id}/action",
-        data={
-            "action": "reschedule",
-            "scheduled_for": new_time.strftime("%Y-%m-%dT%H:%M"),
-            "message": "Need afternoon slot",
-        },
-        follow_redirects=True,
-    )
-
-    assert reschedule_response.status_code == 200
-    assert b"Reschedule request submitted" in reschedule_response.data
-
-    with app.app_context():
-        updated = Appointment.query.get(appointment_id)
-        assert updated.status == "Reschedule Requested"
-        assert updated.proposed_time is not None
-        assert updated.client_message == "Need afternoon slot"
-
-    assert notifications
-    recipient, subject, body = notifications[-1]
-    assert recipient == "ops@example.com"
-    assert "requested a new appointment" in subject
-    assert "Need afternoon slot" in body
-
-    notifications.clear()
-
-    approve_response = client.post(
-        f"/portal/appointments/{appointment_id}/action",
-        data={"action": "approve"},
-        follow_redirects=True,
-    )
-
-    assert approve_response.status_code == 200
-    assert b"Appointment confirmed" in approve_response.data
-
-    with app.app_context():
-        approved = Appointment.query.get(appointment_id)
-        assert approved.status == "Confirmed"
-        assert approved.proposed_time is None
-
-    assert notifications
-    approve_recipient, approve_subject, approve_body = notifications[-1]
-    assert approve_recipient == "ops@example.com"
-    assert "Appointment confirmed" in approve_subject
-    assert "Status: Confirmed" in approve_body
-
-
-def test_admin_can_schedule_appointment(app, client):
-    notifications: list[tuple[str, str, str]] = []
-    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
-        (recipient, subject, body)
-    ) or True
-
-    with app.app_context():
-        customer = Client(
-            name="Field Visit Client",
-            email="field@example.com",
-            status="Active",
-            project_type="Phone Service",
-        )
-        db.session.add(customer)
-        db.session.commit()
-        customer_id = customer.id
-
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
-
-    scheduled_for = (utcnow() + timedelta(days=1)).replace(microsecond=0)
-
-    response = client.post(
-        "/appointments",
-        query_string={"section": "appointments"},
-        data={
-            "client_id": str(customer_id),
-            "title": "Roof install",
-            "scheduled_for": scheduled_for.strftime("%Y-%m-%dT%H:%M"),
-            "notes": "Coordinate with tower crew",
-        },
-        follow_redirects=True,
-    )
-
-    assert response.status_code == 200
-    assert b"Appointment scheduled" in response.data
-
-    with app.app_context():
-        appointment = Appointment.query.filter_by(client_id=customer_id).one()
-        assert appointment.title == "Roof install"
-        assert appointment.status == "Pending"
-
-    assert notifications
-    notify_recipient, notify_subject, notify_body = notifications[-1]
-    assert notify_recipient == "field@example.com"
-    assert "Roof install" in notify_subject
-    assert "appointment" in notify_body.lower()
-
-
-def test_admin_can_send_manual_snmp_email(app, client):
-    notifications: list[tuple[str, str, str]] = []
-    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
-        (recipient, subject, body)
-    ) or True
-
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
-
-    response = client.post(
-        "/notifications/snmp-email",
-        data={
-            "recipient": "alert@example.com",
-            "subject": "Maintenance window",
-            "body": "Expect brief downtime at midnight.",
-        },
-        follow_redirects=True,
-    )
-
-    assert response.status_code == 200
-    assert b"SNMP email notification queued" in response.data
-    assert notifications == [
-        ("alert@example.com", "Maintenance window", "Expect brief downtime at midnight."),
-    ]
-
-
-def test_admin_can_update_snmp_settings(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
-
-    response = client.post(
-        "/snmp-settings",
-        data={
-            "host": "trap.dixie.local",
-            "port": "1162",
-            "community": "dlw-community",
-            "enterprise_oid": "1.3.6.1.4.1.9999",
-            "admin_email": "noc@dixielandwireless.com",
-        },
-        follow_redirects=True,
-    )
-
-    assert response.status_code == 200
-    assert b"SNMP settings updated" in response.data
-
-    with app.app_context():
-        config = SNMPConfig.query.first()
-        assert config is not None
-        assert config.host == "trap.dixie.local"
-        assert config.port == 1162
-        assert config.community == "dlw-community"
-        assert config.enterprise_oid == "1.3.6.1.4.1.9999"
-        assert config.admin_email == "noc@dixielandwireless.com"
-        assert app.config["SNMP_TRAP_HOST"] == "trap.dixie.local"
-        assert app.config["SNMP_TRAP_PORT"] == 1162
-        assert app.config["SNMP_COMMUNITY"] == "dlw-community"
-        assert app.config["SNMP_ADMIN_EMAIL"] == "noc@dixielandwireless.com"
