@@ -1,16 +1,21 @@
 # DLW Website
 
-This project provides a self-hosted client onboarding and management portal built with Flask and SQLite. It includes:
+This project provides a self-hosted client onboarding, billing, and support portal built with Flask and SQLite. It includes:
 
 - A marketing landing page with a call-to-action for prospective clients.
 - A client signup form that captures contact details and project notes.
 - A password-protected management dashboard for viewing, updating, and deleting client records.
+- A secure customer portal where subscribers can review invoices, equipment, and open support tickets.
 
 ## Features
 
 - **Client Signup** – Collect name, email, company, project type, and notes.
-- **Dashboard Overview** – View key metrics (total clients, new this week) and filter the client table by status.
-- **Client Management** – Update client status and notes or remove records entirely.
+- **Dashboard Overview** – View key metrics (total clients, new this week, outstanding balance, open tickets) and filter the client table by status.
+- **Client Management** – Update client status and notes, regenerate portal access codes, and curate navigation/branding assets.
+- **Billing Operations** – Create, edit, and delete invoices with due dates and lifecycle statuses that sync to the customer portal.
+- **Equipment Tracking** – Record installed hardware (model, serial, install date, notes) for each account.
+- **Support Ticketing** – Monitor and update customer-submitted tickets with resolution notes from the admin dashboard.
+- **Customer Portal** – Clients log in with an access code to see balances, hardware details, and submit new support tickets.
 - **One-Command Install** – Run `./install.sh` on Ubuntu 24.04 to provision dependencies, initialize the SQLite database, and start the development server.
 
 ## Quick Start (Ubuntu 24.04)
@@ -29,6 +34,8 @@ The script will create a Python virtual environment, install dependencies, initi
 
 Change these by setting the `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment variables before launching the app.
 
+Each client receives a randomly generated customer-portal access code that is displayed in the admin dashboard. You can reset the code at any time from the client's management panel and share it securely with the subscriber.
+
 ## Project Structure
 
 ```
@@ -42,8 +49,11 @@ Change these by setting the `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment va
 └── templates/
     ├── base.html       # Shared layout
     ├── dashboard.html  # Admin dashboard UI
+    ├── document_viewer.html # Inline legal viewer
     ├── index.html      # Landing page
     ├── login.html      # Admin login form
+    ├── portal_dashboard.html # Customer portal home
+    ├── portal_login.html     # Customer login form
     └── signup.html     # Client signup form
 ```
 
@@ -79,7 +89,7 @@ python -c "from app import init_db; init_db()"
 
 ## Testing the Application
 
-Automated tests cover the main user flows (landing page, signup, authentication, and dashboard access). Install the development dependencies and run `pytest`:
+Automated tests cover the main user flows including landing page rendering, signup, authentication, legal document management, dashboard operations, billing/equipment CRUD, and the customer portal experience. Install the development dependencies and run `pytest`:
 
 ```bash
 pip install -r requirements-dev.txt

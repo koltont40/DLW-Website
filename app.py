@@ -1,6 +1,7 @@
 import os
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -9,6 +10,7 @@ from flask import (
     Flask,
     abort,
     flash,
+    g,
     redirect,
     render_template,
     request,
@@ -19,6 +21,8 @@ from flask import (
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 
+from sqlalchemy import inspect, or_, text
+
 load_dotenv()
 
 db = SQLAlchemy()
@@ -26,6 +30,14 @@ db = SQLAlchemy()
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def generate_portal_code() -> str:
+    return secrets.token_urlsafe(8)
+
+
+def generate_account_reference() -> str:
+    return f"DLW-{secrets.token_hex(3).upper()}"
 
 
 class Client(db.Model):
@@ -38,7 +50,22 @@ class Client(db.Model):
     project_type = db.Column(db.String(120))
     notes = db.Column(db.Text)
     status = db.Column(db.String(50), nullable=False, default="New")
+    portal_access_code = db.Column(
+        db.String(64), nullable=False, unique=True, default=generate_portal_code
+    )
+    account_reference = db.Column(
+        db.String(24), nullable=False, unique=True, default=generate_account_reference
+    )
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    invoices = db.relationship(
+        "Invoice", back_populates="client", cascade="all, delete-orphan"
+    )
+    equipment = db.relationship(
+        "Equipment", back_populates="client", cascade="all, delete-orphan"
+    )
+    tickets = db.relationship(
+        "SupportTicket", back_populates="client", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Client {self.email}>"
@@ -70,16 +97,14 @@ DOCUMENT_MIME_TYPES = {
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
+PORTAL_SESSION_KEY = "client_portal_id"
+
 
 DEFAULT_NAVIGATION_ITEMS = [
     ("Sign Up", "/signup", False),
     ("Legal", "/legal", False),
     ("Contact", "mailto:hello@example.com", False),
-    (
-        "Client Portal",
-        "https://dixielandwireless.uisp.com/crm/login",
-        True,
-    ),
+    ("Client Portal", "/portal/login", False),
 ]
 
 
@@ -106,6 +131,11 @@ ALLOWED_BRANDING_EXTENSIONS = {
     "ico",
     "webp",
 }
+
+
+INVOICE_STATUS_OPTIONS = ["Pending", "Paid", "Overdue", "Cancelled"]
+
+TICKET_STATUS_OPTIONS = ["Open", "In Progress", "Resolved", "Closed"]
 
 
 class Document(db.Model):
@@ -148,6 +178,64 @@ class BrandingAsset(db.Model):
         return f"<BrandingAsset {self.asset_type}: {self.original_filename}>"
 
 
+class Invoice(db.Model):
+    __tablename__ = "invoices"
+
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
+    description = db.Column(db.String(255), nullable=False)
+    amount_cents = db.Column(db.Integer, nullable=False)
+    due_date = db.Column(db.Date, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="Pending")
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    client = db.relationship("Client", back_populates="invoices")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<Invoice {self.id} for client {self.client_id}>"
+
+
+class Equipment(db.Model):
+    __tablename__ = "equipment"
+
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    model = db.Column(db.String(120))
+    serial_number = db.Column(db.String(120))
+    installed_on = db.Column(db.Date)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+    client = db.relationship("Client", back_populates="equipment")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<Equipment {self.name} for client {self.client_id}>"
+
+
+class SupportTicket(db.Model):
+    __tablename__ = "support_tickets"
+
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
+    subject = db.Column(db.String(255), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="Open")
+    resolution_notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    client = db.relationship("Client", back_populates="tickets")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<SupportTicket {self.id} for client {self.client_id}>"
+
+
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, instance_relative_config=True)
 
@@ -178,6 +266,7 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     with app.app_context():
         db.create_all()
+        ensure_client_portal_fields()
         ensure_default_navigation()
 
     return app
@@ -189,6 +278,7 @@ def init_db() -> None:
     app = create_app()
     with app.app_context():
         db.create_all()
+        ensure_client_portal_fields()
         ensure_default_navigation()
 
 
@@ -224,6 +314,39 @@ def ensure_default_navigation() -> None:
         db.session.commit()
 
 
+def ensure_client_portal_fields() -> None:
+    inspector = inspect(db.engine)
+    columns = {column["name"] for column in inspector.get_columns("clients")}
+
+    with db.engine.begin() as connection:
+        if "portal_access_code" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN portal_access_code VARCHAR(64)")
+            )
+        if "account_reference" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN account_reference VARCHAR(24)")
+            )
+
+    clients_to_update = (
+        Client.query.filter(
+            or_(Client.portal_access_code.is_(None), Client.account_reference.is_(None))
+        ).all()
+    )
+
+    updated = False
+    for client in clients_to_update:
+        if not client.portal_access_code:
+            client.portal_access_code = generate_portal_code()
+            updated = True
+        if not client.account_reference:
+            client.account_reference = generate_account_reference()
+            updated = True
+
+    if updated:
+        db.session.commit()
+
+
 def login_required(func):
     from functools import wraps
 
@@ -233,6 +356,28 @@ def login_required(func):
             flash("Please log in to access the dashboard.", "warning")
             return redirect(url_for("login", next=request.path))
         return func(*args, **kwargs)
+
+    return wrapper
+
+
+def client_login_required(func):
+    from functools import wraps
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        client_id = session.get(PORTAL_SESSION_KEY)
+        if not client_id:
+            flash("Please log in to access your account.", "warning")
+            return redirect(url_for("portal_login", next=request.path))
+
+        client = Client.query.get(client_id)
+        if not client:
+            session.pop(PORTAL_SESSION_KEY, None)
+            flash("We couldn't find that account. Please log in again.", "danger")
+            return redirect(url_for("portal_login"))
+
+        g.portal_client = client
+        return func(client, *args, **kwargs)
 
     return wrapper
 
@@ -254,6 +399,28 @@ def register_routes(app: Flask) -> None:
 
         return document, upload_folder, file_path
 
+    @app.template_filter("currency")
+    def format_currency(value: int | float | Decimal | None):
+        if value is None:
+            return "$0.00"
+        cents = int(value)
+        dollars = Decimal(cents) / Decimal(100)
+        return f"${dollars:,.2f}"
+
+    @app.template_filter("cents_to_dollars")
+    def cents_to_dollars(value: int | None):
+        if value is None:
+            return "0.00"
+        cents = int(value)
+        dollars = Decimal(cents) / Decimal(100)
+        return f"{dollars:.2f}"
+
+    @app.template_filter("date_or_dash")
+    def format_date(value: date | None):
+        if not value:
+            return "—"
+        return value.strftime("%b %d, %Y")
+
     @app.context_processor
     def inject_status_options():
         navigation_items = (
@@ -268,6 +435,8 @@ def register_routes(app: Flask) -> None:
             "navigation_items": navigation_items,
             "branding_assets": branding_assets,
             "branding_asset_types": BRANDING_ASSET_TYPES,
+            "invoice_status_options": INVOICE_STATUS_OPTIONS,
+            "ticket_status_options": TICKET_STATUS_OPTIONS,
         }
 
     @app.route("/")
@@ -310,6 +479,108 @@ def register_routes(app: Flask) -> None:
     @app.route("/thank-you")
     def thank_you():
         return render_template("thank_you.html")
+
+    @app.route("/portal/login", methods=["GET", "POST"])
+    def portal_login():
+        if session.get(PORTAL_SESSION_KEY):
+            existing_client = Client.query.get(session[PORTAL_SESSION_KEY])
+            if existing_client:
+                return redirect(url_for("portal_dashboard"))
+
+        if request.method == "POST":
+            email = request.form.get("email", "").strip().lower()
+            access_code = request.form.get("access_code", "").strip()
+
+            client_record = Client.query.filter_by(email=email).first()
+            if (
+                client_record
+                and access_code
+                and secrets.compare_digest(client_record.portal_access_code, access_code)
+            ):
+                session[PORTAL_SESSION_KEY] = client_record.id
+                session["portal_authenticated_at"] = utcnow().isoformat()
+                flash("Welcome to your customer portal!", "success")
+                redirect_target = request.args.get("next") or url_for("portal_dashboard")
+                return redirect(redirect_target)
+
+            flash("Invalid email or access code. Please try again.", "danger")
+
+        return render_template("portal_login.html")
+
+    @app.get("/portal/logout")
+    def portal_logout():
+        session.pop(PORTAL_SESSION_KEY, None)
+        session.pop("portal_authenticated_at", None)
+        flash("You have been logged out of the customer portal.", "info")
+        return redirect(url_for("portal_login"))
+
+    @app.route("/portal")
+    @client_login_required
+    def portal_dashboard(client: Client):
+        invoices = (
+            Invoice.query.filter_by(client_id=client.id)
+            .order_by(Invoice.due_date.asc())
+            .all()
+        )
+        equipment_items = (
+            Equipment.query.filter_by(client_id=client.id)
+            .order_by(Equipment.installed_on.asc())
+            .all()
+        )
+        tickets = (
+            SupportTicket.query.filter_by(client_id=client.id)
+            .order_by(SupportTicket.created_at.desc())
+            .all()
+        )
+
+        outstanding_invoices = [
+            invoice for invoice in invoices if invoice.status not in {"Paid", "Cancelled"}
+        ]
+        total_due_cents = sum(invoice.amount_cents for invoice in outstanding_invoices)
+        upcoming_due_date = None
+        dated_invoices = [
+            invoice.due_date
+            for invoice in outstanding_invoices
+            if invoice.due_date is not None
+        ]
+        if dated_invoices:
+            upcoming_due_date = min(dated_invoices)
+
+        open_ticket_count = sum(
+            1 for ticket in tickets if ticket.status in {"Open", "In Progress"}
+        )
+
+        return render_template(
+            "portal_dashboard.html",
+            client=client,
+            invoices=invoices,
+            equipment_items=equipment_items,
+            tickets=tickets,
+            total_due_cents=total_due_cents,
+            upcoming_due_date=upcoming_due_date,
+            open_ticket_count=open_ticket_count,
+        )
+
+    @app.post("/portal/tickets")
+    @client_login_required
+    def portal_create_ticket(client: Client):
+        subject = request.form.get("subject", "").strip()
+        message = request.form.get("message", "").strip()
+
+        if not subject or not message:
+            flash("Please provide both a subject and description for your ticket.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        ticket = SupportTicket(
+            client_id=client.id,
+            subject=subject,
+            message=message,
+        )
+        db.session.add(ticket)
+        db.session.commit()
+
+        flash("Your support request has been submitted. We'll reach out shortly.", "success")
+        return redirect(url_for("portal_dashboard"))
 
     @app.route("/legal")
     def legal():
@@ -358,6 +629,16 @@ def register_routes(app: Flask) -> None:
         total_clients = Client.query.count()
         start_of_week = utcnow() - timedelta(days=7)
         new_this_week = Client.query.filter(Client.created_at >= start_of_week).count()
+        outstanding_amount_cents = (
+            db.session.query(db.func.coalesce(db.func.sum(Invoice.amount_cents), 0))
+            .filter(~Invoice.status.in_(["Paid", "Cancelled"]))
+            .scalar()
+        )
+        open_ticket_total = (
+            db.session.query(db.func.count(SupportTicket.id))
+            .filter(SupportTicket.status.in_(["Open", "In Progress"]))
+            .scalar()
+        )
 
         documents = {key: None for key in LEGAL_DOCUMENT_TYPES}
         for document in Document.query.all():
@@ -371,6 +652,8 @@ def register_routes(app: Flask) -> None:
             clients=clients,
             total_clients=total_clients,
             new_this_week=new_this_week,
+            outstanding_amount_cents=outstanding_amount_cents,
+            open_ticket_total=open_ticket_total,
             status_filter=status_filter,
             legal_documents=documents,
             navigation_items=navigation_items,
@@ -478,6 +761,229 @@ def register_routes(app: Flask) -> None:
             embed_url=embed_url,
             viewer=viewer,
         )
+
+    @app.post("/clients/<int:client_id>/portal/reset-code")
+    @login_required
+    def reset_portal_code(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        client.portal_access_code = generate_portal_code()
+        db.session.commit()
+        flash(
+            f"Portal access code regenerated for {client.name}. Share the new code securely.",
+            "info",
+        )
+        return redirect(url_for("dashboard", status=request.args.get("status")))
+
+    def _redirect_back_to_dashboard():
+        return redirect(url_for("dashboard", status=request.args.get("status")))
+
+    @app.post("/clients/<int:client_id>/invoices")
+    @login_required
+    def create_invoice(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        description = request.form.get("description", "").strip()
+        amount_raw = request.form.get("amount", "").strip()
+        due_date_raw = request.form.get("due_date", "").strip()
+        status_value = request.form.get("status", "Pending").strip() or "Pending"
+
+        if not description or not amount_raw:
+            flash("Invoice description and amount are required.", "danger")
+            return _redirect_back_to_dashboard()
+
+        try:
+            amount_decimal = Decimal(amount_raw).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError):
+            flash("Please provide a valid invoice amount.", "danger")
+            return _redirect_back_to_dashboard()
+
+        amount_cents = int(amount_decimal * 100)
+        if amount_cents < 0:
+            flash("Invoice amounts must be positive.", "danger")
+            return _redirect_back_to_dashboard()
+
+        due_date_value = None
+        if due_date_raw:
+            try:
+                due_date_value = datetime.strptime(due_date_raw, "%Y-%m-%d").date()
+            except ValueError:
+                flash("Please use the YYYY-MM-DD format for due dates.", "danger")
+                return _redirect_back_to_dashboard()
+
+        if status_value not in INVOICE_STATUS_OPTIONS:
+            status_value = "Pending"
+
+        invoice = Invoice(
+            client_id=client.id,
+            description=description,
+            amount_cents=amount_cents,
+            due_date=due_date_value,
+            status=status_value,
+        )
+        db.session.add(invoice)
+        db.session.commit()
+
+        flash(f"Invoice added for {client.name}.", "success")
+        return _redirect_back_to_dashboard()
+
+    @app.post("/invoices/<int:invoice_id>/update")
+    @login_required
+    def update_invoice(invoice_id: int):
+        invoice = Invoice.query.get_or_404(invoice_id)
+        description = request.form.get("description", "").strip()
+        amount_raw = request.form.get("amount", "").strip()
+        due_date_raw = request.form.get("due_date", "").strip()
+        status_value = request.form.get("status", invoice.status).strip() or invoice.status
+
+        if not description or not amount_raw:
+            flash("Description and amount are required to update an invoice.", "danger")
+            return _redirect_back_to_dashboard()
+
+        try:
+            amount_decimal = Decimal(amount_raw).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError):
+            flash("Please provide a valid invoice amount.", "danger")
+            return _redirect_back_to_dashboard()
+
+        amount_cents = int(amount_decimal * 100)
+        if amount_cents < 0:
+            flash("Invoice amounts must be positive.", "danger")
+            return _redirect_back_to_dashboard()
+
+        due_date_value = None
+        if due_date_raw:
+            try:
+                due_date_value = datetime.strptime(due_date_raw, "%Y-%m-%d").date()
+            except ValueError:
+                flash("Please use the YYYY-MM-DD format for due dates.", "danger")
+                return _redirect_back_to_dashboard()
+
+        if status_value not in INVOICE_STATUS_OPTIONS:
+            flash("Unknown invoice status.", "danger")
+            return _redirect_back_to_dashboard()
+
+        invoice.description = description
+        invoice.amount_cents = amount_cents
+        invoice.due_date = due_date_value
+        invoice.status = status_value
+        invoice.updated_at = utcnow()
+        db.session.commit()
+
+        flash("Invoice updated.", "success")
+        return _redirect_back_to_dashboard()
+
+    @app.post("/invoices/<int:invoice_id>/delete")
+    @login_required
+    def delete_invoice(invoice_id: int):
+        invoice = Invoice.query.get_or_404(invoice_id)
+        db.session.delete(invoice)
+        db.session.commit()
+        flash("Invoice removed.", "info")
+        return _redirect_back_to_dashboard()
+
+    @app.post("/clients/<int:client_id>/equipment")
+    @login_required
+    def create_equipment(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        name = request.form.get("name", "").strip()
+        model = request.form.get("model", "").strip() or None
+        serial_number = request.form.get("serial_number", "").strip() or None
+        installed_on_raw = request.form.get("installed_on", "").strip()
+        notes = request.form.get("notes", "").strip() or None
+
+        if not name:
+            flash("Equipment name is required.", "danger")
+            return _redirect_back_to_dashboard()
+
+        installed_on_value = None
+        if installed_on_raw:
+            try:
+                installed_on_value = datetime.strptime(installed_on_raw, "%Y-%m-%d").date()
+            except ValueError:
+                flash("Please use the YYYY-MM-DD format for install dates.", "danger")
+                return _redirect_back_to_dashboard()
+
+        equipment = Equipment(
+            client_id=client.id,
+            name=name,
+            model=model,
+            serial_number=serial_number,
+            installed_on=installed_on_value,
+            notes=notes,
+        )
+        db.session.add(equipment)
+        db.session.commit()
+
+        flash(f"Equipment added for {client.name}.", "success")
+        return _redirect_back_to_dashboard()
+
+    @app.post("/equipment/<int:equipment_id>/update")
+    @login_required
+    def update_equipment(equipment_id: int):
+        equipment = Equipment.query.get_or_404(equipment_id)
+        name = request.form.get("name", "").strip()
+        model = request.form.get("model", "").strip() or None
+        serial_number = request.form.get("serial_number", "").strip() or None
+        installed_on_raw = request.form.get("installed_on", "").strip()
+        notes = request.form.get("notes", "").strip() or None
+
+        if not name:
+            flash("Equipment name is required.", "danger")
+            return _redirect_back_to_dashboard()
+
+        installed_on_value = None
+        if installed_on_raw:
+            try:
+                installed_on_value = datetime.strptime(installed_on_raw, "%Y-%m-%d").date()
+            except ValueError:
+                flash("Please use the YYYY-MM-DD format for install dates.", "danger")
+                return _redirect_back_to_dashboard()
+
+        equipment.name = name
+        equipment.model = model
+        equipment.serial_number = serial_number
+        equipment.installed_on = installed_on_value
+        equipment.notes = notes
+        db.session.commit()
+
+        flash("Equipment updated.", "success")
+        return _redirect_back_to_dashboard()
+
+    @app.post("/equipment/<int:equipment_id>/delete")
+    @login_required
+    def delete_equipment(equipment_id: int):
+        equipment = Equipment.query.get_or_404(equipment_id)
+        db.session.delete(equipment)
+        db.session.commit()
+        flash("Equipment removed.", "info")
+        return _redirect_back_to_dashboard()
+
+    @app.post("/tickets/<int:ticket_id>/update")
+    @login_required
+    def update_ticket(ticket_id: int):
+        ticket = SupportTicket.query.get_or_404(ticket_id)
+        status_value = request.form.get("status", ticket.status).strip() or ticket.status
+        resolution_notes = request.form.get("resolution_notes", "").strip() or None
+
+        if status_value not in TICKET_STATUS_OPTIONS:
+            flash("Unknown ticket status.", "danger")
+            return _redirect_back_to_dashboard()
+
+        ticket.status = status_value
+        ticket.resolution_notes = resolution_notes
+        ticket.updated_at = utcnow()
+        db.session.commit()
+
+        flash("Ticket updated.", "success")
+        return _redirect_back_to_dashboard()
+
+    @app.post("/tickets/<int:ticket_id>/delete")
+    @login_required
+    def delete_ticket(ticket_id: int):
+        ticket = SupportTicket.query.get_or_404(ticket_id)
+        db.session.delete(ticket)
+        db.session.commit()
+        flash("Ticket removed.", "info")
+        return _redirect_back_to_dashboard()
 
     @app.post("/navigation/add")
     @login_required

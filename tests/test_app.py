@@ -1,4 +1,5 @@
 import io
+from datetime import date
 
 import pytest
 
@@ -6,7 +7,10 @@ from app import (
     BrandingAsset,
     Client,
     Document,
+    Equipment,
+    Invoice,
     NavigationItem,
+    SupportTicket,
     create_app,
     db,
 )
@@ -231,3 +235,217 @@ def test_document_viewer_uses_office_embed_for_word(app, client):
     response = client.get("/documents/tos/view")
     assert response.status_code == 200
     assert b"view.officeapps.live.com" in response.data
+
+
+def test_admin_can_manage_billing_equipment_and_tickets(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    signup_response = client.post(
+        "/signup",
+        data={
+            "name": "Billing Tester",
+            "email": "billing@example.com",
+            "company": "Example Co",
+            "project_type": "Installation",
+        },
+        follow_redirects=True,
+    )
+
+    assert signup_response.status_code == 200
+
+    with app.app_context():
+        customer = Client.query.filter_by(email="billing@example.com").one()
+        original_code = customer.portal_access_code
+        customer_id = customer.id
+
+    invoice_create = client.post(
+        f"/clients/{customer_id}/invoices",
+        data={
+            "description": "Wireless service",
+            "amount": "129.99",
+            "due_date": "2024-09-01",
+            "status": "Pending",
+        },
+        follow_redirects=True,
+    )
+
+    assert invoice_create.status_code == 200
+
+    with app.app_context():
+        invoice = Invoice.query.filter_by(client_id=customer_id).one()
+        assert invoice.amount_cents == 12999
+
+    invoice_update = client.post(
+        f"/invoices/{invoice.id}/update",
+        data={
+            "description": "Wireless service",
+            "amount": "129.99",
+            "due_date": "2024-09-01",
+            "status": "Paid",
+        },
+        follow_redirects=True,
+    )
+
+    assert invoice_update.status_code == 200
+
+    with app.app_context():
+        refreshed_invoice = Invoice.query.get(invoice.id)
+        assert refreshed_invoice.status == "Paid"
+
+    equipment_create = client.post(
+        f"/clients/{customer_id}/equipment",
+        data={
+            "name": "Subscriber Gateway",
+            "model": "UISP Wave",
+            "serial_number": "SN-123",
+            "installed_on": "2024-08-01",
+            "notes": "Mounted on roof",
+        },
+        follow_redirects=True,
+    )
+
+    assert equipment_create.status_code == 200
+
+    with app.app_context():
+        equipment = Equipment.query.filter_by(client_id=customer_id).one()
+
+    equipment_update = client.post(
+        f"/equipment/{equipment.id}/update",
+        data={
+            "name": "Subscriber Gateway",
+            "model": "UISP Wave Pro",
+            "serial_number": "SN-123",
+            "installed_on": "2024-08-01",
+            "notes": "Firmware updated",
+        },
+        follow_redirects=True,
+    )
+
+    assert equipment_update.status_code == 200
+
+    with app.app_context():
+        updated_equipment = Equipment.query.get(equipment.id)
+        assert updated_equipment.model == "UISP Wave Pro"
+
+    with app.app_context():
+        ticket = SupportTicket(
+            client_id=customer_id,
+            subject="Slow speeds",
+            message="Evenings are slow.",
+        )
+        db.session.add(ticket)
+        db.session.commit()
+        ticket_id = ticket.id
+
+    ticket_update = client.post(
+        f"/tickets/{ticket_id}/update",
+        data={"status": "In Progress", "resolution_notes": "Technician scheduled."},
+        follow_redirects=True,
+    )
+
+    assert ticket_update.status_code == 200
+
+    with app.app_context():
+        refreshed_ticket = SupportTicket.query.get(ticket_id)
+        assert refreshed_ticket.status == "In Progress"
+        assert refreshed_ticket.resolution_notes == "Technician scheduled."
+
+    reset_response = client.post(
+        f"/clients/{customer_id}/portal/reset-code",
+        follow_redirects=True,
+    )
+
+    assert reset_response.status_code == 200
+
+    with app.app_context():
+        updated_client = Client.query.get(customer_id)
+        assert updated_client.portal_access_code != original_code
+
+    delete_invoice = client.post(
+        f"/invoices/{invoice.id}/delete",
+        follow_redirects=True,
+    )
+
+    assert delete_invoice.status_code == 200
+
+    delete_equipment = client.post(
+        f"/equipment/{equipment.id}/delete",
+        follow_redirects=True,
+    )
+
+    assert delete_equipment.status_code == 200
+
+    delete_ticket = client.post(
+        f"/tickets/{ticket_id}/delete",
+        follow_redirects=True,
+    )
+
+    assert delete_ticket.status_code == 200
+
+    with app.app_context():
+        assert Invoice.query.filter_by(client_id=customer_id).count() == 0
+        assert Equipment.query.filter_by(client_id=customer_id).count() == 0
+        assert SupportTicket.query.filter_by(client_id=customer_id).count() == 0
+
+
+def test_client_portal_login_and_ticket_creation(app, client):
+    with app.app_context():
+        portal_client = Client(
+            name="Daisy Duke",
+            email="daisy@example.com",
+            status="Active",
+        )
+        db.session.add(portal_client)
+        db.session.commit()
+        access_code = portal_client.portal_access_code
+        portal_client_id = portal_client.id
+
+        invoice = Invoice(
+            client_id=portal_client_id,
+            description="Wireless Internet",
+            amount_cents=8500,
+            due_date=date(2024, 9, 1),
+            status="Pending",
+        )
+        equipment = Equipment(
+            client_id=portal_client_id,
+            name="Roof Antenna",
+            model="UISP AirFiber",
+            serial_number="ANT-001",
+            installed_on=date(2024, 8, 15),
+            notes="Mounted on chimney",
+        )
+        db.session.add_all([invoice, equipment])
+        db.session.commit()
+
+    login_response = client.post(
+        "/portal/login",
+        data={"email": "daisy@example.com", "access_code": access_code},
+        follow_redirects=True,
+    )
+
+    assert login_response.status_code == 200
+    assert b"Billing History" in login_response.data
+    assert b"Wireless Internet" in login_response.data
+
+    ticket_response = client.post(
+        "/portal/tickets",
+        data={"subject": "Need help", "message": "Please check signal."},
+        follow_redirects=True,
+    )
+
+    assert ticket_response.status_code == 200
+    assert b"support request has been submitted" in ticket_response.data
+
+    portal_view = client.get("/portal")
+    assert portal_view.status_code == 200
+    assert b"Need help" in portal_view.data
+
+    with app.app_context():
+        tickets = SupportTicket.query.filter_by(client_id=portal_client_id).all()
+        assert len(tickets) == 1
+        assert tickets[0].subject == "Need help"

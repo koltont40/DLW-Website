@@ -640,3 +640,298 @@ body {
     flex-direction: row;
   }
 }
+
+/* Customer portal management cards */
+.client-portal-management .client-portal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.client-portal-item {
+  border: 1px solid #d9e2ec;
+  border-radius: 1rem;
+  overflow: hidden;
+  background: #f9fbfd;
+}
+
+.client-portal-item > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 1.25rem 1.5rem;
+  background: #eef2f7;
+  display: flex;
+  align-items: center;
+}
+
+.client-portal-item > summary::-webkit-details-marker {
+  display: none;
+}
+
+.client-portal-item[open] > summary {
+  border-bottom: 1px solid #d9e2ec;
+}
+
+.client-portal-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 1.5rem;
+}
+
+.client-portal-summary h3 {
+  margin-bottom: 0.15rem;
+}
+
+.client-portal-summary .subtle {
+  margin: 0;
+}
+
+.client-portal-metrics {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+}
+
+.client-portal-metrics span {
+  background: white;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid #d9e2ec;
+}
+
+.client-portal-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.75rem;
+  padding: 1.5rem;
+}
+
+.client-portal-column h4 {
+  margin-bottom: 0.75rem;
+}
+
+.client-portal-column p.subtle {
+  margin-top: 1rem;
+}
+
+.record-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.record-row {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid #d9e2ec;
+  border-radius: 0.75rem;
+  background: white;
+}
+
+.record-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.record-row input,
+.record-row select,
+.record-row textarea {
+  font-size: 0.95rem;
+}
+
+.record-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.ticket-row .ticket-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.ticket-row .ticket-message {
+  padding: 0.75rem;
+  background: #f0f4f8;
+  border-radius: 0.5rem;
+  margin: 0;
+}
+
+.ticket-row textarea {
+  min-height: 100px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.status-pending,
+.status-open {
+  background: #fff7d6;
+  color: #9c6b00;
+}
+
+.status-paid,
+.status-resolved,
+.status-closed {
+  background: #ecfdf3;
+  color: #047857;
+}
+
+.status-overdue,
+.status-in-progress {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.status-cancelled {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.client-portal-column .stacked-form {
+  padding: 1rem;
+  border: 1px dashed #cbd5e1;
+  border-radius: 0.75rem;
+  background: #fdfdfd;
+}
+
+.client-portal-column .stacked-form h5 {
+  margin-top: 0;
+}
+
+@media (max-width: 900px) {
+  .client-portal-summary {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .client-portal-metrics {
+    width: 100%;
+  }
+
+  .client-portal-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Customer-facing portal styling */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.85rem;
+  text-align: left;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.equipment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.equipment-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.equipment-list dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem 1.5rem;
+  margin: 0;
+}
+
+.equipment-list dt {
+  font-weight: 600;
+  color: #475569;
+}
+
+.equipment-list dd {
+  margin: 0;
+}
+
+.support-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 1.5rem;
+}
+
+.support-form .stacked-form {
+  background: #f1f5f9;
+  border-radius: 1rem;
+  padding: 1.5rem;
+  border: 1px solid #e2e8f0;
+}
+
+.support-tickets .ticket-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.ticket-card {
+  border: 1px solid #d9e2ec;
+  border-radius: 1rem;
+  padding: 1.25rem;
+  background: white;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ticket-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.ticket-card p {
+  margin: 0;
+}
+
+.ticket-card .resolution {
+  background: #f8fafc;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid #e2e8f0;
+}
+
+@media (max-width: 960px) {
+  .support-layout {
+    grid-template-columns: 1fr;
+  }
+}
