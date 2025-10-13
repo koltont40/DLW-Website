@@ -13,7 +13,9 @@ from app import (
     SupportTicket,
     create_app,
     db,
+    utcnow,
 )
+from werkzeug.security import generate_password_hash
 
 
 @pytest.fixture
@@ -91,7 +93,8 @@ def test_admin_can_login_and_view_dashboard(client):
 
     assert login_response.status_code == 200
     assert b"Welcome back!" in login_response.data
-    assert b"Client Dashboard" in login_response.data
+    assert b"Admin Control Center" in login_response.data
+    assert b"Operations Snapshot" in login_response.data
     assert b"Header Navigation" in login_response.data
     assert b"Branding Assets" in login_response.data
 
@@ -259,7 +262,7 @@ def test_admin_can_manage_billing_equipment_and_tickets(app, client):
 
     with app.app_context():
         customer = Client.query.filter_by(email="billing@example.com").one()
-        original_code = customer.portal_access_code
+        assert customer.portal_password_hash is None
         customer_id = customer.id
 
     invoice_create = client.post(
@@ -355,15 +358,17 @@ def test_admin_can_manage_billing_equipment_and_tickets(app, client):
         assert refreshed_ticket.resolution_notes == "Technician scheduled."
 
     reset_response = client.post(
-        f"/clients/{customer_id}/portal/reset-code",
+        f"/clients/{customer_id}/portal/reset-password",
         follow_redirects=True,
     )
 
     assert reset_response.status_code == 200
+    assert b"Temporary portal password" in reset_response.data
 
     with app.app_context():
         updated_client = Client.query.get(customer_id)
-        assert updated_client.portal_access_code != original_code
+        assert updated_client.portal_password_hash is not None
+        assert updated_client.portal_password_updated_at is not None
 
     delete_invoice = client.post(
         f"/invoices/{invoice.id}/delete",
@@ -401,7 +406,10 @@ def test_client_portal_login_and_ticket_creation(app, client):
         )
         db.session.add(portal_client)
         db.session.commit()
-        access_code = portal_client.portal_access_code
+        password = "TempPass123"
+        portal_client.portal_password_hash = generate_password_hash(password)
+        portal_client.portal_password_updated_at = utcnow()
+        db.session.commit()
         portal_client_id = portal_client.id
 
         invoice = Invoice(
@@ -424,7 +432,7 @@ def test_client_portal_login_and_ticket_creation(app, client):
 
     login_response = client.post(
         "/portal/login",
-        data={"email": "daisy@example.com", "access_code": access_code},
+        data={"email": "daisy@example.com", "password": password},
         follow_redirects=True,
     )
 

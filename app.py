@@ -1,5 +1,6 @@
 import os
 import secrets
+import string
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -19,6 +20,7 @@ from flask import (
     url_for,
 )
 from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from sqlalchemy import inspect, or_, text
@@ -32,8 +34,9 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def generate_portal_code() -> str:
-    return secrets.token_urlsafe(8)
+def generate_portal_password() -> str:
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(12))
 
 
 def generate_account_reference() -> str:
@@ -51,8 +54,10 @@ class Client(db.Model):
     notes = db.Column(db.Text)
     status = db.Column(db.String(50), nullable=False, default="New")
     portal_access_code = db.Column(
-        db.String(64), nullable=False, unique=True, default=generate_portal_code
+        db.String(64), nullable=False, unique=True, default=generate_portal_password
     )
+    portal_password_hash = db.Column(db.String(255))
+    portal_password_updated_at = db.Column(db.DateTime(timezone=True))
     account_reference = db.Column(
         db.String(24), nullable=False, unique=True, default=generate_account_reference
     )
@@ -323,24 +328,36 @@ def ensure_client_portal_fields() -> None:
             connection.execute(
                 text("ALTER TABLE clients ADD COLUMN portal_access_code VARCHAR(64)")
             )
+        if "portal_password_hash" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN portal_password_hash VARCHAR(255)")
+            )
+        if "portal_password_updated_at" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE clients ADD COLUMN portal_password_updated_at TIMESTAMP"
+                )
+            )
         if "account_reference" not in columns:
             connection.execute(
                 text("ALTER TABLE clients ADD COLUMN account_reference VARCHAR(24)")
             )
 
-    clients_to_update = (
-        Client.query.filter(
-            or_(Client.portal_access_code.is_(None), Client.account_reference.is_(None))
-        ).all()
-    )
+    clients_to_update = Client.query.all()
 
     updated = False
     for client in clients_to_update:
         if not client.portal_access_code:
-            client.portal_access_code = generate_portal_code()
+            client.portal_access_code = generate_portal_password()
             updated = True
         if not client.account_reference:
             client.account_reference = generate_account_reference()
+            updated = True
+        if not client.portal_password_hash and client.portal_access_code:
+            client.portal_password_hash = generate_password_hash(
+                client.portal_access_code
+            )
+            client.portal_password_updated_at = utcnow()
             updated = True
 
     if updated:
@@ -489,13 +506,19 @@ def register_routes(app: Flask) -> None:
 
         if request.method == "POST":
             email = request.form.get("email", "").strip().lower()
-            access_code = request.form.get("access_code", "").strip()
+            password = request.form.get("password", "").strip()
 
             client_record = Client.query.filter_by(email=email).first()
-            if (
+            if client_record and not client_record.portal_password_hash:
+                flash(
+                    "Your portal password has not been issued yet. Please contact support.",
+                    "warning",
+                )
+            elif (
                 client_record
-                and access_code
-                and secrets.compare_digest(client_record.portal_access_code, access_code)
+                and password
+                and client_record.portal_password_hash
+                and check_password_hash(client_record.portal_password_hash, password)
             ):
                 session[PORTAL_SESSION_KEY] = client_record.id
                 session["portal_authenticated_at"] = utcnow().isoformat()
@@ -503,7 +526,8 @@ def register_routes(app: Flask) -> None:
                 redirect_target = request.args.get("next") or url_for("portal_dashboard")
                 return redirect(redirect_target)
 
-            flash("Invalid email or access code. Please try again.", "danger")
+            else:
+                flash("Invalid email or password. Please try again.", "danger")
 
         return render_template("portal_login.html")
 
@@ -639,6 +663,29 @@ def register_routes(app: Flask) -> None:
             .filter(SupportTicket.status.in_(["Open", "In Progress"]))
             .scalar()
         )
+        active_clients = Client.query.filter_by(status="Active").count()
+        onboarding_clients = (
+            Client.query.filter(Client.status.in_(["New", "In Review"])).count()
+        )
+        clients_without_password = (
+            Client.query.filter(Client.portal_password_hash.is_(None)).count()
+        )
+        pending_invoices_total = (
+            Invoice.query.filter(Invoice.status.in_(["Pending", "Overdue"]))
+            .count()
+        )
+        overdue_amount_cents = (
+            db.session.query(db.func.coalesce(db.func.sum(Invoice.amount_cents), 0))
+            .filter(Invoice.status == "Overdue")
+            .scalar()
+        )
+        equipment_total = Equipment.query.count()
+        recent_equipment = (
+            Equipment.query.order_by(Equipment.created_at.desc()).limit(5).all()
+        )
+        recent_tickets = (
+            SupportTicket.query.order_by(SupportTicket.created_at.desc()).limit(5).all()
+        )
 
         documents = {key: None for key in LEGAL_DOCUMENT_TYPES}
         for document in Document.query.all():
@@ -654,6 +701,14 @@ def register_routes(app: Flask) -> None:
             new_this_week=new_this_week,
             outstanding_amount_cents=outstanding_amount_cents,
             open_ticket_total=open_ticket_total,
+            active_clients=active_clients,
+            onboarding_clients=onboarding_clients,
+            clients_without_password=clients_without_password,
+            pending_invoices_total=pending_invoices_total,
+            overdue_amount_cents=overdue_amount_cents,
+            equipment_total=equipment_total,
+            recent_equipment=recent_equipment,
+            recent_tickets=recent_tickets,
             status_filter=status_filter,
             legal_documents=documents,
             navigation_items=navigation_items,
@@ -762,16 +817,45 @@ def register_routes(app: Flask) -> None:
             viewer=viewer,
         )
 
-    @app.post("/clients/<int:client_id>/portal/reset-code")
+    @app.post("/clients/<int:client_id>/portal/reset-password")
     @login_required
-    def reset_portal_code(client_id: int):
+    def reset_portal_password(client_id: int):
         client = Client.query.get_or_404(client_id)
-        client.portal_access_code = generate_portal_code()
+        temporary_password = generate_portal_password()
+        client.portal_password_hash = generate_password_hash(temporary_password)
+        client.portal_password_updated_at = utcnow()
+        client.portal_access_code = secrets.token_hex(16)
         db.session.commit()
         flash(
-            f"Portal access code regenerated for {client.name}. Share the new code securely.",
+            f"Temporary portal password for {client.email}: {temporary_password}",
             "info",
         )
+        return redirect(url_for("dashboard", status=request.args.get("status")))
+
+    @app.post("/clients/<int:client_id>/portal/set-password")
+    @login_required
+    def set_portal_password(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        password = request.form.get("password", "").strip()
+        confirm = request.form.get("confirm_password", "").strip()
+
+        if not password:
+            flash("Please provide a password for the client portal.", "danger")
+            return redirect(url_for("dashboard", status=request.args.get("status")))
+
+        if password != confirm:
+            flash("Passwords do not match. Please try again.", "danger")
+            return redirect(url_for("dashboard", status=request.args.get("status")))
+
+        if len(password) < 8:
+            flash("Portal passwords must be at least 8 characters long.", "danger")
+            return redirect(url_for("dashboard", status=request.args.get("status")))
+
+        client.portal_password_hash = generate_password_hash(password)
+        client.portal_password_updated_at = utcnow()
+        client.portal_access_code = secrets.token_hex(16)
+        db.session.commit()
+        flash(f"Portal password updated for {client.email}.", "success")
         return redirect(url_for("dashboard", status=request.args.get("status")))
 
     def _redirect_back_to_dashboard():

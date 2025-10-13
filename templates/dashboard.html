@@ -1,466 +1,568 @@
 {% extends "base.html" %}
-{% block title %}Client Dashboard | DIXIELAND WIRELESS LLC{% endblock %}
+{% block title %}Admin Dashboard | DIXIELAND WIRELESS LLC{% endblock %}
 {% block content %}
-<section class="dashboard-header">
-  <div>
-    <h1>Client Dashboard</h1>
-    <p class="lead">Monitor onboarding progress and manage client relationships in one place.</p>
-  </div>
-  <div class="dashboard-actions">
-    <a class="button secondary" href="{{ url_for('logout') }}">Log out</a>
-  </div>
-</section>
-
-<section class="metrics">
-  <div class="metric-card">
-    <span class="metric-label">Total Clients</span>
-    <span class="metric-value">{{ total_clients }}</span>
-  </div>
-  <div class="metric-card">
-    <span class="metric-label">New (7 days)</span>
-    <span class="metric-value">{{ new_this_week }}</span>
-  </div>
-  <div class="metric-card">
-    <span class="metric-label">Outstanding Balance</span>
-    <span class="metric-value">{{ outstanding_amount_cents|currency }}</span>
-  </div>
-  <div class="metric-card">
-    <span class="metric-label">Open Tickets</span>
-    <span class="metric-value">{{ open_ticket_total }}</span>
-  </div>
-</section>
-
-<section class="card navigation-management">
-  <div class="section-header">
-    <div>
-      <h2>Header Navigation</h2>
-      <p class="subtle">Control the links that appear at the top of the public website.</p>
+<div class="dashboard-layout">
+  <aside class="admin-sidebar">
+    <div class="sidebar-header">
+      <h1>Admin Control Center</h1>
+      <p class="subtle">Monitor every facet of DIXIELAND WIRELESS LLC from a single command post.</p>
     </div>
-  </div>
-  <form class="nav-add-form" method="post" action="{{ url_for('add_navigation_item') }}">
-    <div class="field-grid">
-      <label>
-        Link label
-        <input type="text" name="label" placeholder="Example: Coverage Map" required />
-      </label>
-      <label>
-        URL
-        <input type="text" name="url" placeholder="https://example.com" required />
-      </label>
+    <nav class="sidebar-nav">
+      <a href="#overview">Overview</a>
+      <a href="#clients">Clients</a>
+      <a href="#portal">Portal &amp; Billing</a>
+      <a href="#navigation">Header Links</a>
+      <a href="#branding">Branding</a>
+      <a href="#legal">Legal</a>
+    </nav>
+    <div class="sidebar-footer">
+      <a class="button secondary" href="{{ url_for('logout') }}">Log out</a>
     </div>
-    <label class="checkbox">
-      <input type="checkbox" name="open_in_new_tab" />
-      <span>Open in new tab</span>
-    </label>
-    <button class="button small primary" type="submit">Add Link</button>
-  </form>
-  <div class="navigation-list">
-    {% if navigation_items %}
-    {% for item in navigation_items %}
-    <form class="navigation-item" method="post" action="{{ url_for('update_navigation_item', item_id=item.id) }}">
-      <div class="field-grid">
-        <label>
-          Link label
-          <input type="text" name="label" value="{{ item.label }}" required />
-        </label>
-        <label>
-          URL
-          <input type="text" name="url" value="{{ item.url }}" required />
-        </label>
-      </div>
-      <label class="checkbox">
-        <input type="checkbox" name="open_in_new_tab" {% if item.open_in_new_tab %}checked{% endif %} />
-        <span>Open in new tab</span>
-      </label>
-      <div class="navigation-item-actions">
-        <button class="button small primary" type="submit">Save</button>
-        <button class="button small" type="submit" form="move-nav-{{ item.id }}-up">Move Up</button>
-        <button class="button small" type="submit" form="move-nav-{{ item.id }}-down">Move Down</button>
-        <button
-          class="button small danger"
-          type="submit"
-          form="delete-nav-{{ item.id }}"
-          onclick="return confirm('Remove this link from the header?');"
-        >
-          Remove
-        </button>
-      </div>
-    </form>
-    <form id="move-nav-{{ item.id }}-up" class="inline-form" method="post" action="{{ url_for('move_navigation_item', item_id=item.id) }}">
-      <input type="hidden" name="direction" value="up" />
-    </form>
-    <form id="move-nav-{{ item.id }}-down" class="inline-form" method="post" action="{{ url_for('move_navigation_item', item_id=item.id) }}">
-      <input type="hidden" name="direction" value="down" />
-    </form>
-    <form id="delete-nav-{{ item.id }}" class="inline-form" method="post" action="{{ url_for('delete_navigation_item', item_id=item.id) }}"></form>
-    {% endfor %}
-    {% else %}
-    <p class="subtle">No navigation links configured yet.</p>
-    {% endif %}
-  </div>
-</section>
-
-<section class="card branding-management">
-  <div class="section-header compact">
-    <div>
-      <h2>Branding Assets</h2>
-      <p class="subtle">Upload the latest logos, favicons, and wordmarks for DIXIELAND WIRELESS LLC.</p>
-    </div>
-  </div>
-  <div class="branding-grid">
-    {% for key, metadata in branding_asset_types.items() %}
-    {% set asset = branding_assets.get(key) %}
-    <article class="branding-asset">
-      <header>
-        <h3>{{ metadata.label }}</h3>
-        <p>{{ metadata.description }}</p>
+  </aside>
+  <div class="dashboard-main">
+    <section id="overview" class="card status-card">
+      <header class="section-header">
+        <div>
+          <h2>Operations Snapshot</h2>
+          <p class="subtle">Real-time health of client onboarding, billing, and network performance.</p>
+        </div>
       </header>
-      {% if asset %}
-      <p class="subtle">Last updated {{ asset.uploaded_at.strftime('%b %d, %Y') }}</p>
-      {% if key in ['logo', 'favicon', 'wordmark'] %}
-      <div class="branding-preview-wrapper">
-        <img class="branding-preview" src="{{ url_for('branding_file', asset_type=key) }}" alt="{{ metadata.label }} preview" />
+      <div class="status-grid">
+        <div class="metric-card">
+          <span class="metric-label">Total Clients</span>
+          <span class="metric-value">{{ total_clients }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Active Clients</span>
+          <span class="metric-value">{{ active_clients }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Onboarding</span>
+          <span class="metric-value">{{ onboarding_clients }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">New This Week</span>
+          <span class="metric-value">{{ new_this_week }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Outstanding Balance</span>
+          <span class="metric-value">{{ outstanding_amount_cents|currency }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Overdue Balance</span>
+          <span class="metric-value">{{ overdue_amount_cents|currency }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Open Tickets</span>
+          <span class="metric-value">{{ open_ticket_total }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Pending Invoices</span>
+          <span class="metric-value">{{ pending_invoices_total }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Network Devices</span>
+          <span class="metric-value">{{ equipment_total }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Passwords Needed</span>
+          <span class="metric-value">{{ clients_without_password }}</span>
+        </div>
       </div>
-      {% endif %}
-      {% else %}
-      <p class="subtle">No file uploaded yet.</p>
-      {% endif %}
-      <form class="upload-form" method="post" action="{{ url_for('upload_branding') }}" enctype="multipart/form-data">
-        <input type="hidden" name="asset_type" value="{{ key }}" />
-        <label class="file-input">
-          <span>Choose file</span>
-          <input type="file" name="asset" required />
-        </label>
-        <button class="button small primary" type="submit">Upload</button>
-      </form>
-    </article>
-    {% endfor %}
-  </div>
-</section>
+      <div class="status-panels">
+        <article class="status-panel">
+          <header>
+            <h3>Network Equipment Timeline</h3>
+            <p class="subtle">Latest hardware deployments delivered by the field team.</p>
+          </header>
+          {% if recent_equipment %}
+          <ul class="status-list">
+            {% for device in recent_equipment %}
+            <li>
+              <strong>{{ device.name }}</strong>
+              <span>{{ device.client.name if device.client else 'Unassigned' }}</span>
+              <span class="subtle">Logged {{ device.created_at.strftime('%b %d, %Y') }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="subtle">No equipment has been recorded yet.</p>
+          {% endif %}
+        </article>
+        <article class="status-panel">
+          <header>
+            <h3>Support Signals</h3>
+            <p class="subtle">Track how subscriber care conversations are trending.</p>
+          </header>
+          {% if recent_tickets %}
+          <ul class="status-list">
+            {% for ticket in recent_tickets %}
+            <li>
+              <strong>{{ ticket.subject }}</strong>
+              <span>{{ ticket.client.name if ticket.client else 'Unknown client' }}</span>
+              <span class="badge">{{ ticket.status }}</span>
+              <span class="subtle">Updated {{ ticket.updated_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="subtle">No support tickets have been captured.</p>
+          {% endif %}
+        </article>
+      </div>
+    </section>
 
-<section class="card legal-management">
-  <div class="section-header compact">
-    <div>
-      <h2>Legal Document Library</h2>
-      <p class="subtle">
-        Upload the latest Acceptable Use Policy, Privacy Policy, and Terms of Service for your subscribers.
-      </p>
-    </div>
-  </div>
-  <div class="legal-documents-grid">
-    {% for key, metadata in legal_document_types.items() %}
-    {% set document = legal_documents[key] %}
-    <article class="legal-document">
-      <header>
-        <h3>{{ metadata.label }}</h3>
-        <p>{{ metadata.description }}</p>
+    <section id="clients" class="card clients-card">
+      <header class="section-header">
+        <div>
+          <h2>Client Directory</h2>
+          <p class="subtle">Keep onboarding organized and act on new opportunities quickly.</p>
+        </div>
+        <form method="get" class="filter-form">
+          <label>
+            <span>Status</span>
+            <select name="status" onchange="this.form.submit()">
+              <option value="">All statuses</option>
+              {% for option in status_options %}
+              <option value="{{ option }}" {% if status_filter == option %}selected{% endif %}>{{ option }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          {% if status_filter %}
+          <a class="button link" href="{{ url_for('dashboard') }}">Clear</a>
+          {% endif %}
+        </form>
       </header>
-      {% if document %}
-      <p class="subtle">Last updated {{ document.uploaded_at.strftime('%b %d, %Y') }}</p>
-      <a class="button small" href="{{ url_for('download_document', doc_type=key) }}">Download current</a>
-      {% else %}
-      <p class="subtle">No file uploaded yet.</p>
-      {% endif %}
-      <form class="upload-form" method="post" action="{{ url_for('upload_document') }}" enctype="multipart/form-data">
-        <input type="hidden" name="doc_type" value="{{ key }}" />
-        <label class="file-input">
-          <span>Choose file</span>
-          <input type="file" name="document" required />
-        </label>
-        <button class="button small primary" type="submit">Upload</button>
-      </form>
-    </article>
-    {% endfor %}
-  </div>
-</section>
-
-<section class="filters card">
-  <form method="get" class="filter-form">
-    <label>
-      Filter by status
-      <select name="status" onchange="this.form.submit()">
-        <option value="">All statuses</option>
-        {% for option in status_options %}
-          <option value="{{ option }}" {% if status_filter == option %}selected{% endif %}>{{ option }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    {% if status_filter %}
-      <a class="button link" href="{{ url_for('dashboard') }}">Clear</a>
-    {% endif %}
-  </form>
-</section>
-
-<section class="card table-card">
-  {% if clients %}
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Email</th>
-          <th>Account #</th>
-          <th>Company</th>
-          <th>Project</th>
-          <th>Status</th>
-          <th>Notes</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for client in clients %}
-          <tr>
-            <td>
-              <strong>{{ client.name }}</strong>
-              <div class="subtle">Joined {{ client.created_at.strftime('%b %d, %Y') }}</div>
-            </td>
-            <td>{{ client.email }}</td>
-            <td><code>{{ client.account_reference }}</code></td>
-            <td>{{ client.company or '—' }}</td>
-            <td>{{ client.project_type or '—' }}</td>
-            <td>
-              <select name="status" form="client-form-{{ client.id }}">
-                {% for option in status_options %}
+      {% if clients %}
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Account #</th>
+              <th>Company</th>
+              <th>Project</th>
+              <th>Status</th>
+              <th>Notes</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for client in clients %}
+            <tr>
+              <td>
+                <strong>{{ client.name }}</strong>
+                <div class="subtle">Joined {{ client.created_at.strftime('%b %d, %Y') }}</div>
+              </td>
+              <td>{{ client.email }}</td>
+              <td><code>{{ client.account_reference }}</code></td>
+              <td>{{ client.company or '—' }}</td>
+              <td>{{ client.project_type or '—' }}</td>
+              <td>
+                <select name="status" form="client-form-{{ client.id }}">
+                  {% for option in status_options %}
                   <option value="{{ option }}" {% if client.status == option %}selected{% endif %}>{{ option }}</option>
-                {% endfor %}
-              </select>
-            </td>
-            <td class="notes-cell">
-              <textarea name="notes" rows="3" placeholder="Add context" form="client-form-{{ client.id }}">{{ client.notes or '' }}</textarea>
-            </td>
-            <td class="action-cell">
-              <form
-                id="client-form-{{ client.id }}"
-                class="inline-form"
-                method="post"
-                action="{{ url_for('update_client', client_id=client.id, status=request.args.get('status')) }}"
-              >
-                <button class="button small primary" type="submit">Save</button>
-              </form>
-              <form
-                class="inline-form"
-                method="post"
-                action="{{ url_for('delete_client', client_id=client.id, status=request.args.get('status')) }}"
-                onsubmit="return confirm('Remove this client?');"
-              >
-                <button class="button small danger" type="submit">Delete</button>
-              </form>
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <div class="empty-state">
-      <h3>No clients found</h3>
-      <p>Once a prospect completes the signup form, they will appear here for follow-up.</p>
-    </div>
-  {% endif %}
-</section>
-
-<section class="card client-portal-management">
-  <div class="section-header">
-    <div>
-      <h2>Customer Portal, Billing &amp; Support</h2>
-      <p class="subtle">Manage invoices, installed equipment, and support history for every client.</p>
-    </div>
-  </div>
-  {% if clients %}
-  <div class="client-portal-list">
-    {% for client in clients %}
-    {% set outstanding_invoices = client.invoices | selectattr('status', 'in', ['Pending', 'Overdue']) | list %}
-    {% set balance_cents = outstanding_invoices | map(attribute='amount_cents') | sum %}
-    {% set open_tickets = client.tickets | selectattr('status', 'in', ['Open', 'In Progress']) | list %}
-    <details class="client-portal-item" {% if loop.first %}open{% endif %}>
-      <summary>
-        <div class="client-portal-summary">
-          <div>
-            <h3>{{ client.name }}</h3>
-            <p class="subtle">Account {{ client.account_reference }}</p>
-          </div>
-          <div class="client-portal-metrics">
-            <span><strong>{{ client.invoices|length }}</strong> invoices</span>
-            <span><strong>{{ balance_cents|currency }}</strong> due</span>
-            <span><strong>{{ client.equipment|length }}</strong> devices</span>
-            <span><strong>{{ open_tickets|length }}</strong> open tickets</span>
-          </div>
-        </div>
-      </summary>
-      <div class="client-portal-body">
-        <div class="client-portal-column">
-          <h4>Portal Access</h4>
-          <p>Email: <strong>{{ client.email }}</strong></p>
-          <p>Access code: <code>{{ client.portal_access_code }}</code></p>
-          <form method="post" action="{{ url_for('reset_portal_code', client_id=client.id, status=request.args.get('status')) }}">
-            <button class="button small" type="submit">Reset access code</button>
-          </form>
-          <p class="subtle">Share the login URL with the client: <a href="{{ url_for('portal_login', _external=True) }}" target="_blank" rel="noopener">Customer Portal</a>.</p>
-        </div>
-        <div class="client-portal-column">
-          <h4>Billing</h4>
-          <div class="record-list">
-            {% if client.invoices %}
-            {% for invoice in client.invoices | sort(attribute='created_at', reverse=True) %}
-            <form class="record-row" method="post" action="{{ url_for('update_invoice', invoice_id=invoice.id, status=request.args.get('status')) }}">
-              <label>
-                Description
-                <input type="text" name="description" value="{{ invoice.description }}" required />
-              </label>
-              <label>
-                Amount ($)
-                <input type="number" step="0.01" min="0" name="amount" value="{{ invoice.amount_cents|cents_to_dollars }}" required />
-              </label>
-              <label>
-                Due date
-                <input type="date" name="due_date" value="{{ invoice.due_date.isoformat() if invoice.due_date }}" />
-              </label>
-              <label>
-                Status
-                <select name="status">
-                  {% for option in invoice_status_options %}
-                  <option value="{{ option }}" {% if invoice.status == option %}selected{% endif %}>{{ option }}</option>
                   {% endfor %}
                 </select>
-              </label>
-              <div class="record-actions">
-                <button class="button small primary" type="submit">Update</button>
-                <button class="button small danger" type="submit" form="delete-invoice-{{ invoice.id }}" onclick="return confirm('Delete this invoice?');">Delete</button>
-              </div>
-            </form>
-            <form id="delete-invoice-{{ invoice.id }}" class="inline-form" method="post" action="{{ url_for('delete_invoice', invoice_id=invoice.id, status=request.args.get('status')) }}"></form>
+              </td>
+              <td class="notes-cell">
+                <textarea name="notes" rows="3" placeholder="Add context" form="client-form-{{ client.id }}">{{ client.notes or '' }}</textarea>
+              </td>
+              <td class="action-cell">
+                <form
+                  id="client-form-{{ client.id }}"
+                  class="inline-form"
+                  method="post"
+                  action="{{ url_for('update_client', client_id=client.id, status=request.args.get('status')) }}"
+                >
+                  <button class="button small primary" type="submit">Save</button>
+                </form>
+                <form
+                  class="inline-form"
+                  method="post"
+                  action="{{ url_for('delete_client', client_id=client.id, status=request.args.get('status')) }}"
+                  onsubmit="return confirm('Remove this client?');"
+                >
+                  <button class="button small danger" type="submit">Delete</button>
+                </form>
+              </td>
+            </tr>
             {% endfor %}
-            {% else %}
-            <p class="subtle">No invoices recorded yet.</p>
-            {% endif %}
-          </div>
-          <form class="stacked-form" method="post" action="{{ url_for('create_invoice', client_id=client.id, status=request.args.get('status')) }}">
-            <h5>New invoice</h5>
-            <label>
-              Description
-              <input type="text" name="description" placeholder="Monthly service" required />
-            </label>
-            <label>
-              Amount ($)
-              <input type="number" step="0.01" min="0" name="amount" placeholder="79.99" required />
-            </label>
-            <label>
-              Due date
-              <input type="date" name="due_date" />
-            </label>
-            <label>
-              Status
-              <select name="status">
-                {% for option in invoice_status_options %}
-                <option value="{{ option }}" {% if option == 'Pending' %}selected{% endif %}>{{ option }}</option>
-                {% endfor %}
-              </select>
-            </label>
-            <button class="button small primary" type="submit">Add invoice</button>
-          </form>
-        </div>
-        <div class="client-portal-column">
-          <h4>Network Equipment</h4>
-          <div class="record-list">
-            {% if client.equipment %}
-            {% for device in client.equipment | sort(attribute='created_at', reverse=True) %}
-            <form class="record-row" method="post" action="{{ url_for('update_equipment', equipment_id=device.id, status=request.args.get('status')) }}">
-              <label>
-                Name
-                <input type="text" name="name" value="{{ device.name }}" required />
-              </label>
-              <label>
-                Model
-                <input type="text" name="model" value="{{ device.model or '' }}" />
-              </label>
-              <label>
-                Serial
-                <input type="text" name="serial_number" value="{{ device.serial_number or '' }}" />
-              </label>
-              <label>
-                Installed
-                <input type="date" name="installed_on" value="{{ device.installed_on.isoformat() if device.installed_on }}" />
-              </label>
-              <label>
-                Notes
-                <input type="text" name="notes" value="{{ device.notes or '' }}" />
-              </label>
-              <div class="record-actions">
-                <button class="button small primary" type="submit">Update</button>
-                <button class="button small danger" type="submit" form="delete-equipment-{{ device.id }}" onclick="return confirm('Remove this equipment item?');">Delete</button>
-              </div>
-            </form>
-            <form id="delete-equipment-{{ device.id }}" class="inline-form" method="post" action="{{ url_for('delete_equipment', equipment_id=device.id, status=request.args.get('status')) }}"></form>
-            {% endfor %}
-            {% else %}
-            <p class="subtle">No equipment assigned yet.</p>
-            {% endif %}
-          </div>
-          <form class="stacked-form" method="post" action="{{ url_for('create_equipment', client_id=client.id, status=request.args.get('status')) }}">
-            <h5>Add equipment</h5>
-            <label>
-              Name
-              <input type="text" name="name" placeholder="Subscriber Gateway" required />
-            </label>
-            <label>
-              Model
-              <input type="text" name="model" placeholder="UISP Wave AP" />
-            </label>
-            <label>
-              Serial number
-              <input type="text" name="serial_number" placeholder="SN123456" />
-            </label>
-            <label>
-              Installed
-              <input type="date" name="installed_on" />
-            </label>
-            <label>
-              Notes
-              <textarea name="notes" rows="2" placeholder="Mounted on roof, wired to PoE"></textarea>
-            </label>
-            <button class="button small primary" type="submit">Add equipment</button>
-          </form>
-        </div>
-        <div class="client-portal-column">
-          <h4>Support Tickets</h4>
-          <div class="record-list">
-            {% if client.tickets %}
-            {% for ticket in client.tickets | sort(attribute='created_at', reverse=True) %}
-            <form class="record-row ticket-row" method="post" action="{{ url_for('update_ticket', ticket_id=ticket.id, status=request.args.get('status')) }}">
-              <div class="ticket-meta">
-                <strong>{{ ticket.subject }}</strong>
-                <span class="subtle">Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
-              </div>
-              <p class="ticket-message">{{ ticket.message }}</p>
-              <label>
-                Status
-                <select name="status">
-                  {% for option in ticket_status_options %}
-                  <option value="{{ option }}" {% if ticket.status == option %}selected{% endif %}>{{ option }}</option>
-                  {% endfor %}
-                </select>
-              </label>
-              <label>
-                Resolution notes
-                <textarea name="resolution_notes" rows="3" placeholder="Document updates shared with the client.">{{ ticket.resolution_notes or '' }}</textarea>
-              </label>
-              <div class="record-actions">
-                <button class="button small primary" type="submit">Update</button>
-                <button class="button small danger" type="submit" form="delete-ticket-{{ ticket.id }}" onclick="return confirm('Delete this ticket?');">Delete</button>
-              </div>
-            </form>
-            <form id="delete-ticket-{{ ticket.id }}" class="inline-form" method="post" action="{{ url_for('delete_ticket', ticket_id=ticket.id, status=request.args.get('status')) }}"></form>
-            {% endfor %}
-            {% else %}
-            <p class="subtle">No tickets submitted yet.</p>
-            {% endif %}
-          </div>
-          <p class="subtle">Clients can open new tickets directly from their portal at any time.</p>
-        </div>
+          </tbody>
+        </table>
       </div>
-    </details>
-    {% endfor %}
+      {% else %}
+      <div class="empty-state">
+        <h3>No clients found</h3>
+        <p>Once a prospect completes the signup form, they will appear here for follow-up.</p>
+      </div>
+      {% endif %}
+    </section>
+
+    <section id="portal" class="card client-portal-management">
+      <header class="section-header">
+        <div>
+          <h2>Customer Portal, Billing &amp; Support</h2>
+          <p class="subtle">Provision credentials, post invoices, attach network gear, and answer subscriber questions.</p>
+        </div>
+      </header>
+      {% if clients %}
+      <div class="client-portal-list">
+        {% for client in clients %}
+        {% set outstanding_invoices = client.invoices | selectattr('status', 'in', ['Pending', 'Overdue']) | list %}
+        {% set balance_cents = outstanding_invoices | map(attribute='amount_cents') | sum %}
+        {% set open_tickets = client.tickets | selectattr('status', 'in', ['Open', 'In Progress']) | list %}
+        <details class="client-portal-item" {% if loop.first %}open{% endif %}>
+          <summary>
+            <div class="client-portal-summary">
+              <div>
+                <h3>{{ client.name }}</h3>
+                <p class="subtle">Account {{ client.account_reference }}</p>
+              </div>
+              <div class="client-portal-metrics">
+                <span><strong>{{ client.invoices|length }}</strong> invoices</span>
+                <span><strong>{{ balance_cents|currency }}</strong> due</span>
+                <span><strong>{{ client.equipment|length }}</strong> devices</span>
+                <span><strong>{{ open_tickets|length }}</strong> open tickets</span>
+              </div>
+            </div>
+          </summary>
+          <div class="client-portal-body">
+            <div class="client-portal-column">
+              <h4>Portal Access</h4>
+              <p>Email: <strong>{{ client.email }}</strong></p>
+              {% if client.portal_password_updated_at %}
+              <p class="subtle">Password last updated {{ client.portal_password_updated_at.strftime('%b %d, %Y %I:%M %p') }}</p>
+              {% else %}
+              <p class="alert subtle">Password not issued yet.</p>
+              {% endif %}
+              <form class="stacked-form" method="post" action="{{ url_for('set_portal_password', client_id=client.id, status=request.args.get('status')) }}">
+                <label>
+                  New password
+                  <input type="password" name="password" minlength="8" placeholder="Create a secure password" required />
+                </label>
+                <label>
+                  Confirm password
+                  <input type="password" name="confirm_password" minlength="8" placeholder="Re-enter password" required />
+                </label>
+                <button class="button small primary" type="submit">Save password</button>
+              </form>
+              <form class="stacked-form" method="post" action="{{ url_for('reset_portal_password', client_id=client.id, status=request.args.get('status')) }}">
+                <button class="button small" type="submit">Generate temporary password</button>
+              </form>
+              <p class="subtle">Share the login URL with the client: <a href="{{ url_for('portal_login', _external=True) }}" target="_blank" rel="noopener">Customer Portal</a>.</p>
+            </div>
+            <div class="client-portal-column">
+              <h4>Billing</h4>
+              <div class="record-list">
+                {% if client.invoices %}
+                {% for invoice in client.invoices | sort(attribute='created_at', reverse=True) %}
+                <form class="record-row" method="post" action="{{ url_for('update_invoice', invoice_id=invoice.id, status=request.args.get('status')) }}">
+                  <label>
+                    Description
+                    <input type="text" name="description" value="{{ invoice.description }}" required />
+                  </label>
+                  <label>
+                    Amount ($)
+                    <input type="number" step="0.01" min="0" name="amount" value="{{ invoice.amount_cents|cents_to_dollars }}" required />
+                  </label>
+                  <label>
+                    Due date
+                    <input type="date" name="due_date" value="{{ invoice.due_date.isoformat() if invoice.due_date }}" />
+                  </label>
+                  <label>
+                    Status
+                    <select name="status">
+                      {% for option in invoice_status_options %}
+                      <option value="{{ option }}" {% if invoice.status == option %}selected{% endif %}>{{ option }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <div class="record-actions">
+                    <button class="button small primary" type="submit">Update</button>
+                    <button class="button small danger" type="submit" form="delete-invoice-{{ invoice.id }}" onclick="return confirm('Delete this invoice?');">Delete</button>
+                  </div>
+                </form>
+                <form id="delete-invoice-{{ invoice.id }}" class="inline-form" method="post" action="{{ url_for('delete_invoice', invoice_id=invoice.id, status=request.args.get('status')) }}"></form>
+                {% endfor %}
+                {% else %}
+                <p class="subtle">No invoices recorded yet.</p>
+                {% endif %}
+              </div>
+              <form class="stacked-form" method="post" action="{{ url_for('create_invoice', client_id=client.id, status=request.args.get('status')) }}">
+                <h5>New invoice</h5>
+                <label>
+                  Description
+                  <input type="text" name="description" placeholder="Monthly service" required />
+                </label>
+                <label>
+                  Amount ($)
+                  <input type="number" step="0.01" min="0" name="amount" placeholder="79.99" required />
+                </label>
+                <label>
+                  Due date
+                  <input type="date" name="due_date" />
+                </label>
+                <label>
+                  Status
+                  <select name="status">
+                    {% for option in invoice_status_options %}
+                    <option value="{{ option }}" {% if option == 'Pending' %}selected{% endif %}>{{ option }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <button class="button small primary" type="submit">Add invoice</button>
+              </form>
+            </div>
+            <div class="client-portal-column">
+              <h4>Network Equipment</h4>
+              <div class="record-list">
+                {% if client.equipment %}
+                {% for device in client.equipment | sort(attribute='created_at', reverse=True) %}
+                <form class="record-row" method="post" action="{{ url_for('update_equipment', equipment_id=device.id, status=request.args.get('status')) }}">
+                  <label>
+                    Name
+                    <input type="text" name="name" value="{{ device.name }}" required />
+                  </label>
+                  <label>
+                    Model
+                    <input type="text" name="model" value="{{ device.model or '' }}" />
+                  </label>
+                  <label>
+                    Serial
+                    <input type="text" name="serial_number" value="{{ device.serial_number or '' }}" />
+                  </label>
+                  <label>
+                    Installed
+                    <input type="date" name="installed_on" value="{{ device.installed_on.isoformat() if device.installed_on }}" />
+                  </label>
+                  <label>
+                    Notes
+                    <input type="text" name="notes" value="{{ device.notes or '' }}" />
+                  </label>
+                  <div class="record-actions">
+                    <button class="button small primary" type="submit">Update</button>
+                    <button class="button small danger" type="submit" form="delete-equipment-{{ device.id }}" onclick="return confirm('Remove this equipment item?');">Delete</button>
+                  </div>
+                </form>
+                <form id="delete-equipment-{{ device.id }}" class="inline-form" method="post" action="{{ url_for('delete_equipment', equipment_id=device.id, status=request.args.get('status')) }}"></form>
+                {% endfor %}
+                {% else %}
+                <p class="subtle">No equipment assigned yet.</p>
+                {% endif %}
+              </div>
+              <form class="stacked-form" method="post" action="{{ url_for('create_equipment', client_id=client.id, status=request.args.get('status')) }}">
+                <h5>Add equipment</h5>
+                <label>
+                  Name
+                  <input type="text" name="name" placeholder="Subscriber Gateway" required />
+                </label>
+                <label>
+                  Model
+                  <input type="text" name="model" placeholder="UISP Wave AP" />
+                </label>
+                <label>
+                  Serial number
+                  <input type="text" name="serial_number" placeholder="SN123456" />
+                </label>
+                <label>
+                  Installed
+                  <input type="date" name="installed_on" />
+                </label>
+                <label>
+                  Notes
+                  <textarea name="notes" rows="2" placeholder="Mounted on roof, wired to PoE"></textarea>
+                </label>
+                <button class="button small primary" type="submit">Add equipment</button>
+              </form>
+            </div>
+            <div class="client-portal-column">
+              <h4>Support Tickets</h4>
+              <div class="record-list">
+                {% if client.tickets %}
+                {% for ticket in client.tickets | sort(attribute='created_at', reverse=True) %}
+                <form class="record-row ticket-row" method="post" action="{{ url_for('update_ticket', ticket_id=ticket.id, status=request.args.get('status')) }}">
+                  <div class="ticket-meta">
+                    <strong>{{ ticket.subject }}</strong>
+                    <span class="subtle">Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+                  </div>
+                  <p class="ticket-message">{{ ticket.message }}</p>
+                  <label>
+                    Status
+                    <select name="status">
+                      {% for option in ticket_status_options %}
+                      <option value="{{ option }}" {% if ticket.status == option %}selected{% endif %}>{{ option }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <label>
+                    Resolution notes
+                    <textarea name="resolution_notes" rows="3" placeholder="Document updates shared with the client.">{{ ticket.resolution_notes or '' }}</textarea>
+                  </label>
+                  <div class="record-actions">
+                    <button class="button small primary" type="submit">Update</button>
+                    <button class="button small danger" type="submit" form="delete-ticket-{{ ticket.id }}" onclick="return confirm('Delete this ticket?');">Delete</button>
+                  </div>
+                </form>
+                <form id="delete-ticket-{{ ticket.id }}" class="inline-form" method="post" action="{{ url_for('delete_ticket', ticket_id=ticket.id, status=request.args.get('status')) }}"></form>
+                {% endfor %}
+                {% else %}
+                <p class="subtle">No tickets submitted yet.</p>
+                {% endif %}
+              </div>
+              <p class="subtle">Clients can open new tickets directly from their portal at any time.</p>
+            </div>
+          </div>
+        </details>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="subtle">Add or import clients to activate customer portal tools.</p>
+      {% endif %}
+    </section>
+
+    <section id="navigation" class="card navigation-management">
+      <header class="section-header">
+        <div>
+          <h2>Header Navigation</h2>
+          <p class="subtle">Control the links that appear at the top of the public website.</p>
+        </div>
+      </header>
+      <form class="nav-add-form" method="post" action="{{ url_for('add_navigation_item') }}">
+        <div class="field-grid">
+          <label>
+            Link label
+            <input type="text" name="label" placeholder="Example: Coverage Map" required />
+          </label>
+          <label>
+            URL
+            <input type="text" name="url" placeholder="https://example.com" required />
+          </label>
+        </div>
+        <label class="checkbox">
+          <input type="checkbox" name="open_in_new_tab" />
+          <span>Open in new tab</span>
+        </label>
+        <button class="button small primary" type="submit">Add link</button>
+      </form>
+      <div class="navigation-list">
+        {% if navigation_items %}
+        {% for item in navigation_items %}
+        <form class="navigation-item" method="post" action="{{ url_for('update_navigation_item', item_id=item.id) }}">
+          <div class="field-grid">
+            <label>
+              Link label
+              <input type="text" name="label" value="{{ item.label }}" required />
+            </label>
+            <label>
+              URL
+              <input type="text" name="url" value="{{ item.url }}" required />
+            </label>
+          </div>
+          <label class="checkbox">
+            <input type="checkbox" name="open_in_new_tab" {% if item.open_in_new_tab %}checked{% endif %} />
+            <span>Open in new tab</span>
+          </label>
+          <div class="navigation-item-actions">
+            <button class="button small primary" type="submit">Save</button>
+            <button class="button small" type="submit" form="move-nav-{{ item.id }}-up">Move Up</button>
+            <button class="button small" type="submit" form="move-nav-{{ item.id }}-down">Move Down</button>
+            <button
+              class="button small danger"
+              type="submit"
+              form="delete-nav-{{ item.id }}"
+              onclick="return confirm('Remove this link from the header?');"
+            >
+              Remove
+            </button>
+          </div>
+        </form>
+        <form id="move-nav-{{ item.id }}-up" class="inline-form" method="post" action="{{ url_for('move_navigation_item', item_id=item.id) }}">
+          <input type="hidden" name="direction" value="up" />
+        </form>
+        <form id="move-nav-{{ item.id }}-down" class="inline-form" method="post" action="{{ url_for('move_navigation_item', item_id=item.id) }}">
+          <input type="hidden" name="direction" value="down" />
+        </form>
+        <form id="delete-nav-{{ item.id }}" class="inline-form" method="post" action="{{ url_for('delete_navigation_item', item_id=item.id) }}"></form>
+        {% endfor %}
+        {% else %}
+        <p class="subtle">No navigation links configured yet.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section id="branding" class="card branding-management">
+      <header class="section-header compact">
+        <div>
+          <h2>Branding Assets</h2>
+          <p class="subtle">Upload the latest logos, favicons, and wordmarks for DIXIELAND WIRELESS LLC.</p>
+        </div>
+      </header>
+      <div class="branding-grid">
+        {% for key, metadata in branding_asset_types.items() %}
+        {% set asset = branding_assets.get(key) %}
+        <article class="branding-asset">
+          <header>
+            <h3>{{ metadata.label }}</h3>
+            <p>{{ metadata.description }}</p>
+          </header>
+          {% if asset %}
+          <p class="subtle">Last updated {{ asset.uploaded_at.strftime('%b %d, %Y') }}</p>
+          {% if key in ['logo', 'favicon', 'wordmark'] %}
+          <div class="branding-preview-wrapper">
+            <img class="branding-preview" src="{{ url_for('branding_file', asset_type=key) }}" alt="{{ metadata.label }} preview" />
+          </div>
+          {% endif %}
+          {% else %}
+          <p class="subtle">No file uploaded yet.</p>
+          {% endif %}
+          <form class="upload-form" method="post" action="{{ url_for('upload_branding') }}" enctype="multipart/form-data">
+            <input type="hidden" name="asset_type" value="{{ key }}" />
+            <label class="file-input">
+              <span>Choose file</span>
+              <input type="file" name="asset" required />
+            </label>
+            <button class="button small primary" type="submit">Upload</button>
+          </form>
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section id="legal" class="card legal-management">
+      <header class="section-header compact">
+        <div>
+          <h2>Legal Document Library</h2>
+          <p class="subtle">Upload the latest Acceptable Use Policy, Privacy Policy, and Terms of Service for your subscribers.</p>
+        </div>
+      </header>
+      <div class="legal-documents-grid">
+        {% for key, metadata in legal_document_types.items() %}
+        {% set document = legal_documents[key] %}
+        <article class="legal-document">
+          <header>
+            <h3>{{ metadata.label }}</h3>
+            <p>{{ metadata.description }}</p>
+          </header>
+          {% if document %}
+          <p class="subtle">Last updated {{ document.uploaded_at.strftime('%b %d, %Y') }}</p>
+          <a class="button small" href="{{ url_for('download_document', doc_type=key) }}">Download current</a>
+          {% else %}
+          <p class="subtle">No file uploaded yet.</p>
+          {% endif %}
+          <form class="upload-form" method="post" action="{{ url_for('upload_document') }}" enctype="multipart/form-data">
+            <input type="hidden" name="doc_type" value="{{ key }}" />
+            <label class="file-input">
+              <span>Choose file</span>
+              <input type="file" name="document" required />
+            </label>
+            <button class="button small primary" type="submit">Upload</button>
+          </form>
+        </article>
+        {% endfor %}
+      </div>
+    </section>
   </div>
-  {% else %}
-  <p class="subtle">Add or import clients to activate customer portal tools.</p>
-  {% endif %}
-</section>
+</div>
 {% endblock %}
