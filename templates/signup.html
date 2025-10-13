@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Sign Up | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="form-section">
+  <h1>Sign up for DIXIELAND WIRELESS LLC service</h1>
+  <p class="lead">
+    Tell us about your location and create a secure portal password so we can activate blazing-fast WISP internet and
+    crystal-clear phone service for your home or business.
+  </p>
+  <form class="card two-column" method="post" action="{{ url_for('signup') }}">
+    <label>
+      Full name
+      <input type="text" name="name" placeholder="Alex Johnson" required />
+    </label>
+    <label>
+      Email address
+      <input type="email" name="email" placeholder="alex@example.com" required />
+    </label>
+    <label>
+      Company (optional)
+      <input type="text" name="company" placeholder="DIXIELAND WIRELESS LLC" />
+    </label>
+    <label>
+      Services
+      <select name="service_plan">
+        <option value="">Select a service</option>
+        {% for offering in service_offerings %}
+        <option value="{{ offering }}">{{ offering }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Portal password
+      <input type="password" name="password" minlength="8" placeholder="Create a secure password" required />
+    </label>
+    <label>
+      Confirm password
+      <input type="password" name="confirm_password" minlength="8" placeholder="Re-enter password" required />
+    </label>
+    <label class="full-width">
+      Installation notes
+      <textarea
+        name="notes"
+        rows="5"
+        placeholder="Tell us about your location, desired install date, or special phone requirements."
+      ></textarea>
+    </label>
+    <button class="button primary" type="submit">Complete signup</button>
+  </form>
+</section>
+{% endblock %}
