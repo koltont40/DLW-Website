@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}Down Detector | DIXIELAND WIRELESS LLC{% endblock %}
+
+{% block content %}
+<section class="down-detector card">
+  <h1>Down detector</h1>
+  <p class="subtle">
+    We're preparing a live outage feed for DixieLand Wireless customers. In the meantime, contact our network team at
+    <a href="mailto:{{ contact_email }}">{{ contact_email }}</a> for immediate assistance or visit the
+    <a href="{{ url_for('support') }}">support center</a> for more options.
+  </p>
+</section>
+{% endblock %}

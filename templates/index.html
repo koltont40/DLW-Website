@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}DixieLand Wireless LLC | Rural WISP & Phone{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="hero-grid">
+    <div>
+      <h1>Wireless Internet &amp; Phone Built for Rural Communities</h1>
+      <p class="lead">
+        DIXIELAND WIRELESS LLC connects homes and businesses with dependable high-speed WISP coverage and clear VoIP phone
+        service. Let us design a package that keeps your family and your business online without compromise.
+      </p>
+      <div class="hero-actions">
+        <a class="button primary" href="{{ url_for('signup') }}">Start Signup</a>
+        <a class="button secondary" href="{{ url_for('service_plans') }}">View Service Plans</a>
+        <a class="button ghost" href="{{ url_for('legal') }}">Review Legal</a>
+      </div>
+    </div>
+    <div class="hero-card">
+      <h2>Plans include</h2>
+      <ul>
+        <li>Unlimited WISP data with optimized local backhaul</li>
+        <li>Crystal-clear hosted phone service with voicemail to email</li>
+        <li>24/7 monitoring from our regional network operations team</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="features">
+  <h2>Why neighbors choose DIXIELAND WIRELESS LLC</h2>
+  <div class="features-grid">
+    <article>
+      <h3>Local Network Experts</h3>
+      <p>Our technicians live in the communities we serve and engineer towers for reliable, low-latency access.</p>
+    </article>
+    <article>
+      <h3>Flexible Phone Options</h3>
+      <p>Keep your existing numbers, route calls to mobile devices, and manage voicemail from any browser.</p>
+    </article>
+    <article>
+      <h3>Community Commitment</h3>
+      <p>We reinvest in local infrastructure to expand coverage and improve speeds for every customer we add.</p>
+    </article>
+  </div>
+</section>
+
+<section class="cta">
+  <div class="cta-card">
+    <h2>Ready for better internet and phone service?</h2>
+    <p>Create your secure portal login, confirm coverage, and lock in an installation date in just a few minutes.</p>
+    <div class="cta-actions">
+      <a class="button primary" href="{{ url_for('signup') }}">Create your account</a>
+      <a class="button secondary" href="{{ url_for('service_plans') }}">Compare plans</a>
+    </div>
+  </div>
+</section>
+{% endblock %}
