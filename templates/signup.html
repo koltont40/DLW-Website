@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Client Signup | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="form-section">
+  <h1>Client Intake Form</h1>
+  <p class="lead">Tell us about your team so we can match you with the right consultant.</p>
+  <form class="card form-card" method="post" action="{{ url_for('signup') }}">
+    <div class="form-grid">
+      <label>
+        Full Name
+        <input type="text" name="name" placeholder="Alex Johnson" required />
+      </label>
+      <label>
+        Email Address
+        <input type="email" name="email" placeholder="alex@example.com" required />
+      </label>
+      <label>
+        Company
+        <input type="text" name="company" placeholder="DixieLand Wireless LLC" />
+      </label>
+      <label>
+        Project Type
+        <select name="project_type">
+          <option value="">Select an option</option>
+          <option>Workflow Automation</option>
+          <option>Client Portal Build</option>
+          <option>Data & Reporting</option>
+          <option>Operations Strategy</option>
+        </select>
+      </label>
+    </div>
+    <label class="full-width">
+      Notes
+      <textarea name="notes" rows="5" placeholder="Share goals, timeline, and key stakeholders."></textarea>
+    </label>
+    <button class="button primary" type="submit">Submit Application</button>
+  </form>
+</section>
+{% endblock %}
