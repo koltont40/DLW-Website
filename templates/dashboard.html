@@ -687,6 +687,51 @@
           <p class="subtle">Respond to subscriber questions and document resolutions.</p>
         </div>
       </header>
+      <div class="snmp-settings-panel">
+        <div class="snmp-settings-header">
+          <h3>SNMP Relay Settings</h3>
+          {% if snmp_settings.host %}
+          <span class="status-pill status-active">Configured</span>
+          {% else %}
+          <span class="status-pill status-disabled">Not configured</span>
+          {% endif %}
+        </div>
+        <p class="subtle">
+          Provide the SNMP trap destination and identifiers used by your monitoring stack so DixieLand Wireless can
+          send server-side email notifications when appointments, tickets, and alerts change.
+        </p>
+        <form
+          class="stacked-form"
+          method="post"
+          action="{{ url_for('update_snmp_settings', section='support', status=request.args.get('status')) }}"
+        >
+          <div class="snmp-settings-grid">
+            <label>
+              Trap host
+              <input type="text" name="host" placeholder="snmp-relay.example.com" value="{{ snmp_config.host if snmp_config else '' }}" />
+            </label>
+            <label>
+              Port
+              <input type="number" name="port" min="1" max="65535" value="{{ snmp_config.port if snmp_config else 162 }}" />
+            </label>
+            <label>
+              Community string
+              <input type="text" name="community" placeholder="public" value="{{ snmp_config.community if snmp_config else 'public' }}" />
+            </label>
+            <label>
+              Enterprise OID
+              <input type="text" name="enterprise_oid" placeholder="1.3.6.1.4.1.x" value="{{ snmp_config.enterprise_oid if snmp_config else '1.3.6.1.4.1.8072.9999' }}" />
+            </label>
+            <label>
+              Admin email
+              <input type="email" name="admin_email" placeholder="ops@example.com" value="{{ snmp_config.admin_email if snmp_config else '' }}" />
+            </label>
+          </div>
+          <div class="snmp-settings-actions">
+            <button class="button secondary" type="submit">Save SNMP settings</button>
+          </div>
+        </form>
+      </div>
       <div class="snmp-email-panel">
         <div class="snmp-email-header">
           <h3>SNMP Email Relay</h3>

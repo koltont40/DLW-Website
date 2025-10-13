@@ -82,11 +82,43 @@ class Client(db.Model):
 
 STATUS_OPTIONS = ["New", "In Review", "Active", "On Hold", "Archived"]
 
-SERVICE_OFFERINGS = [
-    "Wireless Internet (WISP)",
-    "Phone Service",
-    "Internet + Phone Bundle",
+SERVICE_PLANS = [
+    {
+        "name": "Wireless Internet (WISP)",
+        "price_cents": 6999,
+        "speed": "Up to 150 Mbps",
+        "description": "Reliable fixed wireless connectivity ideal for streaming, smart homes, and everyday browsing.",
+        "features": [
+            "Unlimited data with no hard caps",
+            "Managed Wi-Fi gateway included",
+            "Priority local support from DIXIELAND technicians",
+        ],
+    },
+    {
+        "name": "Phone Service",
+        "price_cents": 2999,
+        "speed": "Digital voice",
+        "description": "Crystal clear home and small business voice with enhanced emergency calling.",
+        "features": [
+            "Unlimited local and long-distance calling",
+            "Voicemail-to-email and caller ID",
+            "Battery-backed customer premise equipment",
+        ],
+    },
+    {
+        "name": "Internet + Phone Bundle",
+        "price_cents": 9499,
+        "speed": "Up to 150 Mbps + Digital voice",
+        "description": "Best value bundle for households that want fast wireless internet and dependable phone service together.",
+        "features": [
+            "Bundled savings on monthly service",
+            "Single invoice with autopay support",
+            "Priority repair dispatch",
+        ],
+    },
 ]
+
+SERVICE_OFFERINGS = [plan["name"] for plan in SERVICE_PLANS]
 
 LEGAL_DOCUMENT_TYPES = {
     "aup": {
@@ -119,6 +151,8 @@ def get_default_navigation_items() -> list[tuple[str, str, bool]]:
     contact_email = current_app.config.get("CONTACT_EMAIL", "hello@example.com")
     return [
         ("Sign Up", "/signup", False),
+        ("Service Plans", "/services", False),
+        ("About", "/about", False),
         ("Legal", "/legal", False),
         ("Contact", f"mailto:{contact_email}", False),
         ("Client Portal", "/portal/login", False),
@@ -284,6 +318,26 @@ class Appointment(db.Model):
         return f"<Appointment {self.title} for client {self.client_id}>"
 
 
+class SNMPConfig(db.Model):
+    __tablename__ = "snmp_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    host = db.Column(db.String(255))
+    port = db.Column(db.Integer, nullable=False, default=162)
+    community = db.Column(db.String(120), nullable=False, default="public")
+    enterprise_oid = db.Column(
+        db.String(255), nullable=False, default="1.3.6.1.4.1.8072.9999"
+    )
+    admin_email = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<SNMPConfig host={self.host} port={self.port}>"
+
+
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, instance_relative_config=True)
 
@@ -331,6 +385,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         db.create_all()
         ensure_client_portal_fields()
         ensure_default_navigation()
+        ensure_snmp_configuration()
 
     return app
 
@@ -348,13 +403,30 @@ def init_db() -> None:
 def send_email_via_snmp(app: Flask, recipient: str, subject: str, body: str) -> bool:
     """Dispatch an email payload via SNMP trap for downstream processing."""
 
-    host = app.config.get("SNMP_TRAP_HOST")
+    snmp_config = SNMPConfig.query.first()
+
+    host = (snmp_config.host if snmp_config and snmp_config.host else None) or app.config.get(
+        "SNMP_TRAP_HOST"
+    )
     if not host or not recipient:
         return False
 
-    port = app.config.get("SNMP_TRAP_PORT", 162)
-    community = app.config.get("SNMP_COMMUNITY", "public")
-    enterprise_oid = app.config.get("SNMP_ENTERPRISE_OID", "1.3.6.1.4.1.8072.9999")
+    port = (
+        snmp_config.port if snmp_config and snmp_config.port else app.config.get("SNMP_TRAP_PORT", 162)
+    )
+    community = (
+        snmp_config.community
+        if snmp_config and snmp_config.community
+        else app.config.get("SNMP_COMMUNITY", "public")
+    )
+    enterprise_oid = (
+        snmp_config.enterprise_oid
+        if snmp_config and snmp_config.enterprise_oid
+        else app.config.get("SNMP_ENTERPRISE_OID", "1.3.6.1.4.1.8072.9999")
+    )
+
+    if snmp_config and snmp_config.admin_email:
+        app.config["SNMP_ADMIN_EMAIL"] = snmp_config.admin_email
 
     try:
         from pysnmp.hlapi import (
@@ -482,6 +554,53 @@ def ensure_client_portal_fields() -> None:
         db.session.commit()
 
 
+def ensure_snmp_configuration() -> None:
+    config = SNMPConfig.query.first()
+    if config:
+        return
+
+    port_env = os.environ.get("SNMP_TRAP_PORT")
+    try:
+        port_value = int(port_env) if port_env else 162
+    except (TypeError, ValueError):
+        port_value = 162
+
+    config = SNMPConfig(
+        host=os.environ.get("SNMP_TRAP_HOST"),
+        port=port_value,
+        community=os.environ.get("SNMP_COMMUNITY", "public"),
+        enterprise_oid=os.environ.get("SNMP_ENTERPRISE_OID", "1.3.6.1.4.1.8072.9999"),
+        admin_email=os.environ.get("SNMP_ADMIN_EMAIL"),
+    )
+    db.session.add(config)
+    db.session.commit()
+
+
+def get_effective_snmp_settings(app: Flask) -> dict[str, str | int | None]:
+    settings: dict[str, str | int | None] = {
+        "host": app.config.get("SNMP_TRAP_HOST"),
+        "port": app.config.get("SNMP_TRAP_PORT", 162),
+        "community": app.config.get("SNMP_COMMUNITY", "public"),
+        "enterprise_oid": app.config.get("SNMP_ENTERPRISE_OID", "1.3.6.1.4.1.8072.9999"),
+        "admin_email": app.config.get("SNMP_ADMIN_EMAIL"),
+    }
+
+    config = SNMPConfig.query.first()
+    if config:
+        if config.host:
+            settings["host"] = config.host
+        if config.port:
+            settings["port"] = config.port
+        if config.community:
+            settings["community"] = config.community
+        if config.enterprise_oid:
+            settings["enterprise_oid"] = config.enterprise_oid
+        if config.admin_email:
+            settings["admin_email"] = config.admin_email
+
+    return settings
+
+
 def login_required(func):
     from functools import wraps
 
@@ -595,8 +714,17 @@ def register_routes(app: Flask) -> None:
     def index():
         return render_template("index.html")
 
+    @app.route("/services")
+    def service_plans():
+        return render_template("service_plans.html", plans=SERVICE_PLANS)
+
+    @app.route("/about")
+    def about():
+        return render_template("about.html")
+
     @app.route("/signup", methods=["GET", "POST"])
     def signup():
+        selected_plan = request.args.get("plan", "").strip()
         if request.method == "POST":
             name = request.form.get("name", "").strip()
             email = request.form.get("email", "").strip().lower()
@@ -645,7 +773,7 @@ def register_routes(app: Flask) -> None:
             flash("Account created! You're signed in to the customer portal.", "success")
             return redirect(url_for("portal_dashboard"))
 
-        return render_template("signup.html")
+        return render_template("signup.html", preselected_plan=selected_plan)
 
     @app.route("/thank-you")
     def thank_you():
@@ -818,7 +946,8 @@ def register_routes(app: Flask) -> None:
         appointment.updated_at = utcnow()
         db.session.commit()
 
-        admin_recipient = app.config.get("SNMP_ADMIN_EMAIL")
+        admin_settings = get_effective_snmp_settings(app)
+        admin_recipient = admin_settings.get("admin_email")
         if admin_recipient:
             notify_via_snmp(
                 admin_recipient,
@@ -1074,9 +1203,9 @@ def register_routes(app: Flask) -> None:
         navigation_items = NavigationItem.query.order_by(NavigationItem.position.asc()).all()
         branding_records = {asset.asset_type: asset for asset in BrandingAsset.query.all()}
 
-        snmp_enabled = bool(
-            app.config.get("SNMP_TRAP_HOST") or app.config.get("SNMP_EMAIL_SENDER")
-        )
+        snmp_settings = get_effective_snmp_settings(app)
+        snmp_enabled = bool(snmp_settings.get("host") or app.config.get("SNMP_EMAIL_SENDER"))
+        snmp_config = SNMPConfig.query.first()
 
         return render_template(
             "dashboard.html",
@@ -1107,6 +1236,8 @@ def register_routes(app: Flask) -> None:
             upcoming_appointments=upcoming_appointments_list,
             recent_appointments=recent_appointments,
             snmp_enabled=snmp_enabled,
+            snmp_config=snmp_config,
+            snmp_settings=snmp_settings,
         )
 
     @app.post("/documents/upload")
@@ -1669,6 +1800,46 @@ def register_routes(app: Flask) -> None:
                 "warning",
             )
 
+        return _redirect_back_to_dashboard("support")
+
+    @app.post("/snmp-settings")
+    @login_required
+    def update_snmp_settings():
+        host = request.form.get("host", "").strip()
+        port_raw = request.form.get("port", "").strip()
+        community = request.form.get("community", "").strip() or "public"
+        enterprise_oid = request.form.get("enterprise_oid", "").strip() or "1.3.6.1.4.1.8072.9999"
+        admin_email = request.form.get("admin_email", "").strip() or None
+
+        port_value = 162
+        if port_raw:
+            try:
+                port_value = max(1, min(65535, int(port_raw)))
+            except ValueError:
+                flash("Provide a valid SNMP port between 1 and 65535.", "danger")
+                return _redirect_back_to_dashboard("support")
+
+        config = SNMPConfig.query.first()
+        if not config:
+            config = SNMPConfig()
+            db.session.add(config)
+
+        config.host = host or None
+        config.port = port_value
+        config.community = community
+        config.enterprise_oid = enterprise_oid
+        config.admin_email = admin_email
+        config.updated_at = utcnow()
+
+        db.session.commit()
+
+        app.config["SNMP_TRAP_HOST"] = config.host
+        app.config["SNMP_TRAP_PORT"] = config.port
+        app.config["SNMP_COMMUNITY"] = config.community
+        app.config["SNMP_ENTERPRISE_OID"] = config.enterprise_oid
+        app.config["SNMP_ADMIN_EMAIL"] = config.admin_email
+
+        flash("SNMP settings updated.", "success")
         return _redirect_back_to_dashboard("support")
 
     @app.post("/navigation/add")

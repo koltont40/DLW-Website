@@ -10,6 +10,7 @@ from app import (
     Equipment,
     Invoice,
     Appointment,
+    SNMPConfig,
     NavigationItem,
     SupportTicket,
     create_app,
@@ -50,6 +51,20 @@ def test_index_page_renders(client):
     response = client.get("/")
     assert response.status_code == 200
     assert b"Wireless Internet" in response.data
+
+
+def test_service_plans_page_lists_offerings(client):
+    response = client.get("/services")
+    assert response.status_code == 200
+    assert b"Wireless Internet (WISP)" in response.data
+    assert b"Internet + Phone Bundle" in response.data
+
+
+def test_about_page_highlights_mission(client):
+    response = client.get("/about")
+    assert response.status_code == 200
+    assert b"Our Mission" in response.data
+    assert b"local experts" in response.data
 
 
 def test_legal_page_lists_documents(client):
@@ -646,3 +661,39 @@ def test_admin_can_send_manual_snmp_email(app, client):
     assert notifications == [
         ("alert@example.com", "Maintenance window", "Expect brief downtime at midnight."),
     ]
+
+
+def test_admin_can_update_snmp_settings(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/snmp-settings",
+        data={
+            "host": "trap.dixie.local",
+            "port": "1162",
+            "community": "dlw-community",
+            "enterprise_oid": "1.3.6.1.4.1.9999",
+            "admin_email": "noc@dixielandwireless.com",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"SNMP settings updated" in response.data
+
+    with app.app_context():
+        config = SNMPConfig.query.first()
+        assert config is not None
+        assert config.host == "trap.dixie.local"
+        assert config.port == 1162
+        assert config.community == "dlw-community"
+        assert config.enterprise_oid == "1.3.6.1.4.1.9999"
+        assert config.admin_email == "noc@dixielandwireless.com"
+        assert app.config["SNMP_TRAP_HOST"] == "trap.dixie.local"
+        assert app.config["SNMP_TRAP_PORT"] == 1162
+        assert app.config["SNMP_COMMUNITY"] == "dlw-community"
+        assert app.config["SNMP_ADMIN_EMAIL"] == "noc@dixielandwireless.com"
