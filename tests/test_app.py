@@ -1,5 +1,5 @@
 import io
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 
@@ -9,7 +9,6 @@ from app import (
     Document,
     Equipment,
     Invoice,
-    Appointment,
     NavigationItem,
     SupportTicket,
     create_app,
@@ -397,6 +396,53 @@ def test_admin_can_manage_billing_equipment_and_tickets(app, client):
         follow_redirects=True,
     )
 
+    assert ticket_update.status_code == 200
+
+    with app.app_context():
+        refreshed_ticket = SupportTicket.query.get(ticket_id)
+        assert refreshed_ticket.status == "In Progress"
+        assert refreshed_ticket.resolution_notes == "Technician scheduled."
+
+    reset_response = client.post(
+        f"/clients/{customer_id}/portal/reset-password",
+        follow_redirects=True,
+    )
+
+    assert reset_response.status_code == 200
+    assert b"Temporary portal password" in reset_response.data
+
+    with app.app_context():
+        updated_client = Client.query.get(customer_id)
+        assert updated_client.portal_password_hash is not None
+        assert updated_client.portal_password_updated_at is not None
+
+    delete_invoice = client.post(
+        f"/invoices/{invoice.id}/delete",
+        follow_redirects=True,
+    )
+
+    assert delete_invoice.status_code == 200
+
+    delete_equipment = client.post(
+        f"/equipment/{equipment.id}/delete",
+        follow_redirects=True,
+    )
+
+    assert delete_equipment.status_code == 200
+
+    delete_ticket = client.post(
+        f"/tickets/{ticket_id}/delete",
+        follow_redirects=True,
+    )
+
+    assert delete_ticket.status_code == 200
+
+    with app.app_context():
+        assert Invoice.query.filter_by(client_id=customer_id).count() == 0
+        assert Equipment.query.filter_by(client_id=customer_id).count() == 0
+        assert SupportTicket.query.filter_by(client_id=customer_id).count() == 0
+
+
 def test_client_portal_login_and_ticket_creation(app, client):
     with app.app_context():
         portal_client = Client(
@@ -457,163 +503,3 @@ def test_client_portal_login_and_ticket_creation(app, client):
         tickets = SupportTicket.query.filter_by(client_id=portal_client_id).all()
         assert len(tickets) == 1
         assert tickets[0].subject == "Need help"
-
-
-def test_portal_highlights_missing_service_plan(app, client):
-    app.config["CONTACT_EMAIL"] = "activate@example.com"
-    with app.app_context():
-        portal_client = Client(
-            name="No Plan Customer",
-            email="noplan@example.com",
-            status="Active",
-        )
-        portal_client.portal_password_hash = generate_password_hash("PortalPass123")
-        db.session.add(portal_client)
-        db.session.commit()
-
-    login_response = client.post(
-        "/portal/login",
-        data={"email": "noplan@example.com", "password": "PortalPass123"},
-        follow_redirects=True,
-    )
-
-    assert login_response.status_code == 200
-    assert b"No service plan on file" in login_response.data
-    assert b"Contact us to set up your service" in login_response.data
-    assert b"mailto:activate@example.com" in login_response.data
-
-
-def test_client_can_request_reschedule_and_notify_admin(app, client):
-    notifications: list[tuple[str, str, str]] = []
-    app.config["SNMP_ADMIN_EMAIL"] = "ops@example.com"
-    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
-        (recipient, subject, body)
-    ) or True
-
-    with app.app_context():
-        portal_client = Client(
-            name="Schedule Tester",
-            email="schedule@example.com",
-            status="Active",
-            project_type="Wireless Internet (WISP)",
-        )
-        portal_client.portal_password_hash = generate_password_hash("PortalPass123")
-        db.session.add(portal_client)
-        db.session.flush()
-
-        appointment = Appointment(
-            client_id=portal_client.id,
-            title="Initial Install",
-            scheduled_for=utcnow(),
-            notes="Bring ladder",
-        )
-        db.session.add(appointment)
-        db.session.commit()
-        appointment_id = appointment.id
-
-    client.post(
-        "/portal/login",
-        data={"email": "schedule@example.com", "password": "PortalPass123"},
-        follow_redirects=True,
-    )
-
-    new_time = (utcnow() + timedelta(days=2)).replace(microsecond=0)
-
-    reschedule_response = client.post(
-        f"/portal/appointments/{appointment_id}/action",
-        data={
-            "action": "reschedule",
-            "scheduled_for": new_time.strftime("%Y-%m-%dT%H:%M"),
-            "message": "Need afternoon slot",
-        },
-        follow_redirects=True,
-    )
-
-    assert reschedule_response.status_code == 200
-    assert b"Reschedule request submitted" in reschedule_response.data
-
-    with app.app_context():
-        updated = Appointment.query.get(appointment_id)
-        assert updated.status == "Reschedule Requested"
-        assert updated.proposed_time is not None
-        assert updated.client_message == "Need afternoon slot"
-
-    assert notifications
-    recipient, subject, body = notifications[-1]
-    assert recipient == "ops@example.com"
-    assert "requested a new appointment" in subject
-    assert "Need afternoon slot" in body
-
-    notifications.clear()
-
-    approve_response = client.post(
-        f"/portal/appointments/{appointment_id}/action",
-        data={"action": "approve"},
-        follow_redirects=True,
-    )
-
-    assert approve_response.status_code == 200
-    assert b"Appointment confirmed" in approve_response.data
-
-    with app.app_context():
-        approved = Appointment.query.get(appointment_id)
-        assert approved.status == "Confirmed"
-        assert approved.proposed_time is None
-
-    assert notifications
-    approve_recipient, approve_subject, approve_body = notifications[-1]
-    assert approve_recipient == "ops@example.com"
-    assert "Appointment confirmed" in approve_subject
-    assert "Status: Confirmed" in approve_body
-
-
-def test_admin_can_schedule_appointment(app, client):
-    notifications: list[tuple[str, str, str]] = []
-    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
-        (recipient, subject, body)
-    ) or True
-
-    with app.app_context():
-        customer = Client(
-            name="Field Visit Client",
-            email="field@example.com",
-            status="Active",
-            project_type="Phone Service",
-        )
-        db.session.add(customer)
-        db.session.commit()
-        customer_id = customer.id
-
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
-
-    scheduled_for = (utcnow() + timedelta(days=1)).replace(microsecond=0)
-
-    response = client.post(
-        "/appointments",
-        query_string={"section": "appointments"},
-        data={
-            "client_id": str(customer_id),
-            "title": "Roof install",
-            "scheduled_for": scheduled_for.strftime("%Y-%m-%dT%H:%M"),
-            "notes": "Coordinate with tower crew",
-        },
-        follow_redirects=True,
-    )
-
-    assert response.status_code == 200
-    assert b"Appointment scheduled" in response.data
-
-    with app.app_context():
-        appointment = Appointment.query.filter_by(client_id=customer_id).one()
-        assert appointment.title == "Roof install"
-        assert appointment.status == "Pending"
-
-    assert notifications
-    notify_recipient, notify_subject, notify_body = notifications[-1]
-    assert notify_recipient == "field@example.com"
-    assert "Roof install" in notify_subject
-    assert "appointment" in notify_body.lower()

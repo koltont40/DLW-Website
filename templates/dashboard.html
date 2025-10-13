@@ -18,7 +18,6 @@
         <a class="sidebar-link {% if active_section == 'portal' %}active{% endif %}" href="{{ url_for('dashboard', section='portal') }}">Portal Access</a>
         <a class="sidebar-link {% if active_section == 'billing' %}active{% endif %}" href="{{ url_for('dashboard', section='billing') }}">Billing</a>
         <a class="sidebar-link {% if active_section == 'network' %}active{% endif %}" href="{{ url_for('dashboard', section='network') }}">Network</a>
-        <a class="sidebar-link {% if active_section == 'appointments' %}active{% endif %}" href="{{ url_for('dashboard', section='appointments') }}">Appointments</a>
         <a class="sidebar-link {% if active_section == 'support' %}active{% endif %}" href="{{ url_for('dashboard', section='support') }}">Support</a>
       </div>
       <div class="sidebar-group">
@@ -139,30 +138,6 @@
           </ul>
           {% else %}
           <p class="subtle">Log your first install to populate the network timeline.</p>
-          {% endif %}
-        </article>
-        <article class="status-panel">
-          <header>
-            <h3>Field Appointments</h3>
-            <p class="subtle">Upcoming visits and client responses.</p>
-          </header>
-          {% if upcoming_appointments %}
-          <ul class="status-list">
-            {% for appointment in upcoming_appointments %}
-            <li>
-              <div class="status-primary">
-                <strong>{{ appointment.title }}</strong>
-                <span class="badge">{{ appointment.status }}</span>
-              </div>
-              <div class="status-secondary">
-                <span>{{ appointment.client.name if appointment.client else 'Unassigned' }}</span>
-                <span class="subtle">{{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}</span>
-              </div>
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <p class="subtle">No field appointments are on the calendar.</p>
           {% endif %}
         </article>
         <article class="status-panel">
@@ -545,138 +520,6 @@
       </div>
       {% else %}
       <p class="subtle">Add customers to assign equipment and visualize your network footprint.</p>
-      {% endif %}
-    </section>
-    {% elif active_section == 'appointments' %}
-    <section class="card" id="appointments">
-      <header class="section-header">
-        <div>
-          <h2>Field Appointments</h2>
-          <p class="subtle">Coordinate installs, site surveys, and service calls.</p>
-        </div>
-        <div class="section-stats">
-          <span class="metric-pill">Total {{ appointments_total }}</span>
-          <span class="metric-pill warning">Pending {{ pending_appointments }}</span>
-        </div>
-      </header>
-      <form
-        class="stacked-form two-column"
-        method="post"
-        action="{{ url_for('create_appointment_admin', section='appointments', status=request.args.get('status')) }}"
-      >
-        <label>
-          Customer
-          <select name="client_id" required>
-            <option value="">Select a customer</option>
-            {% for customer in clients %}
-            <option value="{{ customer.id }}">{{ customer.name }} ({{ customer.email }})</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>
-          Title
-          <input type="text" name="title" placeholder="Installation visit" required />
-        </label>
-        <label>
-          Scheduled for
-          <input type="datetime-local" name="scheduled_for" required />
-        </label>
-        <label>
-          Internal notes
-          <textarea name="notes" rows="3" placeholder="Technician name, prep steps, or gear required."></textarea>
-        </label>
-        <button class="button primary" type="submit">Schedule appointment</button>
-      </form>
-    </section>
-    <section class="card" id="appointments-manage">
-      <header class="section-header">
-        <div>
-          <h2>Manage schedule</h2>
-          <p class="subtle">Review confirmations, reschedules, and completed visits.</p>
-        </div>
-      </header>
-      {% if appointments %}
-      <div class="table-wrapper">
-        <table class="data-table appointment-table">
-          <thead>
-            <tr>
-              <th>Details</th>
-              <th>Schedule &amp; status</th>
-              <th>Client feedback</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for appointment in appointments %}
-            <tr>
-              <td>
-                <strong>{{ appointment.title }}</strong>
-                <div class="subtle">{{ appointment.client.name if appointment.client else 'Unassigned' }}</div>
-                {% if appointment.notes %}
-                <p class="subtle">{{ appointment.notes }}</p>
-                {% endif %}
-              </td>
-              <td>
-                <form
-                  class="stacked-form compact"
-                  method="post"
-                  action="{{ url_for('update_appointment_admin', appointment_id=appointment.id, section='appointments', status=request.args.get('status')) }}"
-                >
-                  <label>
-                    Scheduled for
-                    <input type="datetime-local" name="scheduled_for" value="{{ appointment.scheduled_for.strftime('%Y-%m-%dT%H:%M') }}" />
-                  </label>
-                  {% if appointment.proposed_time %}
-                  <div class="inline-note">
-                    <strong>Proposed:</strong>
-                    {{ appointment.proposed_time.strftime('%b %d, %Y %I:%M %p') }}
-                    <label class="checkbox">
-                      <input type="checkbox" name="use_proposed" />
-                      <span>Apply proposed time</span>
-                    </label>
-                  </div>
-                  {% endif %}
-                  <label>
-                    Status
-                    <select name="status">
-                      {% for option in appointment_status_options %}
-                      <option value="{{ option }}" {% if appointment.status == option %}selected{% endif %}>{{ option }}</option>
-                      {% endfor %}
-                    </select>
-                  </label>
-                  <label>
-                    Internal notes
-                    <textarea name="notes" rows="2" placeholder="Share updates with the field team.">{{ appointment.notes or '' }}</textarea>
-                  </label>
-                  <div class="record-actions">
-                    <button class="button small primary" type="submit">Update</button>
-                  </div>
-                </form>
-              </td>
-              <td>
-                {% if appointment.client_message %}
-                <p>{{ appointment.client_message }}</p>
-                {% else %}
-                <p class="subtle">No client feedback yet.</p>
-                {% endif %}
-              </td>
-              <td>
-                <form
-                  class="inline-form"
-                  method="post"
-                  action="{{ url_for('delete_appointment_admin', appointment_id=appointment.id, section='appointments', status=request.args.get('status')) }}"
-                  onsubmit="return confirm('Remove this appointment?');"
-                >
-                  <button class="button small danger" type="submit">Delete</button>
-                </form>
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}
-      <p class="subtle">No appointments scheduled. Use the form above to add your first visit.</p>
       {% endif %}
     </section>
     {% elif active_section == 'support' %}

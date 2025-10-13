@@ -18,7 +18,6 @@ from flask import (
     send_from_directory,
     session,
     url_for,
-    current_app,
 )
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -72,9 +71,6 @@ class Client(db.Model):
     tickets = db.relationship(
         "SupportTicket", back_populates="client", cascade="all, delete-orphan"
     )
-    appointments = db.relationship(
-        "Appointment", back_populates="client", cascade="all, delete-orphan"
-    )
 
     def __repr__(self) -> str:
         return f"<Client {self.email}>"
@@ -115,22 +111,11 @@ DOCUMENT_MIME_TYPES = {
 PORTAL_SESSION_KEY = "client_portal_id"
 
 
-def get_default_navigation_items() -> list[tuple[str, str, bool]]:
-    contact_email = current_app.config.get("CONTACT_EMAIL", "hello@example.com")
-    return [
-        ("Sign Up", "/signup", False),
-        ("Legal", "/legal", False),
-        ("Contact", f"mailto:{contact_email}", False),
-        ("Client Portal", "/portal/login", False),
-    ]
-
-
-APPOINTMENT_STATUS_OPTIONS = [
-    "Pending",
-    "Confirmed",
-    "Reschedule Requested",
-    "Declined",
-    "Completed",
+DEFAULT_NAVIGATION_ITEMS = [
+    ("Sign Up", "/signup", False),
+    ("Legal", "/legal", False),
+    ("Contact", "mailto:hello@example.com", False),
+    ("Client Portal", "/portal/login", False),
 ]
 
 
@@ -262,28 +247,6 @@ class SupportTicket(db.Model):
         return f"<SupportTicket {self.id} for client {self.client_id}>"
 
 
-class Appointment(db.Model):
-    __tablename__ = "appointments"
-
-    id = db.Column(db.Integer, primary_key=True)
-    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
-    title = db.Column(db.String(120), nullable=False)
-    scheduled_for = db.Column(db.DateTime(timezone=True), nullable=False)
-    status = db.Column(db.String(40), nullable=False, default="Pending")
-    notes = db.Column(db.Text)
-    client_message = db.Column(db.Text)
-    proposed_time = db.Column(db.DateTime(timezone=True))
-    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
-    updated_at = db.Column(
-        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
-    )
-
-    client = db.relationship("Client", back_populates="appointments")
-
-    def __repr__(self) -> str:  # pragma: no cover - debug helper
-        return f"<Appointment {self.title} for client {self.client_id}>"
-
-
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, instance_relative_config=True)
 
@@ -293,12 +256,6 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(16)
 
-    snmp_port_env = os.environ.get("SNMP_TRAP_PORT")
-    try:
-        snmp_port = int(snmp_port_env) if snmp_port_env else 162
-    except ValueError:
-        snmp_port = 162
-
     default_config = {
         "SECRET_KEY": secret_key,
         "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
@@ -307,15 +264,6 @@ def create_app(test_config: dict | None = None) -> Flask:
         "ADMIN_PASSWORD": os.environ.get("ADMIN_PASSWORD", "admin123"),
         "LEGAL_UPLOAD_FOLDER": str(instance_path / "legal"),
         "BRANDING_UPLOAD_FOLDER": str(instance_path / "branding"),
-        "CONTACT_EMAIL": os.environ.get("CONTACT_EMAIL", "hello@example.com"),
-        "SNMP_TRAP_HOST": os.environ.get("SNMP_TRAP_HOST"),
-        "SNMP_TRAP_PORT": snmp_port,
-        "SNMP_COMMUNITY": os.environ.get("SNMP_COMMUNITY", "public"),
-        "SNMP_ENTERPRISE_OID": os.environ.get(
-            "SNMP_ENTERPRISE_OID", "1.3.6.1.4.1.8072.9999"
-        ),
-        "SNMP_ADMIN_EMAIL": os.environ.get("SNMP_ADMIN_EMAIL"),
-        "SNMP_EMAIL_SENDER": None,
     }
 
     app.config.update(default_config)
@@ -345,71 +293,11 @@ def init_db() -> None:
         ensure_default_navigation()
 
 
-def send_email_via_snmp(app: Flask, recipient: str, subject: str, body: str) -> bool:
-    """Dispatch an email payload via SNMP trap for downstream processing."""
-
-    host = app.config.get("SNMP_TRAP_HOST")
-    if not host or not recipient:
-        return False
-
-    port = app.config.get("SNMP_TRAP_PORT", 162)
-    community = app.config.get("SNMP_COMMUNITY", "public")
-    enterprise_oid = app.config.get("SNMP_ENTERPRISE_OID", "1.3.6.1.4.1.8072.9999")
-
-    try:
-        from pysnmp.hlapi import (
-            CommunityData,
-            ContextData,
-            NotificationType,
-            ObjectIdentity,
-            ObjectType,
-            SnmpEngine,
-            UdpTransportTarget,
-            sendNotification,
-        )
-        from pysnmp.proto.rfc1902 import OctetString
-    except Exception as exc:  # pragma: no cover - optional dependency
-        app.logger.warning("SNMP email dependencies unavailable: %s", exc)
-        return False
-
-    try:
-        iterator = sendNotification(
-            SnmpEngine(),
-            CommunityData(community),
-            UdpTransportTarget((host, int(port))),
-            ContextData(),
-            "trap",
-            NotificationType(ObjectIdentity(enterprise_oid)).addVarBinds(
-                ObjectType(ObjectIdentity(f"{enterprise_oid}.1"), OctetString(recipient)),
-                ObjectType(ObjectIdentity(f"{enterprise_oid}.2"), OctetString(subject)),
-                ObjectType(ObjectIdentity(f"{enterprise_oid}.3"), OctetString(body)),
-            ),
-        )
-
-        error_indication, error_status, error_index, _ = next(iterator)
-    except StopIteration:
-        return True
-    except Exception as exc:  # pragma: no cover - network failure
-        app.logger.warning("SNMP email dispatch failed: %s", exc)
-        return False
-
-    if error_indication or error_status:
-        app.logger.warning(
-            "SNMP email delivery error: %s (status=%s index=%s)",
-            error_indication,
-            error_status,
-            error_index,
-        )
-        return False
-
-    return True
-
-
 def ensure_default_navigation() -> None:
     max_position = db.session.query(db.func.max(NavigationItem.position)).scalar() or 0
     changed = False
 
-    for label, url, new_tab in get_default_navigation_items():
+    for label, url, new_tab in DEFAULT_NAVIGATION_ITEMS:
         existing_item = NavigationItem.query.filter_by(label=label).first()
 
         if existing_item:
@@ -534,20 +422,6 @@ def register_routes(app: Flask) -> None:
 
         return document, upload_folder, file_path
 
-    def notify_via_snmp(recipient: str, subject: str, body: str) -> bool:
-        if not recipient:
-            return False
-
-        sender = app.config.get("SNMP_EMAIL_SENDER")
-        if callable(sender):
-            try:
-                return bool(sender(recipient, subject, body))
-            except Exception as exc:  # pragma: no cover - defensive guard
-                app.logger.warning("Custom SNMP email sender failed: %s", exc)
-                return False
-
-        return send_email_via_snmp(app, recipient, subject, body)
-
     @app.template_filter("currency")
     def format_currency(value: int | float | Decimal | None):
         if value is None:
@@ -587,8 +461,6 @@ def register_routes(app: Flask) -> None:
             "invoice_status_options": INVOICE_STATUS_OPTIONS,
             "ticket_status_options": TICKET_STATUS_OPTIONS,
             "service_offerings": SERVICE_OFFERINGS,
-            "appointment_status_options": APPOINTMENT_STATUS_OPTIONS,
-            "contact_email": app.config.get("CONTACT_EMAIL", "hello@example.com"),
         }
 
     @app.route("/")
@@ -710,11 +582,6 @@ def register_routes(app: Flask) -> None:
             .order_by(SupportTicket.created_at.desc())
             .all()
         )
-        appointments = (
-            Appointment.query.filter_by(client_id=client.id)
-            .order_by(Appointment.scheduled_for.asc())
-            .all()
-        )
 
         outstanding_invoices = [
             invoice for invoice in invoices if invoice.status not in {"Paid", "Cancelled"}
@@ -739,7 +606,6 @@ def register_routes(app: Flask) -> None:
             invoices=invoices,
             equipment_items=equipment_items,
             tickets=tickets,
-            appointments=appointments,
             total_due_cents=total_due_cents,
             upcoming_due_date=upcoming_due_date,
             open_ticket_count=open_ticket_count,
@@ -764,79 +630,6 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         flash("Your support request has been submitted. We'll reach out shortly.", "success")
-        return redirect(url_for("portal_dashboard"))
-
-    @app.post("/portal/appointments/<int:appointment_id>/action")
-    @client_login_required
-    def portal_update_appointment(client: Client, appointment_id: int):
-        appointment = (
-            Appointment.query.filter_by(id=appointment_id, client_id=client.id)
-            .first()
-        )
-        if not appointment:
-            flash("We couldn't find that appointment.", "danger")
-            return redirect(url_for("portal_dashboard"))
-
-        action = request.form.get("action", "").strip().lower()
-        message = request.form.get("message", "").strip() or None
-
-        if action == "approve":
-            appointment.status = "Confirmed"
-            appointment.client_message = message
-            appointment.proposed_time = None
-            confirmation_text = "Appointment confirmed."
-            subject = f"Appointment confirmed by {client.name}"
-        elif action == "decline":
-            appointment.status = "Declined"
-            appointment.client_message = message
-            appointment.proposed_time = None
-            confirmation_text = "Appointment declined."
-            subject = f"Appointment declined by {client.name}"
-        elif action == "reschedule":
-            new_time_raw = request.form.get("scheduled_for", "").strip()
-            if not new_time_raw:
-                flash("Select a new time to request a reschedule.", "danger")
-                return redirect(url_for("portal_dashboard"))
-            try:
-                new_time = datetime.fromisoformat(new_time_raw)
-            except ValueError:
-                flash("Use a valid date and time for your request.", "danger")
-                return redirect(url_for("portal_dashboard"))
-
-            if new_time.tzinfo is None:
-                new_time = new_time.replace(tzinfo=UTC)
-
-            appointment.status = "Reschedule Requested"
-            appointment.proposed_time = new_time
-            appointment.client_message = message
-            confirmation_text = "Reschedule request submitted."
-            subject = f"{client.name} requested a new appointment time"
-        else:
-            flash("Unsupported appointment action.", "danger")
-            return redirect(url_for("portal_dashboard"))
-
-        appointment.updated_at = utcnow()
-        db.session.commit()
-
-        admin_recipient = app.config.get("SNMP_ADMIN_EMAIL")
-        if admin_recipient:
-            notify_via_snmp(
-                admin_recipient,
-                subject,
-                (
-                    f"Client: {client.name}\n"
-                    f"Scheduled for: {appointment.scheduled_for.strftime('%Y-%m-%d %H:%M %Z')}\n"
-                    f"Status: {appointment.status}\n"
-                    + (f"Message: {appointment.client_message}\n" if appointment.client_message else "")
-                    + (
-                        f"Proposed time: {appointment.proposed_time.strftime('%Y-%m-%d %H:%M %Z')}\n"
-                        if appointment.proposed_time
-                        else ""
-                    )
-                ),
-            )
-
-        flash(confirmation_text, "success")
         return redirect(url_for("portal_dashboard"))
 
     @app.route("/legal")
@@ -884,7 +677,6 @@ def register_routes(app: Flask) -> None:
             "billing",
             "network",
             "support",
-            "appointments",
             "navigation",
             "branding",
             "legal",
@@ -897,24 +689,11 @@ def register_routes(app: Flask) -> None:
             status_filter = None
 
         clients: list[Client] = []
-        if active_section in {
-            "customers",
-            "portal",
-            "billing",
-            "network",
-            "support",
-            "appointments",
-        }:
+        if active_section in {"customers", "portal", "billing", "network", "support"}:
             query = Client.query.order_by(Client.created_at.desc())
             if status_filter:
                 query = query.filter_by(status=status_filter)
             clients = query.all()
-
-        appointments: list[Appointment] = []
-        if active_section == "appointments":
-            appointments = (
-                Appointment.query.order_by(Appointment.scheduled_for.asc()).all()
-            )
 
         total_clients = Client.query.count()
         start_of_week = utcnow() - timedelta(days=7)
@@ -962,36 +741,6 @@ def register_routes(app: Flask) -> None:
         billing_invoices_created = (
             Invoice.query.filter(Invoice.created_at >= start_of_week).count()
         )
-        upcoming_statuses = ["Pending", "Confirmed", "Reschedule Requested"]
-        now = utcnow()
-        appointments_total = Appointment.query.count()
-        upcoming_appointments_count = (
-            Appointment.query.filter(
-                Appointment.status.in_(upcoming_statuses),
-                Appointment.scheduled_for >= now - timedelta(days=1),
-            ).count()
-        )
-        pending_appointments = (
-            Appointment.query.filter_by(status="Pending").count()
-        )
-        reschedule_requests = (
-            Appointment.query.filter_by(status="Reschedule Requested").count()
-        )
-        appointments_created_this_week = (
-            Appointment.query.filter(Appointment.created_at >= start_of_week).count()
-        )
-
-        upcoming_appointments_list = (
-            Appointment.query.filter(
-                Appointment.status.in_(upcoming_statuses)
-            )
-            .order_by(Appointment.scheduled_for.asc())
-            .limit(5)
-            .all()
-        )
-        recent_appointments = (
-            Appointment.query.order_by(Appointment.updated_at.desc()).limit(5).all()
-        )
 
         recent_clients = (
             Client.query.order_by(Client.created_at.desc()).limit(5).all()
@@ -1025,14 +774,10 @@ def register_routes(app: Flask) -> None:
                 "description": "Hardware deployed to keep customers online.",
                 "metrics": [
                     {"label": "Devices Online", "value": equipment_total},
+                    {"label": "Installs This Week", "value": network_new_this_week},
                     {"label": "Clients With Gear", "value": clients_with_equipment},
-                    {"label": "Upcoming Visits", "value": upcoming_appointments_count},
-                    {"label": "Reschedule Requests", "value": reschedule_requests},
                 ],
-                "footer": (
-                    f"{appointments_created_this_week} appointments scheduled this week • "
-                    f"{network_new_this_week} installs logged"
-                ),
+                "footer": f"{clients_with_equipment} clients have deployed gear",
             },
             {
                 "key": "support",
@@ -1097,11 +842,6 @@ def register_routes(app: Flask) -> None:
             legal_documents=documents,
             navigation_items=navigation_items,
             branding_assets=branding_records,
-            appointments=appointments,
-            appointments_total=appointments_total,
-            pending_appointments=pending_appointments,
-            upcoming_appointments=upcoming_appointments_list,
-            recent_appointments=recent_appointments,
         )
 
     @app.post("/documents/upload")
@@ -1487,130 +1227,6 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
         flash("Equipment removed.", "info")
         return _redirect_back_to_dashboard("network")
-
-    @app.post("/appointments")
-    @login_required
-    def create_appointment_admin():
-        client_id_raw = request.form.get("client_id", "").strip()
-        title = request.form.get("title", "").strip()
-        scheduled_for_raw = request.form.get("scheduled_for", "").strip()
-        notes = request.form.get("notes", "").strip() or None
-
-        try:
-            client_id = int(client_id_raw)
-        except (TypeError, ValueError):
-            flash("Select a customer for the appointment.", "danger")
-            return _redirect_back_to_dashboard("appointments")
-
-        client = Client.query.get(client_id)
-        if not client:
-            flash("Customer not found.", "danger")
-            return _redirect_back_to_dashboard("appointments")
-
-        if not title:
-            flash("Provide an appointment title.", "danger")
-            return _redirect_back_to_dashboard("appointments")
-
-        if not scheduled_for_raw:
-            flash("Choose a scheduled date and time.", "danger")
-            return _redirect_back_to_dashboard("appointments")
-
-        try:
-            scheduled_for_value = datetime.fromisoformat(scheduled_for_raw)
-        except ValueError:
-            flash("Use the provided picker to select a valid date and time.", "danger")
-            return _redirect_back_to_dashboard("appointments")
-
-        if scheduled_for_value.tzinfo is None:
-            scheduled_for_value = scheduled_for_value.replace(tzinfo=UTC)
-
-        appointment = Appointment(
-            client_id=client.id,
-            title=title,
-            scheduled_for=scheduled_for_value,
-            status="Pending",
-            notes=notes,
-        )
-
-        db.session.add(appointment)
-        db.session.commit()
-
-        notify_via_snmp(
-            client.email,
-            f"New appointment scheduled: {title}",
-            (
-                f"Hello {client.name},\n\n"
-                f"An appointment titled '{title}' has been scheduled for "
-                f"{appointment.scheduled_for.strftime('%Y-%m-%d %H:%M %Z')}.\n"
-                + (f"Notes: {appointment.notes}\n\n" if appointment.notes else "\n")
-                + "Reply from your portal to confirm or request changes."
-            ),
-        )
-
-        flash("Appointment scheduled.", "success")
-        return _redirect_back_to_dashboard("appointments")
-
-    @app.post("/appointments/<int:appointment_id>/update")
-    @login_required
-    def update_appointment_admin(appointment_id: int):
-        appointment = Appointment.query.get_or_404(appointment_id)
-        status_value = (
-            request.form.get("status", appointment.status).strip() or appointment.status
-        )
-        scheduled_for_raw = request.form.get("scheduled_for", "").strip()
-        use_proposed = request.form.get("use_proposed") == "on"
-        notes = request.form.get("notes", "").strip() or None
-
-        if status_value not in APPOINTMENT_STATUS_OPTIONS:
-            flash("Unknown appointment status.", "danger")
-            return _redirect_back_to_dashboard("appointments")
-
-        new_time = None
-        if scheduled_for_raw:
-            try:
-                new_time = datetime.fromisoformat(scheduled_for_raw)
-            except ValueError:
-                flash("Use a valid date and time for the appointment.", "danger")
-                return _redirect_back_to_dashboard("appointments")
-        elif use_proposed and appointment.proposed_time:
-            new_time = appointment.proposed_time
-
-        if new_time:
-            if new_time.tzinfo is None:
-                new_time = new_time.replace(tzinfo=UTC)
-            appointment.scheduled_for = new_time
-
-        appointment.status = status_value
-        appointment.notes = notes
-
-        if status_value in {"Confirmed", "Completed", "Declined"}:
-            appointment.proposed_time = None
-            appointment.client_message = None
-
-        appointment.updated_at = utcnow()
-        db.session.commit()
-
-        notify_via_snmp(
-            appointment.client.email,
-            f"Appointment update: {appointment.title}",
-            (
-                f"Status: {appointment.status}\n"
-                f"Scheduled for: {appointment.scheduled_for.strftime('%Y-%m-%d %H:%M %Z')}\n"
-                + (f"Notes: {appointment.notes}\n" if appointment.notes else "")
-            ),
-        )
-
-        flash("Appointment updated.", "success")
-        return _redirect_back_to_dashboard("appointments")
-
-    @app.post("/appointments/<int:appointment_id>/delete")
-    @login_required
-    def delete_appointment_admin(appointment_id: int):
-        appointment = Appointment.query.get_or_404(appointment_id)
-        db.session.delete(appointment)
-        db.session.commit()
-        flash("Appointment removed.", "info")
-        return _redirect_back_to_dashboard("appointments")
 
     @app.post("/tickets/<int:ticket_id>/update")
     @login_required
