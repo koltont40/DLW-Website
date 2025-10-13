@@ -11,7 +11,8 @@
       </p>
       <div class="hero-actions">
         <a class="button primary" href="{{ url_for('signup') }}">Start Signup</a>
-        <a class="button secondary" href="{{ url_for('legal') }}">Review Legal</a>
+        <a class="button secondary" href="{{ url_for('service_plans') }}">View Service Plans</a>
+        <a class="button ghost" href="{{ url_for('legal') }}">Review Legal</a>
       </div>
     </div>
     <div class="hero-card">
@@ -47,7 +48,10 @@
   <div class="cta-card">
     <h2>Ready for better internet and phone service?</h2>
     <p>Create your secure portal login, confirm coverage, and lock in an installation date in just a few minutes.</p>
-    <a class="button primary" href="{{ url_for('signup') }}">Create your account</a>
+    <div class="cta-actions">
+      <a class="button primary" href="{{ url_for('signup') }}">Create your account</a>
+      <a class="button secondary" href="{{ url_for('service_plans') }}">Compare plans</a>
+    </div>
   </div>
 </section>
 {% endblock %}

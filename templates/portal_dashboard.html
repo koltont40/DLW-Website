@@ -1,146 +1,243 @@
 {% extends "base.html" %}
 {% block title %}My Account | DIXIELAND WIRELESS LLC{% endblock %}
 {% block content %}
-<section class="dashboard-header">
-  <div>
-    <h1>Welcome back, {{ client.name.split(' ')[0] if ' ' in client.name else client.name }}!</h1>
-    <p class="lead">Review your billing activity, connected equipment, and support tickets in one place.</p>
-  </div>
-  <div class="dashboard-actions">
-    <a class="button secondary" href="{{ url_for('portal_logout') }}">Log out</a>
-  </div>
-</section>
-
-<section class="metrics">
-  <div class="metric-card">
-    <span class="metric-label">Account #</span>
-    <span class="metric-value">{{ client.account_reference }}</span>
-  </div>
-  <div class="metric-card">
-    <span class="metric-label">Balance Due</span>
-    <span class="metric-value">{{ total_due_cents|currency }}</span>
-  </div>
-  <div class="metric-card">
-    <span class="metric-label">Next Due Date</span>
-    <span class="metric-value">{{ upcoming_due_date|date_or_dash }}</span>
-  </div>
-  <div class="metric-card">
-    <span class="metric-label">Open Tickets</span>
-    <span class="metric-value">{{ open_ticket_count }}</span>
-  </div>
-</section>
-
-<section class="card">
-  <div class="section-header compact">
-    <div>
-      <h2>Billing History</h2>
-      <p class="subtle">Track statements and monitor payment status.</p>
+<div class="portal-layout">
+  <aside class="portal-sidebar">
+    <div class="portal-welcome">
+      <h1>{{ client.name }}</h1>
+      <p class="subtle">Account {{ client.account_reference }}</p>
+      <p class="subtle">{{ client.email }}</p>
     </div>
-  </div>
-  {% if invoices %}
-  <table class="data-table">
-    <thead>
-      <tr>
-        <th>Description</th>
-        <th>Amount</th>
-        <th>Due date</th>
-        <th>Status</th>
-        <th>Updated</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for invoice in invoices %}
-      <tr>
-        <td>{{ invoice.description }}</td>
-        <td>{{ invoice.amount_cents|currency }}</td>
-        <td>{{ invoice.due_date|date_or_dash }}</td>
-        <td><span class="status-pill status-{{ invoice.status|lower|replace(' ', '-') }}">{{ invoice.status }}</span></td>
-        <td>{{ invoice.updated_at.strftime('%b %d, %Y') }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="subtle">Invoices will appear here once billing begins.</p>
-  {% endif %}
-</section>
-
-<section class="card">
-  <div class="section-header compact">
-    <div>
-      <h2>Installed Equipment</h2>
-      <p class="subtle">Review the devices DIXIELAND WIRELESS LLC has configured for your service.</p>
+    <nav class="portal-nav">
+      <a href="#overview">Overview</a>
+      <a href="#billing">Billing</a>
+      <a href="#equipment">Equipment</a>
+      <a href="#support">Support</a>
+      <a href="#appointments">Appointments</a>
+    </nav>
+    <div class="portal-sidebar-footer">
+      <a class="button secondary full-width" href="{{ url_for('portal_logout') }}">Log out</a>
     </div>
-  </div>
-  {% if equipment_items %}
-  <ul class="equipment-list">
-    {% for device in equipment_items %}
-    <li>
-      <div class="equipment-heading">
-        <strong>{{ device.name }}</strong>
-        <span class="subtle">Installed {{ device.installed_on|date_or_dash }}</span>
+  </aside>
+  <div class="portal-main">
+    <section class="card portal-section" id="overview">
+      <header class="portal-section-header">
+        <div>
+          <h2>Welcome back, {{ client.name.split(' ')[0] if ' ' in client.name else client.name }}!</h2>
+          <p class="subtle">Track your balance, connected gear, appointments, and support history in one place.</p>
+        </div>
+      </header>
+      <div class="metrics">
+        <div class="metric-card">
+          <span class="metric-label">Account #</span>
+          <span class="metric-value">{{ client.account_reference }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Balance Due</span>
+          <span class="metric-value">{{ total_due_cents|currency }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Next Due Date</span>
+          <span class="metric-value">{{ upcoming_due_date|date_or_dash }}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Open Tickets</span>
+          <span class="metric-value">{{ open_ticket_count }}</span>
+        </div>
       </div>
-      <dl>
-        {% if device.model %}<div><dt>Model</dt><dd>{{ device.model }}</dd></div>{% endif %}
-        {% if device.serial_number %}<div><dt>Serial</dt><dd>{{ device.serial_number }}</dd></div>{% endif %}
-        {% if device.notes %}<div><dt>Notes</dt><dd>{{ device.notes }}</dd></div>{% endif %}
-      </dl>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="subtle">Your installation details will appear once service is activated.</p>
-  {% endif %}
-</section>
+    </section>
 
-<section class="card">
-  <div class="section-header">
-    <div>
-      <h2>Support Center</h2>
-      <p class="subtle">Open new tickets and track responses from the support team.</p>
-    </div>
-  </div>
-  <div class="support-layout">
-    <div class="support-form">
-      <form method="post" action="{{ url_for('portal_create_ticket') }}" class="stacked-form">
-        <h3>Start a new ticket</h3>
-        <label>
-          Subject
-          <input type="text" name="subject" placeholder="Describe your request" required />
-        </label>
-        <label>
-          Details
-          <textarea name="message" rows="4" placeholder="Share as much detail as possible so we can help quickly." required></textarea>
-        </label>
-        <button class="button primary" type="submit">Submit ticket</button>
-      </form>
-    </div>
-    <div class="support-tickets">
-      {% if tickets %}
-      <ul class="ticket-list">
-        {% for ticket in tickets %}
-        <li class="ticket-card">
-          <div class="ticket-card-header">
-            <div>
-              <strong>{{ ticket.subject }}</strong>
-              <span class="subtle">Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
-            </div>
-            <span class="status-pill status-{{ ticket.status|lower|replace(' ', '-') }}">{{ ticket.status }}</span>
+    <section class="card portal-section" id="billing">
+      <header class="portal-section-header">
+        <div>
+          <h2>Billing History</h2>
+          <p class="subtle">Stay current on invoices, payments, and due dates.</p>
+        </div>
+      </header>
+      {% if invoices %}
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th>Amount</th>
+              <th>Due date</th>
+              <th>Status</th>
+              <th>Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for invoice in invoices %}
+            <tr>
+              <td>{{ invoice.description }}</td>
+              <td>{{ invoice.amount_cents|currency }}</td>
+              <td>{{ invoice.due_date|date_or_dash }}</td>
+              <td><span class="status-pill status-{{ invoice.status|lower|replace(' ', '-') }}">{{ invoice.status }}</span></td>
+              <td>{{ invoice.updated_at.strftime('%b %d, %Y') }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="subtle">Invoices will appear here once billing begins.</p>
+      {% endif %}
+    </section>
+
+    <section class="card portal-section" id="equipment">
+      <header class="portal-section-header">
+        <div>
+          <h2>Installed Equipment</h2>
+          <p class="subtle">Everything DIXIELAND WIRELESS LLC has configured for your service.</p>
+        </div>
+      </header>
+      {% if not client.project_type %}
+      <div class="inline-callout">
+        <strong>No service plan on file.</strong>
+        <p>Contact us to set up your service and schedule an installation.</p>
+        <a class="button small primary" href="mailto:{{ contact_email }}">Contact us</a>
+      </div>
+      {% elif equipment_items %}
+      <ul class="equipment-list">
+        {% for device in equipment_items %}
+        <li>
+          <div class="equipment-heading">
+            <strong>{{ device.name }}</strong>
+            <span class="subtle">Installed {{ device.installed_on|date_or_dash }}</span>
           </div>
-          <p>{{ ticket.message }}</p>
-          {% if ticket.resolution_notes %}
-          <div class="resolution">
-            <h4>Latest update</h4>
-            <p>{{ ticket.resolution_notes }}</p>
-          </div>
-          {% endif %}
+          <dl>
+            {% if device.model %}<div><dt>Model</dt><dd>{{ device.model }}</dd></div>{% endif %}
+            {% if device.serial_number %}<div><dt>Serial</dt><dd>{{ device.serial_number }}</dd></div>{% endif %}
+            {% if device.notes %}<div><dt>Notes</dt><dd>{{ device.notes }}</dd></div>{% endif %}
+          </dl>
         </li>
         {% endfor %}
       </ul>
       {% else %}
-      <p class="subtle">No tickets yet. Let us know how we can help!</p>
+      <p class="subtle">Your installation details will appear once service is activated.</p>
       {% endif %}
-    </div>
+    </section>
+
+    <section class="card portal-section" id="support">
+      <header class="portal-section-header">
+        <div>
+          <h2>Support Center</h2>
+          <p class="subtle">Open new tickets and monitor responses from our specialists.</p>
+        </div>
+      </header>
+      <div class="support-layout">
+        <div class="support-form">
+          <form method="post" action="{{ url_for('portal_create_ticket') }}" class="stacked-form">
+            <h3>Start a new ticket</h3>
+            <label>
+              Subject
+              <input type="text" name="subject" placeholder="Describe your request" required />
+            </label>
+            <label>
+              Details
+              <textarea name="message" rows="4" placeholder="Share as much detail as possible so we can help quickly." required></textarea>
+            </label>
+            <button class="button primary" type="submit">Submit ticket</button>
+          </form>
+        </div>
+        <div class="support-tickets">
+          {% if tickets %}
+          <ul class="ticket-list">
+            {% for ticket in tickets %}
+            <li class="ticket-card">
+              <div class="ticket-card-header">
+                <div>
+                  <strong>{{ ticket.subject }}</strong>
+                  <span class="subtle">Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+                </div>
+                <span class="status-pill status-{{ ticket.status|lower|replace(' ', '-') }}">{{ ticket.status }}</span>
+              </div>
+              <p>{{ ticket.message }}</p>
+              {% if ticket.resolution_notes %}
+              <div class="resolution">
+                <h4>Latest update</h4>
+                <p>{{ ticket.resolution_notes }}</p>
+              </div>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="subtle">No tickets yet. Let us know how we can help!</p>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+
+    <section class="card portal-section" id="appointments">
+      <header class="portal-section-header">
+        <div>
+          <h2>Appointments</h2>
+          <p class="subtle">Review upcoming visits and respond directly from your portal.</p>
+        </div>
+      </header>
+      {% if appointments %}
+      <ul class="appointment-list">
+        {% for appointment in appointments %}
+        <li class="appointment-card">
+          <div class="appointment-card-header">
+            <div>
+              <strong>{{ appointment.title }}</strong>
+              <p class="subtle">Scheduled for {{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}</p>
+            </div>
+            <span class="status-pill status-{{ appointment.status|lower|replace(' ', '-') }}">{{ appointment.status }}</span>
+          </div>
+          {% if appointment.notes %}
+          <p class="subtle">{{ appointment.notes }}</p>
+          {% endif %}
+          {% if appointment.proposed_time %}
+          <div class="appointment-proposed">
+            <strong>Requested time:</strong>
+            <span>{{ appointment.proposed_time.strftime('%b %d, %Y %I:%M %p') }}</span>
+          </div>
+          {% endif %}
+          {% if appointment.client_message %}
+          <div class="appointment-client-message">
+            <strong>Your notes:</strong>
+            <p>{{ appointment.client_message }}</p>
+          </div>
+          {% endif %}
+          <div class="appointment-actions">
+            <form method="post" action="{{ url_for('portal_update_appointment', appointment_id=appointment.id) }}">
+              <input type="hidden" name="action" value="approve" />
+              <button class="button small primary" type="submit">Approve</button>
+            </form>
+            <form method="post" action="{{ url_for('portal_update_appointment', appointment_id=appointment.id) }}">
+              <input type="hidden" name="action" value="decline" />
+              <label>
+                <span class="subtle">Notes (optional)</span>
+                <input type="text" name="message" class="appointment-note-input" placeholder="Optional note" />
+              </label>
+              <button class="button small danger" type="submit">Decline</button>
+            </form>
+            <details class="reschedule-panel">
+              <summary>Request a new time</summary>
+              <form class="stacked-form" method="post" action="{{ url_for('portal_update_appointment', appointment_id=appointment.id) }}">
+                <input type="hidden" name="action" value="reschedule" />
+                <label>
+                  Preferred date &amp; time
+                  <input type="datetime-local" name="scheduled_for" required />
+                </label>
+                <label>
+                  Notes
+                  <textarea name="message" rows="3" placeholder="Share details that help us plan."></textarea>
+                </label>
+                <button class="button small secondary" type="submit">Send request</button>
+              </form>
+            </details>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="subtle">Once the operations team schedules a visit it will appear here for quick approval.</p>
+      {% endif %}
+    </section>
   </div>
-</section>
+</div>
 {% endblock %}

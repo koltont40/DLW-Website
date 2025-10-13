@@ -18,6 +18,7 @@ from flask import (
     send_from_directory,
     session,
     url_for,
+    current_app,
 )
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -41,6 +42,26 @@ def generate_portal_password() -> str:
 
 def generate_account_reference() -> str:
     return f"DLW-{secrets.token_hex(3).upper()}"
+
+
+def generate_unique_slug(title: str, existing_id: int | None = None) -> str:
+    base_slug = secure_filename(title.lower()).strip("-")
+    if not base_slug:
+        base_slug = f"post-{secrets.token_hex(4)}"
+
+    slug = base_slug
+    suffix = 2
+
+    while True:
+        query = BlogPost.query.filter_by(slug=slug)
+        if existing_id is not None:
+            query = query.filter(BlogPost.id != existing_id)
+
+        if query.first() is None:
+            return slug
+
+        slug = f"{base_slug}-{suffix}"
+        suffix += 1
 
 
 class Client(db.Model):
@@ -71,6 +92,9 @@ class Client(db.Model):
     tickets = db.relationship(
         "SupportTicket", back_populates="client", cascade="all, delete-orphan"
     )
+    appointments = db.relationship(
+        "Appointment", back_populates="client", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Client {self.email}>"
@@ -78,11 +102,43 @@ class Client(db.Model):
 
 STATUS_OPTIONS = ["New", "In Review", "Active", "On Hold", "Archived"]
 
-SERVICE_OFFERINGS = [
-    "Wireless Internet (WISP)",
-    "Phone Service",
-    "Internet + Phone Bundle",
+SERVICE_PLANS = [
+    {
+        "name": "Wireless Internet (WISP)",
+        "price_cents": 6999,
+        "speed": "Up to 150 Mbps",
+        "description": "Reliable fixed wireless connectivity ideal for streaming, smart homes, and everyday browsing.",
+        "features": [
+            "Unlimited data with no hard caps",
+            "Managed Wi-Fi gateway included",
+            "Priority local support from DIXIELAND technicians",
+        ],
+    },
+    {
+        "name": "Phone Service",
+        "price_cents": 2999,
+        "speed": "Digital voice",
+        "description": "Crystal clear home and small business voice with enhanced emergency calling.",
+        "features": [
+            "Unlimited local and long-distance calling",
+            "Voicemail-to-email and caller ID",
+            "Battery-backed customer premise equipment",
+        ],
+    },
+    {
+        "name": "Internet + Phone Bundle",
+        "price_cents": 9499,
+        "speed": "Up to 150 Mbps + Digital voice",
+        "description": "Best value bundle for households that want fast wireless internet and dependable phone service together.",
+        "features": [
+            "Bundled savings on monthly service",
+            "Single invoice with autopay support",
+            "Priority repair dispatch",
+        ],
+    },
 ]
+
+SERVICE_OFFERINGS = [plan["name"] for plan in SERVICE_PLANS]
 
 LEGAL_DOCUMENT_TYPES = {
     "aup": {
@@ -111,11 +167,25 @@ DOCUMENT_MIME_TYPES = {
 PORTAL_SESSION_KEY = "client_portal_id"
 
 
-DEFAULT_NAVIGATION_ITEMS = [
-    ("Sign Up", "/signup", False),
-    ("Legal", "/legal", False),
-    ("Contact", "mailto:hello@example.com", False),
-    ("Client Portal", "/portal/login", False),
+def get_default_navigation_items() -> list[tuple[str, str, bool]]:
+    return [
+        ("Sign Up", "/signup", False),
+        ("Service Plans", "/services", False),
+        ("Service Cancellation", "/cancellation", False),
+        ("Uptime", "/uptime", False),
+        ("Blog", "/blog", False),
+        ("About", "/about", False),
+        ("Legal", "/legal", False),
+        ("Client Portal", "/portal/login", False),
+    ]
+
+
+APPOINTMENT_STATUS_OPTIONS = [
+    "Pending",
+    "Confirmed",
+    "Reschedule Requested",
+    "Declined",
+    "Completed",
 ]
 
 
@@ -247,6 +317,80 @@ class SupportTicket(db.Model):
         return f"<SupportTicket {self.id} for client {self.client_id}>"
 
 
+class Appointment(db.Model):
+    __tablename__ = "appointments"
+
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
+    title = db.Column(db.String(120), nullable=False)
+    scheduled_for = db.Column(db.DateTime(timezone=True), nullable=False)
+    status = db.Column(db.String(40), nullable=False, default="Pending")
+    notes = db.Column(db.Text)
+    client_message = db.Column(db.Text)
+    proposed_time = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    client = db.relationship("Client", back_populates="appointments")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<Appointment {self.title} for client {self.client_id}>"
+
+
+class SNMPConfig(db.Model):
+    __tablename__ = "snmp_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    host = db.Column(db.String(255))
+    port = db.Column(db.Integer, nullable=False, default=162)
+    community = db.Column(db.String(120), nullable=False, default="public")
+    enterprise_oid = db.Column(
+        db.String(255), nullable=False, default="1.3.6.1.4.1.8072.9999"
+    )
+    admin_email = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<SNMPConfig host={self.host} port={self.port}>"
+
+
+class DownDetectorConfig(db.Model):
+    __tablename__ = "down_detector_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    target_url = db.Column(db.String(500))
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<DownDetectorConfig target={self.target_url}>"
+
+
+class BlogPost(db.Model):
+    __tablename__ = "blog_posts"
+
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    slug = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    summary = db.Column(db.String(500))
+    content = db.Column(db.Text, nullable=False)
+    is_published = db.Column(db.Boolean, nullable=False, default=False)
+    published_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<BlogPost {self.slug}>"
+
+
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, instance_relative_config=True)
 
@@ -256,6 +400,12 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(16)
 
+    snmp_port_env = os.environ.get("SNMP_TRAP_PORT")
+    try:
+        snmp_port = int(snmp_port_env) if snmp_port_env else 162
+    except ValueError:
+        snmp_port = 162
+
     default_config = {
         "SECRET_KEY": secret_key,
         "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
@@ -264,6 +414,15 @@ def create_app(test_config: dict | None = None) -> Flask:
         "ADMIN_PASSWORD": os.environ.get("ADMIN_PASSWORD", "admin123"),
         "LEGAL_UPLOAD_FOLDER": str(instance_path / "legal"),
         "BRANDING_UPLOAD_FOLDER": str(instance_path / "branding"),
+        "CONTACT_EMAIL": os.environ.get("CONTACT_EMAIL", "hello@example.com"),
+        "SNMP_TRAP_HOST": os.environ.get("SNMP_TRAP_HOST"),
+        "SNMP_TRAP_PORT": snmp_port,
+        "SNMP_COMMUNITY": os.environ.get("SNMP_COMMUNITY", "public"),
+        "SNMP_ENTERPRISE_OID": os.environ.get(
+            "SNMP_ENTERPRISE_OID", "1.3.6.1.4.1.8072.9999"
+        ),
+        "SNMP_ADMIN_EMAIL": os.environ.get("SNMP_ADMIN_EMAIL"),
+        "SNMP_EMAIL_SENDER": None,
     }
 
     app.config.update(default_config)
@@ -279,6 +438,8 @@ def create_app(test_config: dict | None = None) -> Flask:
         db.create_all()
         ensure_client_portal_fields()
         ensure_default_navigation()
+        ensure_snmp_configuration()
+        ensure_down_detector_configuration()
 
     return app
 
@@ -291,13 +452,92 @@ def init_db() -> None:
         db.create_all()
         ensure_client_portal_fields()
         ensure_default_navigation()
+        ensure_snmp_configuration()
+        ensure_down_detector_configuration()
+
+
+def send_email_via_snmp(app: Flask, recipient: str, subject: str, body: str) -> bool:
+    """Dispatch an email payload via SNMP trap for downstream processing."""
+
+    snmp_config = SNMPConfig.query.first()
+
+    host = (snmp_config.host if snmp_config and snmp_config.host else None) or app.config.get(
+        "SNMP_TRAP_HOST"
+    )
+    if not host or not recipient:
+        return False
+
+    port = (
+        snmp_config.port if snmp_config and snmp_config.port else app.config.get("SNMP_TRAP_PORT", 162)
+    )
+    community = (
+        snmp_config.community
+        if snmp_config and snmp_config.community
+        else app.config.get("SNMP_COMMUNITY", "public")
+    )
+    enterprise_oid = (
+        snmp_config.enterprise_oid
+        if snmp_config and snmp_config.enterprise_oid
+        else app.config.get("SNMP_ENTERPRISE_OID", "1.3.6.1.4.1.8072.9999")
+    )
+
+    if snmp_config and snmp_config.admin_email:
+        app.config["SNMP_ADMIN_EMAIL"] = snmp_config.admin_email
+
+    try:
+        from pysnmp.hlapi import (
+            CommunityData,
+            ContextData,
+            NotificationType,
+            ObjectIdentity,
+            ObjectType,
+            SnmpEngine,
+            UdpTransportTarget,
+            sendNotification,
+        )
+        from pysnmp.proto.rfc1902 import OctetString
+    except Exception as exc:  # pragma: no cover - optional dependency
+        app.logger.warning("SNMP email dependencies unavailable: %s", exc)
+        return False
+
+    try:
+        iterator = sendNotification(
+            SnmpEngine(),
+            CommunityData(community),
+            UdpTransportTarget((host, int(port))),
+            ContextData(),
+            "trap",
+            NotificationType(ObjectIdentity(enterprise_oid)).addVarBinds(
+                ObjectType(ObjectIdentity(f"{enterprise_oid}.1"), OctetString(recipient)),
+                ObjectType(ObjectIdentity(f"{enterprise_oid}.2"), OctetString(subject)),
+                ObjectType(ObjectIdentity(f"{enterprise_oid}.3"), OctetString(body)),
+            ),
+        )
+
+        error_indication, error_status, error_index, _ = next(iterator)
+    except StopIteration:
+        return True
+    except Exception as exc:  # pragma: no cover - network failure
+        app.logger.warning("SNMP email dispatch failed: %s", exc)
+        return False
+
+    if error_indication or error_status:
+        app.logger.warning(
+            "SNMP email delivery error: %s (status=%s index=%s)",
+            error_indication,
+            error_status,
+            error_index,
+        )
+        return False
+
+    return True
 
 
 def ensure_default_navigation() -> None:
     max_position = db.session.query(db.func.max(NavigationItem.position)).scalar() or 0
     changed = False
 
-    for label, url, new_tab in DEFAULT_NAVIGATION_ITEMS:
+    for label, url, new_tab in get_default_navigation_items():
         existing_item = NavigationItem.query.filter_by(label=label).first()
 
         if existing_item:
@@ -370,6 +610,63 @@ def ensure_client_portal_fields() -> None:
         db.session.commit()
 
 
+def ensure_snmp_configuration() -> None:
+    config = SNMPConfig.query.first()
+    if config:
+        return
+
+    port_env = os.environ.get("SNMP_TRAP_PORT")
+    try:
+        port_value = int(port_env) if port_env else 162
+    except (TypeError, ValueError):
+        port_value = 162
+
+    config = SNMPConfig(
+        host=os.environ.get("SNMP_TRAP_HOST"),
+        port=port_value,
+        community=os.environ.get("SNMP_COMMUNITY", "public"),
+        enterprise_oid=os.environ.get("SNMP_ENTERPRISE_OID", "1.3.6.1.4.1.8072.9999"),
+        admin_email=os.environ.get("SNMP_ADMIN_EMAIL"),
+    )
+    db.session.add(config)
+    db.session.commit()
+
+
+def ensure_down_detector_configuration() -> None:
+    config = DownDetectorConfig.query.first()
+    if config:
+        return
+
+    config = DownDetectorConfig(target_url=None)
+    db.session.add(config)
+    db.session.commit()
+
+
+def get_effective_snmp_settings(app: Flask) -> dict[str, str | int | None]:
+    settings: dict[str, str | int | None] = {
+        "host": app.config.get("SNMP_TRAP_HOST"),
+        "port": app.config.get("SNMP_TRAP_PORT", 162),
+        "community": app.config.get("SNMP_COMMUNITY", "public"),
+        "enterprise_oid": app.config.get("SNMP_ENTERPRISE_OID", "1.3.6.1.4.1.8072.9999"),
+        "admin_email": app.config.get("SNMP_ADMIN_EMAIL"),
+    }
+
+    config = SNMPConfig.query.first()
+    if config:
+        if config.host:
+            settings["host"] = config.host
+        if config.port:
+            settings["port"] = config.port
+        if config.community:
+            settings["community"] = config.community
+        if config.enterprise_oid:
+            settings["enterprise_oid"] = config.enterprise_oid
+        if config.admin_email:
+            settings["admin_email"] = config.admin_email
+
+    return settings
+
+
 def login_required(func):
     from functools import wraps
 
@@ -422,6 +719,20 @@ def register_routes(app: Flask) -> None:
 
         return document, upload_folder, file_path
 
+    def notify_via_snmp(recipient: str, subject: str, body: str) -> bool:
+        if not recipient:
+            return False
+
+        sender = app.config.get("SNMP_EMAIL_SENDER")
+        if callable(sender):
+            try:
+                return bool(sender(recipient, subject, body))
+            except Exception as exc:  # pragma: no cover - defensive guard
+                app.logger.warning("Custom SNMP email sender failed: %s", exc)
+                return False
+
+        return send_email_via_snmp(app, recipient, subject, body)
+
     @app.template_filter("currency")
     def format_currency(value: int | float | Decimal | None):
         if value is None:
@@ -450,6 +761,27 @@ def register_routes(app: Flask) -> None:
             NavigationItem.query.order_by(NavigationItem.position.asc()).all()
         )
         branding_assets = {asset.asset_type: asset for asset in BrandingAsset.query.all()}
+        down_detector_config = DownDetectorConfig.query.first()
+        contact_email = app.config.get("CONTACT_EMAIL", "hello@example.com")
+        support_links = [
+            {
+                "label": "Contact Support",
+                "url": f"mailto:{contact_email}",
+                "external": True,
+            },
+            {"label": "Support Center", "url": url_for("support"), "external": False},
+            {"label": "Uptime Status", "url": url_for("uptime"), "external": False},
+            {
+                "label": "Service Cancellation",
+                "url": url_for("service_cancellation"),
+                "external": False,
+            },
+            {
+                "label": "Down Detector",
+                "url": url_for("down_detector"),
+                "external": bool(down_detector_config and down_detector_config.target_url),
+            },
+        ]
 
         return {
             "status_options": STATUS_OPTIONS,
@@ -461,14 +793,89 @@ def register_routes(app: Flask) -> None:
             "invoice_status_options": INVOICE_STATUS_OPTIONS,
             "ticket_status_options": TICKET_STATUS_OPTIONS,
             "service_offerings": SERVICE_OFFERINGS,
+            "appointment_status_options": APPOINTMENT_STATUS_OPTIONS,
+            "contact_email": contact_email,
+            "support_links": support_links,
+            "down_detector_config": down_detector_config,
         }
 
     @app.route("/")
     def index():
         return render_template("index.html")
 
+    @app.route("/services")
+    def service_plans():
+        return render_template("service_plans.html", plans=SERVICE_PLANS)
+
+    @app.route("/about")
+    def about():
+        return render_template("about.html")
+
+    @app.route("/support")
+    def support():
+        return render_template("support.html")
+
+    @app.route("/uptime")
+    def uptime():
+        uptime_metrics = {
+            "current_status": "Operational",
+            "uptime_30": "99.982%",
+            "uptime_90": "99.965%",
+            "next_window": "June 15, 10:00 PM - 12:00 AM",
+        }
+        incidents = [
+            {
+                "title": "Scheduled tower maintenance",
+                "date": "May 20",
+                "status": "Completed",
+                "summary": (
+                    "Preventative maintenance on Sector 3 tower. Customers experienced"
+                    " brief interruptions overnight."
+                ),
+            },
+            {
+                "title": "Fiber backhaul interruption",
+                "date": "April 04",
+                "status": "Resolved",
+                "summary": "Carrier fiber splice caused packet loss for south region subscribers.",
+            },
+        ]
+        return render_template(
+            "uptime.html", uptime_metrics=uptime_metrics, incidents=incidents
+        )
+
+    @app.route("/cancellation")
+    def service_cancellation():
+        return render_template("cancellation.html")
+
+    @app.route("/status/down-detector")
+    def down_detector():
+        config = DownDetectorConfig.query.first()
+        if config and config.target_url:
+            return redirect(config.target_url)
+        return render_template("down_detector.html")
+
+    @app.route("/blog")
+    def blog():
+        posts = (
+            BlogPost.query.filter_by(is_published=True)
+            .order_by(BlogPost.published_at.desc(), BlogPost.created_at.desc())
+            .all()
+        )
+        return render_template("blog.html", posts=posts)
+
+    @app.route("/blog/<slug>")
+    def blog_post(slug: str):
+        post = BlogPost.query.filter_by(slug=slug).first_or_404()
+
+        if not post.is_published and not session.get("admin_authenticated"):
+            abort(404)
+
+        return render_template("blog_post.html", post=post)
+
     @app.route("/signup", methods=["GET", "POST"])
     def signup():
+        selected_plan = request.args.get("plan", "").strip()
         if request.method == "POST":
             name = request.form.get("name", "").strip()
             email = request.form.get("email", "").strip().lower()
@@ -517,7 +924,7 @@ def register_routes(app: Flask) -> None:
             flash("Account created! You're signed in to the customer portal.", "success")
             return redirect(url_for("portal_dashboard"))
 
-        return render_template("signup.html")
+        return render_template("signup.html", preselected_plan=selected_plan)
 
     @app.route("/thank-you")
     def thank_you():
@@ -582,6 +989,11 @@ def register_routes(app: Flask) -> None:
             .order_by(SupportTicket.created_at.desc())
             .all()
         )
+        appointments = (
+            Appointment.query.filter_by(client_id=client.id)
+            .order_by(Appointment.scheduled_for.asc())
+            .all()
+        )
 
         outstanding_invoices = [
             invoice for invoice in invoices if invoice.status not in {"Paid", "Cancelled"}
@@ -606,6 +1018,7 @@ def register_routes(app: Flask) -> None:
             invoices=invoices,
             equipment_items=equipment_items,
             tickets=tickets,
+            appointments=appointments,
             total_due_cents=total_due_cents,
             upcoming_due_date=upcoming_due_date,
             open_ticket_count=open_ticket_count,
@@ -630,6 +1043,80 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         flash("Your support request has been submitted. We'll reach out shortly.", "success")
+        return redirect(url_for("portal_dashboard"))
+
+    @app.post("/portal/appointments/<int:appointment_id>/action")
+    @client_login_required
+    def portal_update_appointment(client: Client, appointment_id: int):
+        appointment = (
+            Appointment.query.filter_by(id=appointment_id, client_id=client.id)
+            .first()
+        )
+        if not appointment:
+            flash("We couldn't find that appointment.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        action = request.form.get("action", "").strip().lower()
+        message = request.form.get("message", "").strip() or None
+
+        if action == "approve":
+            appointment.status = "Confirmed"
+            appointment.client_message = message
+            appointment.proposed_time = None
+            confirmation_text = "Appointment confirmed."
+            subject = f"Appointment confirmed by {client.name}"
+        elif action == "decline":
+            appointment.status = "Declined"
+            appointment.client_message = message
+            appointment.proposed_time = None
+            confirmation_text = "Appointment declined."
+            subject = f"Appointment declined by {client.name}"
+        elif action == "reschedule":
+            new_time_raw = request.form.get("scheduled_for", "").strip()
+            if not new_time_raw:
+                flash("Select a new time to request a reschedule.", "danger")
+                return redirect(url_for("portal_dashboard"))
+            try:
+                new_time = datetime.fromisoformat(new_time_raw)
+            except ValueError:
+                flash("Use a valid date and time for your request.", "danger")
+                return redirect(url_for("portal_dashboard"))
+
+            if new_time.tzinfo is None:
+                new_time = new_time.replace(tzinfo=UTC)
+
+            appointment.status = "Reschedule Requested"
+            appointment.proposed_time = new_time
+            appointment.client_message = message
+            confirmation_text = "Reschedule request submitted."
+            subject = f"{client.name} requested a new appointment time"
+        else:
+            flash("Unsupported appointment action.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        appointment.updated_at = utcnow()
+        db.session.commit()
+
+        admin_settings = get_effective_snmp_settings(app)
+        admin_recipient = admin_settings.get("admin_email")
+        if admin_recipient:
+            notify_via_snmp(
+                admin_recipient,
+                subject,
+                (
+                    f"Client: {client.name}\n"
+                    f"Scheduled for: {appointment.scheduled_for.strftime('%Y-%m-%d %H:%M %Z')}\n"
+                    f"Status: {appointment.status}\n"
+                    + (f"Message: {appointment.client_message}\n" if appointment.client_message else "")
+                    + (
+                        f"Proposed time: {appointment.proposed_time.strftime('%Y-%m-%d %H:%M %Z')}\n"
+                        if appointment.proposed_time
+                        else ""
+                    )
+                ),
+            )
+
+        flash(confirmation_text, "success")
         return redirect(url_for("portal_dashboard"))
 
     @app.route("/legal")
@@ -677,9 +1164,11 @@ def register_routes(app: Flask) -> None:
             "billing",
             "network",
             "support",
+            "appointments",
             "navigation",
             "branding",
             "legal",
+            "blog",
         }
         if active_section not in valid_sections:
             active_section = "overview"
@@ -689,11 +1178,24 @@ def register_routes(app: Flask) -> None:
             status_filter = None
 
         clients: list[Client] = []
-        if active_section in {"customers", "portal", "billing", "network", "support"}:
+        if active_section in {
+            "customers",
+            "portal",
+            "billing",
+            "network",
+            "support",
+            "appointments",
+        }:
             query = Client.query.order_by(Client.created_at.desc())
             if status_filter:
                 query = query.filter_by(status=status_filter)
             clients = query.all()
+
+        appointments: list[Appointment] = []
+        if active_section == "appointments":
+            appointments = (
+                Appointment.query.order_by(Appointment.scheduled_for.asc()).all()
+            )
 
         total_clients = Client.query.count()
         start_of_week = utcnow() - timedelta(days=7)
@@ -741,6 +1243,36 @@ def register_routes(app: Flask) -> None:
         billing_invoices_created = (
             Invoice.query.filter(Invoice.created_at >= start_of_week).count()
         )
+        upcoming_statuses = ["Pending", "Confirmed", "Reschedule Requested"]
+        now = utcnow()
+        appointments_total = Appointment.query.count()
+        upcoming_appointments_count = (
+            Appointment.query.filter(
+                Appointment.status.in_(upcoming_statuses),
+                Appointment.scheduled_for >= now - timedelta(days=1),
+            ).count()
+        )
+        pending_appointments = (
+            Appointment.query.filter_by(status="Pending").count()
+        )
+        reschedule_requests = (
+            Appointment.query.filter_by(status="Reschedule Requested").count()
+        )
+        appointments_created_this_week = (
+            Appointment.query.filter(Appointment.created_at >= start_of_week).count()
+        )
+
+        upcoming_appointments_list = (
+            Appointment.query.filter(
+                Appointment.status.in_(upcoming_statuses)
+            )
+            .order_by(Appointment.scheduled_for.asc())
+            .limit(5)
+            .all()
+        )
+        recent_appointments = (
+            Appointment.query.order_by(Appointment.updated_at.desc()).limit(5).all()
+        )
 
         recent_clients = (
             Client.query.order_by(Client.created_at.desc()).limit(5).all()
@@ -774,10 +1306,14 @@ def register_routes(app: Flask) -> None:
                 "description": "Hardware deployed to keep customers online.",
                 "metrics": [
                     {"label": "Devices Online", "value": equipment_total},
-                    {"label": "Installs This Week", "value": network_new_this_week},
                     {"label": "Clients With Gear", "value": clients_with_equipment},
+                    {"label": "Upcoming Visits", "value": upcoming_appointments_count},
+                    {"label": "Reschedule Requests", "value": reschedule_requests},
                 ],
-                "footer": f"{clients_with_equipment} clients have deployed gear",
+                "footer": (
+                    f"{appointments_created_this_week} appointments scheduled this week • "
+                    f"{network_new_this_week} installs logged"
+                ),
             },
             {
                 "key": "support",
@@ -819,6 +1355,13 @@ def register_routes(app: Flask) -> None:
         navigation_items = NavigationItem.query.order_by(NavigationItem.position.asc()).all()
         branding_records = {asset.asset_type: asset for asset in BrandingAsset.query.all()}
 
+        snmp_settings = get_effective_snmp_settings(app)
+        snmp_enabled = bool(snmp_settings.get("host") or app.config.get("SNMP_EMAIL_SENDER"))
+        snmp_config = SNMPConfig.query.first()
+        down_detector_config = DownDetectorConfig.query.first()
+
+        blog_posts = BlogPost.query.order_by(BlogPost.created_at.desc()).all()
+
         return render_template(
             "dashboard.html",
             clients=clients,
@@ -842,6 +1385,16 @@ def register_routes(app: Flask) -> None:
             legal_documents=documents,
             navigation_items=navigation_items,
             branding_assets=branding_records,
+            appointments=appointments,
+            appointments_total=appointments_total,
+            pending_appointments=pending_appointments,
+            upcoming_appointments=upcoming_appointments_list,
+            recent_appointments=recent_appointments,
+            snmp_enabled=snmp_enabled,
+            snmp_config=snmp_config,
+            snmp_settings=snmp_settings,
+            blog_posts=blog_posts,
+            down_detector_config=down_detector_config,
         )
 
     @app.post("/documents/upload")
@@ -1228,6 +1781,130 @@ def register_routes(app: Flask) -> None:
         flash("Equipment removed.", "info")
         return _redirect_back_to_dashboard("network")
 
+    @app.post("/appointments")
+    @login_required
+    def create_appointment_admin():
+        client_id_raw = request.form.get("client_id", "").strip()
+        title = request.form.get("title", "").strip()
+        scheduled_for_raw = request.form.get("scheduled_for", "").strip()
+        notes = request.form.get("notes", "").strip() or None
+
+        try:
+            client_id = int(client_id_raw)
+        except (TypeError, ValueError):
+            flash("Select a customer for the appointment.", "danger")
+            return _redirect_back_to_dashboard("appointments")
+
+        client = Client.query.get(client_id)
+        if not client:
+            flash("Customer not found.", "danger")
+            return _redirect_back_to_dashboard("appointments")
+
+        if not title:
+            flash("Provide an appointment title.", "danger")
+            return _redirect_back_to_dashboard("appointments")
+
+        if not scheduled_for_raw:
+            flash("Choose a scheduled date and time.", "danger")
+            return _redirect_back_to_dashboard("appointments")
+
+        try:
+            scheduled_for_value = datetime.fromisoformat(scheduled_for_raw)
+        except ValueError:
+            flash("Use the provided picker to select a valid date and time.", "danger")
+            return _redirect_back_to_dashboard("appointments")
+
+        if scheduled_for_value.tzinfo is None:
+            scheduled_for_value = scheduled_for_value.replace(tzinfo=UTC)
+
+        appointment = Appointment(
+            client_id=client.id,
+            title=title,
+            scheduled_for=scheduled_for_value,
+            status="Pending",
+            notes=notes,
+        )
+
+        db.session.add(appointment)
+        db.session.commit()
+
+        notify_via_snmp(
+            client.email,
+            f"New appointment scheduled: {title}",
+            (
+                f"Hello {client.name},\n\n"
+                f"An appointment titled '{title}' has been scheduled for "
+                f"{appointment.scheduled_for.strftime('%Y-%m-%d %H:%M %Z')}.\n"
+                + (f"Notes: {appointment.notes}\n\n" if appointment.notes else "\n")
+                + "Reply from your portal to confirm or request changes."
+            ),
+        )
+
+        flash("Appointment scheduled.", "success")
+        return _redirect_back_to_dashboard("appointments")
+
+    @app.post("/appointments/<int:appointment_id>/update")
+    @login_required
+    def update_appointment_admin(appointment_id: int):
+        appointment = Appointment.query.get_or_404(appointment_id)
+        status_value = (
+            request.form.get("status", appointment.status).strip() or appointment.status
+        )
+        scheduled_for_raw = request.form.get("scheduled_for", "").strip()
+        use_proposed = request.form.get("use_proposed") == "on"
+        notes = request.form.get("notes", "").strip() or None
+
+        if status_value not in APPOINTMENT_STATUS_OPTIONS:
+            flash("Unknown appointment status.", "danger")
+            return _redirect_back_to_dashboard("appointments")
+
+        new_time = None
+        if scheduled_for_raw:
+            try:
+                new_time = datetime.fromisoformat(scheduled_for_raw)
+            except ValueError:
+                flash("Use a valid date and time for the appointment.", "danger")
+                return _redirect_back_to_dashboard("appointments")
+        elif use_proposed and appointment.proposed_time:
+            new_time = appointment.proposed_time
+
+        if new_time:
+            if new_time.tzinfo is None:
+                new_time = new_time.replace(tzinfo=UTC)
+            appointment.scheduled_for = new_time
+
+        appointment.status = status_value
+        appointment.notes = notes
+
+        if status_value in {"Confirmed", "Completed", "Declined"}:
+            appointment.proposed_time = None
+            appointment.client_message = None
+
+        appointment.updated_at = utcnow()
+        db.session.commit()
+
+        notify_via_snmp(
+            appointment.client.email,
+            f"Appointment update: {appointment.title}",
+            (
+                f"Status: {appointment.status}\n"
+                f"Scheduled for: {appointment.scheduled_for.strftime('%Y-%m-%d %H:%M %Z')}\n"
+                + (f"Notes: {appointment.notes}\n" if appointment.notes else "")
+            ),
+        )
+
+        flash("Appointment updated.", "success")
+        return _redirect_back_to_dashboard("appointments")
+
+    @app.post("/appointments/<int:appointment_id>/delete")
+    @login_required
+    def delete_appointment_admin(appointment_id: int):
+        appointment = Appointment.query.get_or_404(appointment_id)
+        db.session.delete(appointment)
+        db.session.commit()
+        flash("Appointment removed.", "info")
+        return _redirect_back_to_dashboard("appointments")
+
     @app.post("/tickets/<int:ticket_id>/update")
     @login_required
     def update_ticket(ticket_id: int):
@@ -1254,6 +1931,93 @@ def register_routes(app: Flask) -> None:
         db.session.delete(ticket)
         db.session.commit()
         flash("Ticket removed.", "info")
+        return _redirect_back_to_dashboard("support")
+
+    @app.post("/notifications/snmp-email")
+    @login_required
+    def send_snmp_email_admin():
+        recipient = request.form.get("recipient", "").strip()
+        subject = request.form.get("subject", "").strip()
+        body = request.form.get("body", "").strip()
+
+        if not recipient or not subject or not body:
+            flash(
+                "Provide a recipient, subject, and message to dispatch an SNMP email.",
+                "danger",
+            )
+            return _redirect_back_to_dashboard("support")
+
+        sent = notify_via_snmp(recipient, subject, body)
+
+        if sent:
+            flash("SNMP email notification queued for delivery.", "success")
+        else:
+            flash(
+                "Unable to deliver SNMP email. Verify trap settings and try again.",
+                "warning",
+            )
+
+        return _redirect_back_to_dashboard("support")
+
+    @app.post("/snmp-settings")
+    @login_required
+    def update_snmp_settings():
+        host = request.form.get("host", "").strip()
+        port_raw = request.form.get("port", "").strip()
+        community = request.form.get("community", "").strip() or "public"
+        enterprise_oid = request.form.get("enterprise_oid", "").strip() or "1.3.6.1.4.1.8072.9999"
+        admin_email = request.form.get("admin_email", "").strip() or None
+
+        port_value = 162
+        if port_raw:
+            try:
+                port_value = max(1, min(65535, int(port_raw)))
+            except ValueError:
+                flash("Provide a valid SNMP port between 1 and 65535.", "danger")
+                return _redirect_back_to_dashboard("support")
+
+        config = SNMPConfig.query.first()
+        if not config:
+            config = SNMPConfig()
+            db.session.add(config)
+
+        config.host = host or None
+        config.port = port_value
+        config.community = community
+        config.enterprise_oid = enterprise_oid
+        config.admin_email = admin_email
+        config.updated_at = utcnow()
+
+        db.session.commit()
+
+        app.config["SNMP_TRAP_HOST"] = config.host
+        app.config["SNMP_TRAP_PORT"] = config.port
+        app.config["SNMP_COMMUNITY"] = config.community
+        app.config["SNMP_ENTERPRISE_OID"] = config.enterprise_oid
+        app.config["SNMP_ADMIN_EMAIL"] = config.admin_email
+
+        flash("SNMP settings updated.", "success")
+        return _redirect_back_to_dashboard("support")
+
+    @app.post("/down-detector/config")
+    @login_required
+    def update_down_detector_config():
+        target_url = request.form.get("target_url", "").strip()
+
+        config = DownDetectorConfig.query.first()
+        if not config:
+            config = DownDetectorConfig()
+            db.session.add(config)
+
+        config.target_url = target_url or None
+        config.updated_at = utcnow()
+        db.session.commit()
+
+        if config.target_url:
+            flash("Down detector redirect updated.", "success")
+        else:
+            flash("Down detector redirect cleared.", "info")
+
         return _redirect_back_to_dashboard("support")
 
     @app.post("/navigation/add")
@@ -1411,6 +2175,80 @@ def register_routes(app: Flask) -> None:
             as_attachment=False,
             download_name=asset_record.original_filename,
         )
+
+    @app.post("/blog/posts")
+    @login_required
+    def create_blog_post():
+        title = request.form.get("title", "").strip()
+        summary = request.form.get("summary", "").strip()
+        content = request.form.get("content", "").strip()
+        publish = request.form.get("publish") == "on"
+
+        if not title or not content:
+            flash("Title and content are required to publish a blog post.", "danger")
+            return redirect(url_for("dashboard", section="blog"))
+
+        slug = generate_unique_slug(title)
+        post = BlogPost(
+            title=title,
+            slug=slug,
+            summary=summary or None,
+            content=content,
+            is_published=publish,
+        )
+
+        if publish:
+            post.published_at = utcnow()
+
+        db.session.add(post)
+        db.session.commit()
+
+        flash("Blog post created.", "success")
+        return redirect(url_for("dashboard", section="blog"))
+
+    @app.post("/blog/posts/<int:post_id>")
+    @login_required
+    def update_blog_post(post_id: int):
+        post = BlogPost.query.get_or_404(post_id)
+
+        title = request.form.get("title", "").strip()
+        summary = request.form.get("summary", "").strip()
+        content = request.form.get("content", "").strip()
+        publish = request.form.get("publish") == "on"
+
+        if not title or not content:
+            flash("Title and content are required to update a blog post.", "danger")
+            return redirect(url_for("dashboard", section="blog"))
+
+        if title != post.title:
+            post.slug = generate_unique_slug(title, existing_id=post.id)
+
+        post.title = title
+        post.summary = summary or None
+        post.content = content
+
+        if publish:
+            post.is_published = True
+            if not post.published_at:
+                post.published_at = utcnow()
+        else:
+            post.is_published = False
+            post.published_at = None
+
+        db.session.commit()
+
+        flash("Blog post updated.", "success")
+        return redirect(url_for("dashboard", section="blog"))
+
+    @app.post("/blog/posts/<int:post_id>/delete")
+    @login_required
+    def delete_blog_post(post_id: int):
+        post = BlogPost.query.get_or_404(post_id)
+        db.session.delete(post)
+        db.session.commit()
+
+        flash("Blog post deleted.", "info")
+        return redirect(url_for("dashboard", section="blog"))
 
     @app.post("/clients/<int:client_id>/update")
     @login_required
