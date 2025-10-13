@@ -286,14 +286,21 @@ def test_admin_can_upload_branding_asset(app, client):
         assert asset.original_filename == "logo.png"
 
 
-def test_default_navigation_includes_service_pages(app):
+def test_default_navigation_excludes_support_dropdown_links(app):
     with app.app_context():
-        labels = [
-            item.label
-            for item in NavigationItem.query.order_by(NavigationItem.position.asc()).all()
-        ]
-        assert "Service Cancellation" in labels
-        assert "Uptime" in labels
+        navigation_items = NavigationItem.query.order_by(
+            NavigationItem.position.asc()
+        ).all()
+        urls = {item.url for item in navigation_items}
+
+        assert "/support" not in urls
+        assert "/uptime" not in urls
+        assert "/cancellation" not in urls
+        assert "/status/down-detector" not in urls
+
+        labels = {item.label for item in navigation_items}
+        assert "Sign Up" in labels
+        assert "Service Plans" in labels
 
 
 def test_admin_can_create_blog_post_and_publish(app, client):

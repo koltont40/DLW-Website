@@ -171,8 +171,6 @@ def get_default_navigation_items() -> list[tuple[str, str, bool]]:
     return [
         ("Sign Up", "/signup", False),
         ("Service Plans", "/services", False),
-        ("Service Cancellation", "/cancellation", False),
-        ("Uptime", "/uptime", False),
         ("Blog", "/blog", False),
         ("About", "/about", False),
         ("Legal", "/legal", False),
@@ -757,9 +755,19 @@ def register_routes(app: Flask) -> None:
 
     @app.context_processor
     def inject_status_options():
-        navigation_items = (
-            NavigationItem.query.order_by(NavigationItem.position.asc()).all()
-        )
+        support_urls = {
+            url_for("support"),
+            url_for("uptime"),
+            url_for("service_cancellation"),
+            url_for("down_detector"),
+        }
+        navigation_items = [
+            item
+            for item in NavigationItem.query.order_by(
+                NavigationItem.position.asc()
+            ).all()
+            if item.url not in support_urls
+        ]
         branding_assets = {asset.asset_type: asset for asset in BrandingAsset.query.all()}
         down_detector_config = DownDetectorConfig.query.first()
         contact_email = app.config.get("CONTACT_EMAIL", "hello@example.com")
