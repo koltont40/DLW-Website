@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Support | DIXIELAND WIRELESS LLC{% endblock %}
+
+{% block content %}
+<section class="support-hero">
+  <div>
+    <h1>Support center</h1>
+    <p>
+      Get help from the DIXIELAND WIRELESS LLC team, review popular troubleshooting steps, and keep tabs on
+      maintenance that may impact your service. We are here to keep your network and phone lines running around the
+      clock.
+    </p>
+    <div class="support-actions">
+      <a class="button primary" href="mailto:{{ contact_email }}">Email support</a>
+      <a class="button secondary" href="{{ url_for('signup') }}">Start service signup</a>
+      <a class="button ghost" href="{{ url_for('portal_login') }}">Client portal</a>
+    </div>
+  </div>
+  <div class="support-highlights">
+    <article class="card">
+      <h2>Need an appointment?</h2>
+      <p class="subtle">
+        Schedule a visit directly from your customer portal or request a callback so we can coordinate the best time
+        for your installation.
+      </p>
+      <ul class="support-list">
+        <li>Installations and upgrades</li>
+        <li>Phone provisioning</li>
+        <li>On-site troubleshooting</li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<section class="support-grid">
+  <article class="card">
+    <h2>Ways to reach us</h2>
+    <p class="subtle">We respond to most requests within one business day.</p>
+    <ul class="support-contact-list">
+      <li><strong>Email:</strong> <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></li>
+      <li><strong>Portal:</strong> <a href="{{ url_for('portal_login') }}">Secure client login</a></li>
+      <li><strong>Phone:</strong> (555) 010-1155</li>
+    </ul>
+    <p class="subtle">Field technicians are available for emergencies 24/7.</p>
+  </article>
+
+  <article class="card">
+    <h2>Service resources</h2>
+    <p class="subtle">Check the latest plans, policies, and guides to get the most from your service.</p>
+    <ul class="support-link-list">
+      <li><a href="{{ url_for('service_plans') }}">Compare service plans</a></li>
+      <li><a href="{{ url_for('legal') }}">Review legal policies</a></li>
+      <li><a href="{{ url_for('blog') }}">Visit the DixieLand Wireless blog</a></li>
+    </ul>
+  </article>
+
+  <article class="card">
+    <h2>Status and maintenance</h2>
+    <p class="subtle">Stay informed about uptime, outages, and scheduled work.</p>
+    <ul class="support-link-list">
+      <li><a href="{{ url_for('uptime') }}">Uptime status dashboard</a></li>
+      <li><a href="{{ url_for('down_detector') }}">Down detector</a></li>
+      <li><a href="{{ url_for('service_cancellation') }}">Need to cancel service?</a></li>
+    </ul>
+  </article>
+</section>
+{% endblock %}
