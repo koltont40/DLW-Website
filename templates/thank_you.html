@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Thank You | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="form-section narrow">
+  <h1>Thanks for reaching out!</h1>
+  <p class="lead">Our team will review your submission and contact you within one business day.</p>
+  <div class="card">
+    <p>Need to update your request? Reply directly to the confirmation email or contact us at <a href="mailto:hello@example.com">hello@example.com</a>.</p>
+    <div class="actions">
+      <a class="button primary" href="{{ url_for('index') }}">Return home</a>
+      <a class="button secondary" href="{{ url_for('dashboard') }}">Go to dashboard</a>
+    </div>
+  </div>
+</section>
+{% endblock %}
