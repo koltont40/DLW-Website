@@ -78,6 +78,12 @@ class Client(db.Model):
 
 STATUS_OPTIONS = ["New", "In Review", "Active", "On Hold", "Archived"]
 
+SERVICE_OFFERINGS = [
+    "Wireless Internet (WISP)",
+    "Phone Service",
+    "Internet + Phone Bundle",
+]
+
 LEGAL_DOCUMENT_TYPES = {
     "aup": {
         "label": "Acceptable Use Policy",
@@ -454,6 +460,7 @@ def register_routes(app: Flask) -> None:
             "branding_asset_types": BRANDING_ASSET_TYPES,
             "invoice_status_options": INVOICE_STATUS_OPTIONS,
             "ticket_status_options": TICKET_STATUS_OPTIONS,
+            "service_offerings": SERVICE_OFFERINGS,
         }
 
     @app.route("/")
@@ -466,11 +473,25 @@ def register_routes(app: Flask) -> None:
             name = request.form.get("name", "").strip()
             email = request.form.get("email", "").strip().lower()
             company = request.form.get("company", "").strip()
-            project_type = request.form.get("project_type", "").strip()
+            service_plan = request.form.get("service_plan", "").strip()
             notes = request.form.get("notes", "").strip()
+            password = request.form.get("password", "").strip()
+            confirm_password = request.form.get("confirm_password", "").strip()
 
             if not name or not email:
                 flash("Name and email are required.", "danger")
+                return redirect(url_for("signup"))
+
+            if not password:
+                flash("Create a portal password to finish your signup.", "danger")
+                return redirect(url_for("signup"))
+
+            if len(password) < 8:
+                flash("Portal passwords must be at least 8 characters long.", "danger")
+                return redirect(url_for("signup"))
+
+            if password != confirm_password:
+                flash("Passwords do not match. Please try again.", "danger")
                 return redirect(url_for("signup"))
 
             existing = Client.query.filter_by(email=email).first()
@@ -482,14 +503,19 @@ def register_routes(app: Flask) -> None:
                 name=name,
                 email=email,
                 company=company or None,
-                project_type=project_type or None,
+                project_type=service_plan or None,
                 notes=notes or None,
             )
+            client.portal_password_hash = generate_password_hash(password)
+            client.portal_password_updated_at = utcnow()
             db.session.add(client)
             db.session.commit()
 
-            flash("Thanks for signing up! We'll be in touch shortly.", "success")
-            return redirect(url_for("thank_you"))
+            session[PORTAL_SESSION_KEY] = client.id
+            session["portal_authenticated_at"] = utcnow().isoformat()
+
+            flash("Account created! You're signed in to the customer portal.", "success")
+            return redirect(url_for("portal_dashboard"))
 
         return render_template("signup.html")
 
@@ -643,12 +669,31 @@ def register_routes(app: Flask) -> None:
     @app.route("/dashboard")
     @login_required
     def dashboard():
-        status_filter = request.args.get("status")
-        query = Client.query.order_by(Client.created_at.desc())
-        if status_filter and status_filter in STATUS_OPTIONS:
-            query = query.filter_by(status=status_filter)
+        active_section = request.args.get("section", "overview") or "overview"
+        valid_sections = {
+            "overview",
+            "customers",
+            "portal",
+            "billing",
+            "network",
+            "support",
+            "navigation",
+            "branding",
+            "legal",
+        }
+        if active_section not in valid_sections:
+            active_section = "overview"
 
-        clients = query.all()
+        status_filter = request.args.get("status")
+        if status_filter not in STATUS_OPTIONS:
+            status_filter = None
+
+        clients: list[Client] = []
+        if active_section in {"customers", "portal", "billing", "network", "support"}:
+            query = Client.query.order_by(Client.created_at.desc())
+            if status_filter:
+                query = query.filter_by(status=status_filter)
+            clients = query.all()
 
         total_clients = Client.query.count()
         start_of_week = utcnow() - timedelta(days=7)
@@ -680,12 +725,92 @@ def register_routes(app: Flask) -> None:
             .scalar()
         )
         equipment_total = Equipment.query.count()
+        network_new_this_week = (
+            Equipment.query.filter(Equipment.created_at >= start_of_week).count()
+        )
+        clients_with_equipment = (
+            db.session.query(db.func.count(db.func.distinct(Equipment.client_id))).scalar()
+            or 0
+        )
+        support_created_this_week = (
+            SupportTicket.query.filter(SupportTicket.created_at >= start_of_week).count()
+        )
+        support_updates = (
+            SupportTicket.query.filter(SupportTicket.updated_at >= start_of_week).count()
+        )
+        billing_invoices_created = (
+            Invoice.query.filter(Invoice.created_at >= start_of_week).count()
+        )
+
+        recent_clients = (
+            Client.query.order_by(Client.created_at.desc()).limit(5).all()
+        )
+        recent_invoices = (
+            Invoice.query.order_by(Invoice.created_at.desc()).limit(5).all()
+        )
         recent_equipment = (
             Equipment.query.order_by(Equipment.created_at.desc()).limit(5).all()
         )
         recent_tickets = (
             SupportTicket.query.order_by(SupportTicket.created_at.desc()).limit(5).all()
         )
+
+        operations_snapshot = [
+            {
+                "key": "customers",
+                "title": "Customers",
+                "description": "Growth and onboarding momentum across your service area.",
+                "metrics": [
+                    {"label": "Total Clients", "value": total_clients},
+                    {"label": "Active Clients", "value": active_clients},
+                    {"label": "Onboarding", "value": onboarding_clients},
+                    {"label": "Passwords Pending", "value": clients_without_password},
+                ],
+                "footer": f"{new_this_week} new signups this week",
+            },
+            {
+                "key": "network",
+                "title": "Network",
+                "description": "Hardware deployed to keep customers online.",
+                "metrics": [
+                    {"label": "Devices Online", "value": equipment_total},
+                    {"label": "Installs This Week", "value": network_new_this_week},
+                    {"label": "Clients With Gear", "value": clients_with_equipment},
+                ],
+                "footer": f"{clients_with_equipment} clients have deployed gear",
+            },
+            {
+                "key": "support",
+                "title": "Support",
+                "description": "Ticket activity from your subscribers.",
+                "metrics": [
+                    {"label": "Open Tickets", "value": open_ticket_total},
+                    {"label": "New Tickets", "value": support_created_this_week},
+                    {"label": "Updates This Week", "value": support_updates},
+                ],
+                "footer": f"{support_updates} tickets touched this week",
+            },
+            {
+                "key": "billing",
+                "title": "Billing",
+                "description": "Cash flow indicators and invoice workload.",
+                "metrics": [
+                    {
+                        "label": "Outstanding Balance",
+                        "value": outstanding_amount_cents,
+                        "format": "currency",
+                    },
+                    {
+                        "label": "Overdue Balance",
+                        "value": overdue_amount_cents,
+                        "format": "currency",
+                    },
+                    {"label": "Pending Invoices", "value": pending_invoices_total},
+                    {"label": "Invoices This Week", "value": billing_invoices_created},
+                ],
+                "footer": f"{billing_invoices_created} invoices posted this week",
+            },
+        ]
 
         documents = {key: None for key in LEGAL_DOCUMENT_TYPES}
         for document in Document.query.all():
@@ -697,6 +822,8 @@ def register_routes(app: Flask) -> None:
         return render_template(
             "dashboard.html",
             clients=clients,
+            active_section=active_section,
+            operations_snapshot=operations_snapshot,
             total_clients=total_clients,
             new_this_week=new_this_week,
             outstanding_amount_cents=outstanding_amount_cents,
@@ -707,6 +834,8 @@ def register_routes(app: Flask) -> None:
             pending_invoices_total=pending_invoices_total,
             overdue_amount_cents=overdue_amount_cents,
             equipment_total=equipment_total,
+            recent_clients=recent_clients,
+            recent_invoices=recent_invoices,
             recent_equipment=recent_equipment,
             recent_tickets=recent_tickets,
             status_filter=status_filter,
@@ -723,11 +852,11 @@ def register_routes(app: Flask) -> None:
 
         if doc_type not in LEGAL_DOCUMENT_TYPES:
             flash("Invalid document category.", "danger")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("dashboard", section="legal"))
 
         if not file or not file.filename:
             flash("Please choose a file to upload.", "warning")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("dashboard", section="legal"))
 
         filename = secure_filename(file.filename)
         extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -735,7 +864,7 @@ def register_routes(app: Flask) -> None:
         if extension not in ALLOWED_DOCUMENT_EXTENSIONS:
             allowed_list = ", ".join(sorted(ALLOWED_DOCUMENT_EXTENSIONS))
             flash(f"Unsupported file type. Allowed formats: {allowed_list}.", "danger")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("dashboard", section="legal"))
 
         upload_folder = Path(app.config["LEGAL_UPLOAD_FOLDER"])
         os.makedirs(upload_folder, exist_ok=True)
@@ -762,7 +891,7 @@ def register_routes(app: Flask) -> None:
 
         db.session.commit()
         flash(f"{LEGAL_DOCUMENT_TYPES[doc_type]['label']} uploaded successfully.", "success")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("dashboard", section="legal"))
 
     @app.get("/documents/<doc_type>/file")
     def serve_document_file(doc_type: str):
@@ -830,7 +959,7 @@ def register_routes(app: Flask) -> None:
             f"Temporary portal password for {client.email}: {temporary_password}",
             "info",
         )
-        return redirect(url_for("dashboard", status=request.args.get("status")))
+        return _redirect_back_to_dashboard("portal")
 
     @app.post("/clients/<int:client_id>/portal/set-password")
     @login_required
@@ -841,25 +970,83 @@ def register_routes(app: Flask) -> None:
 
         if not password:
             flash("Please provide a password for the client portal.", "danger")
-            return redirect(url_for("dashboard", status=request.args.get("status")))
+            return _redirect_back_to_dashboard("portal")
 
         if password != confirm:
             flash("Passwords do not match. Please try again.", "danger")
-            return redirect(url_for("dashboard", status=request.args.get("status")))
+            return _redirect_back_to_dashboard("portal")
 
         if len(password) < 8:
             flash("Portal passwords must be at least 8 characters long.", "danger")
-            return redirect(url_for("dashboard", status=request.args.get("status")))
+            return _redirect_back_to_dashboard("portal")
 
         client.portal_password_hash = generate_password_hash(password)
         client.portal_password_updated_at = utcnow()
         client.portal_access_code = secrets.token_hex(16)
         db.session.commit()
         flash(f"Portal password updated for {client.email}.", "success")
-        return redirect(url_for("dashboard", status=request.args.get("status")))
+        return _redirect_back_to_dashboard("portal")
 
-    def _redirect_back_to_dashboard():
-        return redirect(url_for("dashboard", status=request.args.get("status")))
+    def _redirect_back_to_dashboard(default_section: str = "overview"):
+        params: dict[str, str] = {}
+        status_value = request.args.get("status")
+        if status_value:
+            params["status"] = status_value
+        section_value = request.args.get("section") or default_section
+        if section_value:
+            params["section"] = section_value
+        return redirect(url_for("dashboard", **params))
+
+    @app.post("/clients")
+    @login_required
+    def create_client_admin():
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        company = request.form.get("company", "").strip()
+        service_plan = request.form.get("service_plan", "").strip()
+        status_value = request.form.get("status", "New").strip() or "New"
+        notes = request.form.get("notes", "").strip()
+        password = request.form.get("password", "").strip()
+        confirm_password = request.form.get("confirm_password", "").strip()
+
+        if not name or not email:
+            flash("Customer name and email are required.", "danger")
+            return _redirect_back_to_dashboard("customers")
+
+        existing = Client.query.filter_by(email=email).first()
+        if existing:
+            flash("A customer with that email already exists.", "warning")
+            return _redirect_back_to_dashboard("customers")
+
+        if status_value not in STATUS_OPTIONS:
+            status_value = "New"
+
+        if password and len(password) < 8:
+            flash("Portal passwords must be at least 8 characters long.", "danger")
+            return _redirect_back_to_dashboard("customers")
+
+        if password and password != confirm_password:
+            flash("Passwords do not match. Please try again.", "danger")
+            return _redirect_back_to_dashboard("customers")
+
+        client = Client(
+            name=name,
+            email=email,
+            company=company or None,
+            project_type=service_plan or None,
+            notes=notes or None,
+            status=status_value,
+        )
+
+        if password:
+            client.portal_password_hash = generate_password_hash(password)
+            client.portal_password_updated_at = utcnow()
+
+        db.session.add(client)
+        db.session.commit()
+
+        flash(f"Customer {client.name} added.", "success")
+        return _redirect_back_to_dashboard("customers")
 
     @app.post("/clients/<int:client_id>/invoices")
     @login_required
@@ -872,18 +1059,18 @@ def register_routes(app: Flask) -> None:
 
         if not description or not amount_raw:
             flash("Invoice description and amount are required.", "danger")
-            return _redirect_back_to_dashboard()
+            return _redirect_back_to_dashboard("billing")
 
         try:
             amount_decimal = Decimal(amount_raw).quantize(Decimal("0.01"))
         except (InvalidOperation, TypeError):
             flash("Please provide a valid invoice amount.", "danger")
-            return _redirect_back_to_dashboard()
+            return _redirect_back_to_dashboard("billing")
 
         amount_cents = int(amount_decimal * 100)
         if amount_cents < 0:
             flash("Invoice amounts must be positive.", "danger")
-            return _redirect_back_to_dashboard()
+            return _redirect_back_to_dashboard("billing")
 
         due_date_value = None
         if due_date_raw:
@@ -891,7 +1078,7 @@ def register_routes(app: Flask) -> None:
                 due_date_value = datetime.strptime(due_date_raw, "%Y-%m-%d").date()
             except ValueError:
                 flash("Please use the YYYY-MM-DD format for due dates.", "danger")
-                return _redirect_back_to_dashboard()
+                return _redirect_back_to_dashboard("billing")
 
         if status_value not in INVOICE_STATUS_OPTIONS:
             status_value = "Pending"
@@ -907,7 +1094,7 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         flash(f"Invoice added for {client.name}.", "success")
-        return _redirect_back_to_dashboard()
+        return _redirect_back_to_dashboard("billing")
 
     @app.post("/invoices/<int:invoice_id>/update")
     @login_required
@@ -920,18 +1107,18 @@ def register_routes(app: Flask) -> None:
 
         if not description or not amount_raw:
             flash("Description and amount are required to update an invoice.", "danger")
-            return _redirect_back_to_dashboard()
+            return _redirect_back_to_dashboard("billing")
 
         try:
             amount_decimal = Decimal(amount_raw).quantize(Decimal("0.01"))
         except (InvalidOperation, TypeError):
             flash("Please provide a valid invoice amount.", "danger")
-            return _redirect_back_to_dashboard()
+            return _redirect_back_to_dashboard("billing")
 
         amount_cents = int(amount_decimal * 100)
         if amount_cents < 0:
             flash("Invoice amounts must be positive.", "danger")
-            return _redirect_back_to_dashboard()
+            return _redirect_back_to_dashboard("billing")
 
         due_date_value = None
         if due_date_raw:
@@ -939,11 +1126,11 @@ def register_routes(app: Flask) -> None:
                 due_date_value = datetime.strptime(due_date_raw, "%Y-%m-%d").date()
             except ValueError:
                 flash("Please use the YYYY-MM-DD format for due dates.", "danger")
-                return _redirect_back_to_dashboard()
+                return _redirect_back_to_dashboard("billing")
 
         if status_value not in INVOICE_STATUS_OPTIONS:
             flash("Unknown invoice status.", "danger")
-            return _redirect_back_to_dashboard()
+            return _redirect_back_to_dashboard("billing")
 
         invoice.description = description
         invoice.amount_cents = amount_cents
@@ -953,7 +1140,7 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         flash("Invoice updated.", "success")
-        return _redirect_back_to_dashboard()
+        return _redirect_back_to_dashboard("billing")
 
     @app.post("/invoices/<int:invoice_id>/delete")
     @login_required
@@ -962,7 +1149,7 @@ def register_routes(app: Flask) -> None:
         db.session.delete(invoice)
         db.session.commit()
         flash("Invoice removed.", "info")
-        return _redirect_back_to_dashboard()
+        return _redirect_back_to_dashboard("billing")
 
     @app.post("/clients/<int:client_id>/equipment")
     @login_required
@@ -976,7 +1163,7 @@ def register_routes(app: Flask) -> None:
 
         if not name:
             flash("Equipment name is required.", "danger")
-            return _redirect_back_to_dashboard()
+            return _redirect_back_to_dashboard("network")
 
         installed_on_value = None
         if installed_on_raw:
@@ -984,7 +1171,7 @@ def register_routes(app: Flask) -> None:
                 installed_on_value = datetime.strptime(installed_on_raw, "%Y-%m-%d").date()
             except ValueError:
                 flash("Please use the YYYY-MM-DD format for install dates.", "danger")
-                return _redirect_back_to_dashboard()
+                return _redirect_back_to_dashboard("network")
 
         equipment = Equipment(
             client_id=client.id,
@@ -998,7 +1185,7 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         flash(f"Equipment added for {client.name}.", "success")
-        return _redirect_back_to_dashboard()
+        return _redirect_back_to_dashboard("network")
 
     @app.post("/equipment/<int:equipment_id>/update")
     @login_required
@@ -1012,7 +1199,7 @@ def register_routes(app: Flask) -> None:
 
         if not name:
             flash("Equipment name is required.", "danger")
-            return _redirect_back_to_dashboard()
+            return _redirect_back_to_dashboard("network")
 
         installed_on_value = None
         if installed_on_raw:
@@ -1020,7 +1207,7 @@ def register_routes(app: Flask) -> None:
                 installed_on_value = datetime.strptime(installed_on_raw, "%Y-%m-%d").date()
             except ValueError:
                 flash("Please use the YYYY-MM-DD format for install dates.", "danger")
-                return _redirect_back_to_dashboard()
+                return _redirect_back_to_dashboard("network")
 
         equipment.name = name
         equipment.model = model
@@ -1030,7 +1217,7 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         flash("Equipment updated.", "success")
-        return _redirect_back_to_dashboard()
+        return _redirect_back_to_dashboard("network")
 
     @app.post("/equipment/<int:equipment_id>/delete")
     @login_required
@@ -1039,7 +1226,7 @@ def register_routes(app: Flask) -> None:
         db.session.delete(equipment)
         db.session.commit()
         flash("Equipment removed.", "info")
-        return _redirect_back_to_dashboard()
+        return _redirect_back_to_dashboard("network")
 
     @app.post("/tickets/<int:ticket_id>/update")
     @login_required
@@ -1050,7 +1237,7 @@ def register_routes(app: Flask) -> None:
 
         if status_value not in TICKET_STATUS_OPTIONS:
             flash("Unknown ticket status.", "danger")
-            return _redirect_back_to_dashboard()
+            return _redirect_back_to_dashboard("support")
 
         ticket.status = status_value
         ticket.resolution_notes = resolution_notes
@@ -1058,7 +1245,7 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         flash("Ticket updated.", "success")
-        return _redirect_back_to_dashboard()
+        return _redirect_back_to_dashboard("support")
 
     @app.post("/tickets/<int:ticket_id>/delete")
     @login_required
@@ -1067,7 +1254,7 @@ def register_routes(app: Flask) -> None:
         db.session.delete(ticket)
         db.session.commit()
         flash("Ticket removed.", "info")
-        return _redirect_back_to_dashboard()
+        return _redirect_back_to_dashboard("support")
 
     @app.post("/navigation/add")
     @login_required
@@ -1078,7 +1265,7 @@ def register_routes(app: Flask) -> None:
 
         if not label or not url:
             flash("Navigation label and URL are required.", "danger")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("dashboard", section="navigation"))
 
         max_position = db.session.query(db.func.max(NavigationItem.position)).scalar() or 0
         item = NavigationItem(
@@ -1090,7 +1277,7 @@ def register_routes(app: Flask) -> None:
         db.session.add(item)
         db.session.commit()
         flash("Navigation link added.", "success")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("dashboard", section="navigation"))
 
     @app.post("/navigation/<int:item_id>/update")
     @login_required
@@ -1102,14 +1289,14 @@ def register_routes(app: Flask) -> None:
 
         if not label or not url:
             flash("Navigation label and URL are required.", "danger")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("dashboard", section="navigation"))
 
         item.label = label
         item.url = url
         item.open_in_new_tab = open_in_new_tab
         db.session.commit()
         flash("Navigation link updated.", "success")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("dashboard", section="navigation"))
 
     @app.post("/navigation/<int:item_id>/delete")
     @login_required
@@ -1119,7 +1306,7 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
         resequence_navigation_positions()
         flash("Navigation link removed.", "info")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("dashboard", section="navigation"))
 
     @app.post("/navigation/<int:item_id>/move")
     @login_required
@@ -1127,7 +1314,7 @@ def register_routes(app: Flask) -> None:
         direction = request.form.get("direction")
         if direction not in {"up", "down"}:
             flash("Unknown navigation action.", "danger")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("dashboard", section="navigation"))
 
         navigation_items = NavigationItem.query.order_by(NavigationItem.position.asc()).all()
         index_lookup = {item.id: idx for idx, item in enumerate(navigation_items)}
@@ -1140,7 +1327,7 @@ def register_routes(app: Flask) -> None:
 
         if target_index < 0 or target_index >= len(navigation_items):
             flash("Navigation link already at the edge.", "info")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("dashboard", section="navigation"))
 
         navigation_items[current_index], navigation_items[target_index] = (
             navigation_items[target_index],
@@ -1152,7 +1339,7 @@ def register_routes(app: Flask) -> None:
 
         db.session.commit()
         flash("Navigation order updated.", "success")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("dashboard", section="navigation"))
 
     @app.post("/branding/upload")
     @login_required
@@ -1162,11 +1349,11 @@ def register_routes(app: Flask) -> None:
 
         if asset_type not in BRANDING_ASSET_TYPES:
             flash("Unknown branding asset type.", "danger")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("dashboard", section="branding"))
 
         if not file or not file.filename:
             flash("Please choose a file to upload.", "warning")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("dashboard", section="branding"))
 
         filename = secure_filename(file.filename)
         extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -1174,7 +1361,7 @@ def register_routes(app: Flask) -> None:
         if extension not in ALLOWED_BRANDING_EXTENSIONS:
             allowed = ", ".join(sorted(ALLOWED_BRANDING_EXTENSIONS))
             flash(f"Unsupported branding file type. Allowed formats: {allowed}.", "danger")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("dashboard", section="branding"))
 
         upload_folder = Path(app.config["BRANDING_UPLOAD_FOLDER"])
         os.makedirs(upload_folder, exist_ok=True)
@@ -1201,7 +1388,7 @@ def register_routes(app: Flask) -> None:
 
         db.session.commit()
         flash(f"{BRANDING_ASSET_TYPES[asset_type]['label']} updated.", "success")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("dashboard", section="branding"))
 
     @app.get("/branding/<asset_type>")
     def branding_file(asset_type: str):
@@ -1239,7 +1426,13 @@ def register_routes(app: Flask) -> None:
         client.notes = notes or None
         db.session.commit()
         flash("Client updated successfully.", "success")
-        return redirect(url_for("dashboard", status=request.args.get("status")))
+        return redirect(
+            url_for(
+                "dashboard",
+                status=request.args.get("status"),
+                section=request.args.get("section", "customers"),
+            )
+        )
 
     @app.post("/clients/<int:client_id>/delete")
     @login_required
@@ -1248,7 +1441,13 @@ def register_routes(app: Flask) -> None:
         db.session.delete(client)
         db.session.commit()
         flash("Client removed.", "info")
-        return redirect(url_for("dashboard", status=request.args.get("status")))
+        return redirect(
+            url_for(
+                "dashboard",
+                status=request.args.get("status"),
+                section=request.args.get("section", "customers"),
+            )
+        )
 
 
 def resequence_navigation_positions() -> None:

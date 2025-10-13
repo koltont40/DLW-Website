@@ -1,39 +1,51 @@
 {% extends "base.html" %}
-{% block title %}Client Signup | DIXIELAND WIRELESS LLC{% endblock %}
+{% block title %}Sign Up | DIXIELAND WIRELESS LLC{% endblock %}
 {% block content %}
 <section class="form-section">
-  <h1>Client Intake Form</h1>
-  <p class="lead">Tell us about your team so we can match you with the right consultant.</p>
-  <form class="card form-card" method="post" action="{{ url_for('signup') }}">
-    <div class="form-grid">
-      <label>
-        Full Name
-        <input type="text" name="name" placeholder="Alex Johnson" required />
-      </label>
-      <label>
-        Email Address
-        <input type="email" name="email" placeholder="alex@example.com" required />
-      </label>
-      <label>
-        Company
-        <input type="text" name="company" placeholder="DixieLand Wireless LLC" />
-      </label>
-      <label>
-        Project Type
-        <select name="project_type">
-          <option value="">Select an option</option>
-          <option>Workflow Automation</option>
-          <option>Client Portal Build</option>
-          <option>Data & Reporting</option>
-          <option>Operations Strategy</option>
-        </select>
-      </label>
-    </div>
-    <label class="full-width">
-      Notes
-      <textarea name="notes" rows="5" placeholder="Share goals, timeline, and key stakeholders."></textarea>
+  <h1>Sign up for DIXIELAND WIRELESS LLC service</h1>
+  <p class="lead">
+    Tell us about your location and create a secure portal password so we can activate blazing-fast WISP internet and
+    crystal-clear phone service for your home or business.
+  </p>
+  <form class="card two-column" method="post" action="{{ url_for('signup') }}">
+    <label>
+      Full name
+      <input type="text" name="name" placeholder="Alex Johnson" required />
     </label>
-    <button class="button primary" type="submit">Submit Application</button>
+    <label>
+      Email address
+      <input type="email" name="email" placeholder="alex@example.com" required />
+    </label>
+    <label>
+      Company (optional)
+      <input type="text" name="company" placeholder="DIXIELAND WIRELESS LLC" />
+    </label>
+    <label>
+      Services
+      <select name="service_plan">
+        <option value="">Select a service</option>
+        {% for offering in service_offerings %}
+        <option value="{{ offering }}">{{ offering }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Portal password
+      <input type="password" name="password" minlength="8" placeholder="Create a secure password" required />
+    </label>
+    <label>
+      Confirm password
+      <input type="password" name="confirm_password" minlength="8" placeholder="Re-enter password" required />
+    </label>
+    <label class="full-width">
+      Installation notes
+      <textarea
+        name="notes"
+        rows="5"
+        placeholder="Tell us about your location, desired install date, or special phone requirements."
+      ></textarea>
+    </label>
+    <button class="button primary" type="submit">Complete signup</button>
   </form>
 </section>
 {% endblock %}

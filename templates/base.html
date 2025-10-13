@@ -22,7 +22,12 @@
         </a>
         <nav class="nav-links">
           {% for item in navigation_items %}
-          <a href="{{ item.url }}" {% if item.open_in_new_tab %}target="_blank" rel="noopener"{% endif %}>{{ item.label }}</a>
+          <a
+            class="nav-link {% if item.label|lower == 'sign up' %}nav-cta{% endif %}"
+            href="{{ item.url }}"
+            {% if item.open_in_new_tab %}target="_blank" rel="noopener"{% endif %}
+            >{{ item.label }}</a
+          >
           {% endfor %}
         </nav>
       </div>
@@ -47,7 +52,7 @@
       <div class="container footer-content">
         <p>&copy; {{ current_year | default(2024) }} DIXIELAND WIRELESS LLC. All rights reserved.</p>
         <div class="footer-links">
-          <a href="{{ url_for('signup') }}">Become a client</a>
+          <a href="{{ url_for('signup') }}">Start signup</a>
           <a class="admin-login" href="{{ url_for('login') }}">Admin</a>
         </div>
       </div>

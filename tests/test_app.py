@@ -63,19 +63,24 @@ def test_signup_creates_client_record(app, client):
         "name": "Alice Smith",
         "email": "alice@example.com",
         "company": "Acme",
-        "project_type": "Website redesign",
+        "service_plan": "Wireless Internet (WISP)",
         "notes": "Interested in onboarding next month.",
+        "password": "SecurePass123",
+        "confirm_password": "SecurePass123",
     }
 
     response = client.post("/signup", data=form_data, follow_redirects=True)
 
     assert response.status_code == 200
-    assert b"Thanks for signing up" in response.data
+    assert b"Account created!" in response.data
+    assert b"Billing History" in response.data
 
     with app.app_context():
         client_record = Client.query.filter_by(email="alice@example.com").first()
         assert client_record is not None
         assert client_record.name == "Alice Smith"
+        assert client_record.project_type == "Wireless Internet (WISP)"
+        assert client_record.portal_password_hash is not None
 
 
 def test_dashboard_requires_login(client):
@@ -95,8 +100,47 @@ def test_admin_can_login_and_view_dashboard(client):
     assert b"Welcome back!" in login_response.data
     assert b"Admin Control Center" in login_response.data
     assert b"Operations Snapshot" in login_response.data
-    assert b"Header Navigation" in login_response.data
-    assert b"Branding Assets" in login_response.data
+
+    navigation_response = client.get("/dashboard?section=navigation", follow_redirects=True)
+    assert navigation_response.status_code == 200
+    assert b"Header Navigation" in navigation_response.data
+
+    branding_response = client.get("/dashboard?section=branding", follow_redirects=True)
+    assert branding_response.status_code == 200
+    assert b"Branding Assets" in branding_response.data
+
+
+def test_admin_can_add_customer_via_dashboard(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/clients",
+        query_string={"section": "customers"},
+        data={
+            "name": "Portal Admin",
+            "email": "portaladmin@example.com",
+            "company": "Portal Test Co",
+            "service_plan": "Phone Service",
+            "status": "Active",
+            "notes": "Added from admin dashboard.",
+            "password": "AdminPass123",
+            "confirm_password": "AdminPass123",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Customer Portal Admin added." in response.data
+
+    with app.app_context():
+        admin_client = Client.query.filter_by(email="portaladmin@example.com").one()
+        assert admin_client.status == "Active"
+        assert admin_client.project_type == "Phone Service"
+        assert admin_client.portal_password_hash is not None
 
 
 def test_admin_can_upload_and_download_documents(app, client):
@@ -253,7 +297,9 @@ def test_admin_can_manage_billing_equipment_and_tickets(app, client):
             "name": "Billing Tester",
             "email": "billing@example.com",
             "company": "Example Co",
-            "project_type": "Installation",
+            "service_plan": "Internet + Phone Bundle",
+            "password": "BundlePass123",
+            "confirm_password": "BundlePass123",
         },
         follow_redirects=True,
     )
@@ -262,7 +308,7 @@ def test_admin_can_manage_billing_equipment_and_tickets(app, client):
 
     with app.app_context():
         customer = Client.query.filter_by(email="billing@example.com").one()
-        assert customer.portal_password_hash is None
+        assert customer.portal_password_hash is not None
         customer_id = customer.id
 
     invoice_create = client.post(
