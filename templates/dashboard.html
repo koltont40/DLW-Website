@@ -23,6 +23,7 @@
       </div>
       <div class="sidebar-group">
         <span class="sidebar-group-label">Site Experience</span>
+        <a class="sidebar-link {% if active_section == 'plans' %}active{% endif %}" href="{{ url_for('dashboard', section='plans') }}">Service Plans</a>
         <a class="sidebar-link {% if active_section == 'navigation' %}active{% endif %}" href="{{ url_for('dashboard', section='navigation') }}">Header Links</a>
         <a class="sidebar-link {% if active_section == 'branding' %}active{% endif %}" href="{{ url_for('dashboard', section='branding') }}">Branding</a>
         <a class="sidebar-link {% if active_section == 'blog' %}active{% endif %}" href="{{ url_for('dashboard', section='blog') }}">Blog</a>
@@ -856,6 +857,101 @@
       {% else %}
       <p class="subtle">Once tickets arrive they'll appear organized here for easy follow-up.</p>
       {% endif %}
+    </section>
+    {% elif active_section == 'plans' %}
+    <section class="card" id="plans">
+      <header class="section-header">
+        <div>
+          <h2>Service Plans</h2>
+          <p class="subtle">Curate residential and business offerings that appear on the public site and signup flow.</p>
+        </div>
+      </header>
+      <datalist id="plan-category-suggestions">
+        <option value="Residential"></option>
+        <option value="Business"></option>
+      </datalist>
+      <form class="plan-create-form" method="post" action="{{ url_for('create_service_plan_admin', section='plans') }}">
+        <div class="field-grid">
+          <label>
+            Plan name
+            <input type="text" name="name" placeholder="Wireless Internet" required />
+          </label>
+          <label>
+            Category
+            <input type="text" name="category" value="Residential" list="plan-category-suggestions" required />
+          </label>
+          <label>
+            Price (USD/month)
+            <input type="text" name="price" placeholder="69.99" required />
+          </label>
+          <label>
+            Advertised speed
+            <input type="text" name="speed" placeholder="Up to 150 Mbps" />
+          </label>
+        </div>
+        <label>
+          Description
+          <textarea name="description" rows="3" placeholder="Summarize who this plan is perfect for."></textarea>
+        </label>
+        <label>
+          Features (one per line)
+          <textarea name="features" rows="4" placeholder="Unlimited data&#10;Managed Wi-Fi gateway"></textarea>
+        </label>
+        <div class="form-actions">
+          <button class="button primary" type="submit">Add plan</button>
+        </div>
+      </form>
+      <div class="plans-management">
+        {% if service_plans_by_category %}
+        {% for category, plans in service_plans_by_category %}
+        <article class="plans-category-card card">
+          <header>
+            <h3>{{ category }} Plans</h3>
+            <p class="subtle">Keep {{ category|lower }} subscribers informed with current pricing and benefits.</p>
+          </header>
+          {% for plan in plans %}
+          <article class="plan-admin-card">
+            <form class="stacked-form" method="post" action="{{ url_for('update_service_plan_admin', plan_id=plan.id, section='plans') }}">
+              <div class="field-grid">
+                <label>
+                  Plan name
+                  <input type="text" name="name" value="{{ plan.name }}" required />
+                </label>
+                <label>
+                  Category
+                  <input type="text" name="category" value="{{ plan.category }}" list="plan-category-suggestions" required />
+                </label>
+                <label>
+                  Price (USD/month)
+                  <input type="text" name="price" value="{{ plan.price_cents|cents_to_dollars }}" required />
+                </label>
+                <label>
+                  Advertised speed
+                  <input type="text" name="speed" value="{{ plan.speed or '' }}" />
+                </label>
+              </div>
+              <label>
+                Description
+                <textarea name="description" rows="3">{{ plan.description or '' }}</textarea>
+              </label>
+              <label>
+                Features (one per line)
+                <textarea name="features" rows="4">{{ plan.feature_list | join('\n') }}</textarea>
+              </label>
+              <div class="form-actions">
+                <button class="button primary" type="submit">Save changes</button>
+                <button class="button danger" type="submit" form="delete-plan-{{ plan.id }}" onclick="return confirm('Delete this plan?');">Delete</button>
+              </div>
+            </form>
+            <form id="delete-plan-{{ plan.id }}" class="inline-form" method="post" action="{{ url_for('delete_service_plan_admin', plan_id=plan.id, section='plans') }}"></form>
+          </article>
+          {% endfor %}
+        </article>
+        {% endfor %}
+        {% else %}
+        <p class="subtle">No plans are available yet—add one to get started.</p>
+        {% endif %}
+      </div>
     </section>
     {% elif active_section == 'navigation' %}
     <section class="card" id="navigation">

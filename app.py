@@ -1,6 +1,7 @@
 import os
 import secrets
 import string
+from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -25,6 +26,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from sqlalchemy import inspect, or_, text
+from sqlalchemy.exc import IntegrityError
 
 load_dotenv()
 
@@ -100,11 +102,42 @@ class Client(db.Model):
         return f"<Client {self.email}>"
 
 
+class ServicePlan(db.Model):
+    __tablename__ = "service_plans"
+
+    id = db.Column(db.Integer, primary_key=True)
+    category = db.Column(db.String(50), nullable=False, default="Residential")
+    name = db.Column(db.String(120), nullable=False, unique=True)
+    price_cents = db.Column(db.Integer, nullable=False, default=0)
+    speed = db.Column(db.String(120))
+    description = db.Column(db.Text)
+    features_text = db.Column(db.Text)
+    position = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    @property
+    def feature_list(self) -> list[str]:
+        if not self.features_text:
+            return []
+        return [line.strip() for line in self.features_text.splitlines() if line.strip()]
+
+    def set_features_from_text(self, raw_text: str) -> None:
+        features = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        self.features_text = "\n".join(features) if features else None
+
+    def __repr__(self) -> str:
+        return f"<ServicePlan {self.name} ({self.category})>"
+
+
 STATUS_OPTIONS = ["New", "In Review", "Active", "On Hold", "Archived"]
 
-SERVICE_PLANS = [
+DEFAULT_SERVICE_PLANS = [
     {
         "name": "Wireless Internet (WISP)",
+        "category": "Residential",
         "price_cents": 6999,
         "speed": "Up to 150 Mbps",
         "description": "Reliable fixed wireless connectivity ideal for streaming, smart homes, and everyday browsing.",
@@ -116,6 +149,7 @@ SERVICE_PLANS = [
     },
     {
         "name": "Phone Service",
+        "category": "Residential",
         "price_cents": 2999,
         "speed": "Digital voice",
         "description": "Crystal clear home and small business voice with enhanced emergency calling.",
@@ -127,6 +161,7 @@ SERVICE_PLANS = [
     },
     {
         "name": "Internet + Phone Bundle",
+        "category": "Residential",
         "price_cents": 9499,
         "speed": "Up to 150 Mbps + Digital voice",
         "description": "Best value bundle for households that want fast wireless internet and dependable phone service together.",
@@ -136,9 +171,19 @@ SERVICE_PLANS = [
             "Priority repair dispatch",
         ],
     },
+    {
+        "name": "Business Wireless Pro",
+        "category": "Business",
+        "price_cents": 15999,
+        "speed": "Up to 300 Mbps",
+        "description": "Enterprise-grade fixed wireless with static IP availability and guaranteed response times.",
+        "features": [
+            "Managed dual-WAN edge router",
+            "Static IP options and VLAN support",
+            "24/7 priority NOC escalation",
+        ],
+    },
 ]
-
-SERVICE_OFFERINGS = [plan["name"] for plan in SERVICE_PLANS]
 
 LEGAL_DOCUMENT_TYPES = {
     "aup": {
@@ -436,6 +481,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         db.create_all()
         ensure_client_portal_fields()
         ensure_default_navigation()
+        ensure_service_plans_seeded()
         ensure_snmp_configuration()
         ensure_down_detector_configuration()
 
@@ -450,6 +496,7 @@ def init_db() -> None:
         db.create_all()
         ensure_client_portal_fields()
         ensure_default_navigation()
+        ensure_service_plans_seeded()
         ensure_snmp_configuration()
         ensure_down_detector_configuration()
 
@@ -561,6 +608,37 @@ def ensure_default_navigation() -> None:
 
     if changed:
         db.session.commit()
+
+
+def ensure_service_plans_seeded() -> None:
+    if ServicePlan.query.count() > 0:
+        return
+
+    position = 0
+    for plan_data in DEFAULT_SERVICE_PLANS:
+        position += 1
+        plan = ServicePlan(
+            name=plan_data["name"],
+            category=plan_data.get("category", "Residential"),
+            price_cents=plan_data.get("price_cents", 0),
+            speed=plan_data.get("speed"),
+            description=plan_data.get("description"),
+            position=position,
+        )
+        plan.set_features_from_text("\n".join(plan_data.get("features", [])))
+        db.session.add(plan)
+
+    db.session.commit()
+
+
+def get_service_offerings() -> list[str]:
+    plans = (
+        ServicePlan.query.order_by(ServicePlan.position.asc(), ServicePlan.id.asc()).all()
+    )
+    if plans:
+        return [plan.name for plan in plans]
+
+    return [plan["name"] for plan in DEFAULT_SERVICE_PLANS]
 
 
 def ensure_client_portal_fields() -> None:
@@ -791,6 +869,8 @@ def register_routes(app: Flask) -> None:
             },
         ]
 
+        service_offerings = get_service_offerings()
+
         return {
             "status_options": STATUS_OPTIONS,
             "current_year": utcnow().year,
@@ -800,7 +880,7 @@ def register_routes(app: Flask) -> None:
             "branding_asset_types": BRANDING_ASSET_TYPES,
             "invoice_status_options": INVOICE_STATUS_OPTIONS,
             "ticket_status_options": TICKET_STATUS_OPTIONS,
-            "service_offerings": SERVICE_OFFERINGS,
+            "service_offerings": service_offerings,
             "appointment_status_options": APPOINTMENT_STATUS_OPTIONS,
             "contact_email": contact_email,
             "support_links": support_links,
@@ -813,7 +893,24 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/services")
     def service_plans():
-        return render_template("service_plans.html", plans=SERVICE_PLANS)
+        plans = (
+            ServicePlan.query.order_by(
+                ServicePlan.category.asc(), ServicePlan.position.asc(), ServicePlan.id.asc()
+            ).all()
+        )
+        plans_by_category: dict[str, list[ServicePlan]] = defaultdict(list)
+        for plan in plans:
+            plans_by_category[plan.category].append(plan)
+
+        category_order = {"Residential": 0, "Business": 1}
+        ordered_categories = sorted(
+            plans_by_category.items(),
+            key=lambda item: (category_order.get(item[0], len(category_order)), item[0]),
+        )
+
+        return render_template(
+            "service_plans.html", plans_by_category=ordered_categories
+        )
 
     @app.route("/about")
     def about():
@@ -1177,6 +1274,7 @@ def register_routes(app: Flask) -> None:
             "branding",
             "legal",
             "blog",
+            "plans",
         }
         if active_section not in valid_sections:
             active_section = "overview"
@@ -1370,6 +1468,21 @@ def register_routes(app: Flask) -> None:
 
         blog_posts = BlogPost.query.order_by(BlogPost.created_at.desc()).all()
 
+        service_plans = (
+            ServicePlan.query.order_by(
+                ServicePlan.category.asc(), ServicePlan.position.asc(), ServicePlan.id.asc()
+            ).all()
+        )
+        plans_by_category = defaultdict(list)
+        for plan in service_plans:
+            plans_by_category[plan.category].append(plan)
+
+        category_order = {"Residential": 0, "Business": 1}
+        ordered_plan_categories = sorted(
+            plans_by_category.items(),
+            key=lambda item: (category_order.get(item[0], len(category_order)), item[0]),
+        )
+
         return render_template(
             "dashboard.html",
             clients=clients,
@@ -1403,6 +1516,8 @@ def register_routes(app: Flask) -> None:
             snmp_settings=snmp_settings,
             blog_posts=blog_posts,
             down_detector_config=down_detector_config,
+            service_plans=service_plans,
+            service_plans_by_category=ordered_plan_categories,
         )
 
     @app.post("/documents/upload")
@@ -2028,6 +2143,131 @@ def register_routes(app: Flask) -> None:
 
         return _redirect_back_to_dashboard("support")
 
+    @app.post("/service-plans")
+    @login_required
+    def create_service_plan_admin():
+        name = request.form.get("name", "").strip()
+        category = request.form.get("category", "Residential").strip()
+        price_raw = request.form.get("price", "").strip()
+        speed = request.form.get("speed", "").strip() or None
+        description = request.form.get("description", "").strip() or None
+        features_raw = request.form.get("features", "")
+
+        if not name:
+            flash("Service plan name is required.", "danger")
+            return _redirect_back_to_dashboard("plans")
+
+        if not price_raw:
+            flash("Provide a monthly price for the service plan.", "danger")
+            return _redirect_back_to_dashboard("plans")
+
+        normalized_category = category or "Residential"
+        normalized_category = normalized_category.strip() or "Residential"
+        normalized_category = normalized_category.title()
+
+        normalized_price = price_raw.replace("$", "").replace(",", "")
+
+        try:
+            price_decimal = Decimal(normalized_price)
+        except InvalidOperation:
+            flash("Enter a valid monthly price such as 59.99.", "danger")
+            return _redirect_back_to_dashboard("plans")
+
+        price_cents = int(price_decimal * 100)
+        if price_cents < 0:
+            flash("Plan pricing must be zero or greater.", "danger")
+            return _redirect_back_to_dashboard("plans")
+
+        next_position = (
+            db.session.query(db.func.max(ServicePlan.position)).scalar() or 0
+        ) + 1
+
+        plan = ServicePlan(
+            name=name,
+            category=normalized_category,
+            price_cents=price_cents,
+            speed=speed,
+            description=description,
+            position=next_position,
+        )
+        plan.set_features_from_text(features_raw)
+        db.session.add(plan)
+
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash("A service plan with that name already exists.", "danger")
+            return _redirect_back_to_dashboard("plans")
+
+        flash("Service plan created.", "success")
+        return _redirect_back_to_dashboard("plans")
+
+    @app.post("/service-plans/<int:plan_id>/update")
+    @login_required
+    def update_service_plan_admin(plan_id: int):
+        plan = ServicePlan.query.get_or_404(plan_id)
+
+        name = request.form.get("name", "").strip()
+        category = request.form.get("category", plan.category).strip()
+        price_raw = request.form.get("price", "").strip()
+        speed = request.form.get("speed", "").strip() or None
+        description = request.form.get("description", "").strip() or None
+        features_raw = request.form.get("features", "")
+
+        if not name:
+            flash("Service plan name is required.", "danger")
+            return _redirect_back_to_dashboard("plans")
+
+        if not price_raw:
+            flash("Provide a monthly price for the service plan.", "danger")
+            return _redirect_back_to_dashboard("plans")
+
+        normalized_category = category or plan.category
+        normalized_category = normalized_category.strip() or plan.category
+        normalized_category = normalized_category.title()
+
+        normalized_price = price_raw.replace("$", "").replace(",", "")
+
+        try:
+            price_decimal = Decimal(normalized_price)
+        except InvalidOperation:
+            flash("Enter a valid monthly price such as 59.99.", "danger")
+            return _redirect_back_to_dashboard("plans")
+
+        price_cents = int(price_decimal * 100)
+        if price_cents < 0:
+            flash("Plan pricing must be zero or greater.", "danger")
+            return _redirect_back_to_dashboard("plans")
+
+        plan.name = name
+        plan.category = normalized_category
+        plan.price_cents = price_cents
+        plan.speed = speed
+        plan.description = description
+        plan.set_features_from_text(features_raw)
+        plan.updated_at = utcnow()
+
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash("A service plan with that name already exists.", "danger")
+            return _redirect_back_to_dashboard("plans")
+
+        flash("Service plan updated.", "success")
+        return _redirect_back_to_dashboard("plans")
+
+    @app.post("/service-plans/<int:plan_id>/delete")
+    @login_required
+    def delete_service_plan_admin(plan_id: int):
+        plan = ServicePlan.query.get_or_404(plan_id)
+        db.session.delete(plan)
+        db.session.commit()
+        resequence_service_plan_positions()
+        flash("Service plan removed.", "info")
+        return _redirect_back_to_dashboard("plans")
+
     @app.post("/navigation/add")
     @login_required
     def add_navigation_item():
@@ -2300,6 +2540,13 @@ def resequence_navigation_positions() -> None:
     items = NavigationItem.query.order_by(NavigationItem.position.asc()).all()
     for index, item in enumerate(items, start=1):
         item.position = index
+    db.session.commit()
+
+
+def resequence_service_plan_positions() -> None:
+    plans = ServicePlan.query.order_by(ServicePlan.position.asc(), ServicePlan.id.asc()).all()
+    for index, plan in enumerate(plans, start=1):
+        plan.position = index
     db.session.commit()
 
 

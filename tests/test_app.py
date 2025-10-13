@@ -10,6 +10,7 @@ from app import (
     Equipment,
     Invoice,
     Appointment,
+    ServicePlan,
     SNMPConfig,
     DownDetectorConfig,
     NavigationItem,
@@ -58,8 +59,10 @@ def test_index_page_renders(client):
 def test_service_plans_page_lists_offerings(client):
     response = client.get("/services")
     assert response.status_code == 200
+    assert b"Residential Plans" in response.data
     assert b"Wireless Internet (WISP)" in response.data
     assert b"Internet + Phone Bundle" in response.data
+    assert b"Business Wireless Pro" in response.data
 
 
 def test_about_page_highlights_mission(client):
@@ -197,6 +200,66 @@ def test_admin_can_add_customer_via_dashboard(app, client):
         assert admin_client.status == "Active"
         assert admin_client.project_type == "Phone Service"
         assert admin_client.portal_password_hash is not None
+
+
+def test_admin_can_manage_service_plans(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    create_response = client.post(
+        "/service-plans",
+        data={
+            "name": "Business Fiber Elite",
+            "category": "Business",
+            "price": "209.99",
+            "speed": "Up to 1 Gbps",
+            "description": "Symmetric fiber-backed wireless for enterprises.",
+            "features": "24/7 monitoring\nStatic IPs\nPriority install",
+        },
+        follow_redirects=True,
+        query_string={"section": "plans"},
+    )
+
+    assert create_response.status_code == 200
+    assert b"Service plan created." in create_response.data
+
+    with app.app_context():
+        plan = ServicePlan.query.filter_by(name="Business Fiber Elite").one()
+        assert plan.category == "Business"
+        assert plan.price_cents == 20999
+        assert "Static IPs" in plan.feature_list
+
+    update_response = client.post(
+        f"/service-plans/{plan.id}/update",
+        data={
+            "name": "Business Fiber Elite",
+            "category": "Business",
+            "price": "219.99",
+            "speed": "Up to 1 Gbps",
+            "description": "Updated description",
+            "features": "24/7 monitoring\nStatic IPs\nDedicated account team",
+        },
+        follow_redirects=True,
+        query_string={"section": "plans"},
+    )
+
+    assert update_response.status_code == 200
+    assert b"Service plan updated." in update_response.data
+
+    delete_response = client.post(
+        f"/service-plans/{plan.id}/delete",
+        follow_redirects=True,
+        query_string={"section": "plans"},
+    )
+
+    assert delete_response.status_code == 200
+    assert b"Service plan removed." in delete_response.data
+
+    with app.app_context():
+        assert ServicePlan.query.filter_by(name="Business Fiber Elite").first() is None
 
 
 def test_admin_can_upload_and_download_documents(app, client):
