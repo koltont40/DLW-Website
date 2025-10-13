@@ -12,6 +12,7 @@ from app import (
     Appointment,
     SNMPConfig,
     NavigationItem,
+    BlogPost,
     SupportTicket,
     create_app,
     db,
@@ -253,6 +254,123 @@ def test_default_navigation_includes_contact(app):
             for item in NavigationItem.query.order_by(NavigationItem.position.asc()).all()
         ]
         assert "Contact" in labels
+
+
+def test_admin_can_create_blog_post_and_publish(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/blog/posts",
+        data={
+            "title": "Tower Expansion",
+            "summary": "We are lighting up new coverage north of town.",
+            "content": "Crews completed a new sector to boost speeds across the county.",
+            "publish": "on",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Blog post created." in response.data
+
+    with app.app_context():
+        post = BlogPost.query.filter_by(title="Tower Expansion").one()
+        assert post.is_published is True
+        assert post.slug
+        slug = post.slug
+
+    list_response = client.get("/blog")
+    assert list_response.status_code == 200
+    assert b"Tower Expansion" in list_response.data
+
+    detail_response = client.get(f"/blog/{slug}")
+    assert detail_response.status_code == 200
+    assert b"Crews completed a new sector" in detail_response.data
+
+
+def test_blog_draft_hidden_from_public(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    client.post(
+        "/blog/posts",
+        data={
+            "title": "Draft Update",
+            "summary": "Behind-the-scenes prep.",
+            "content": "Technicians are preparing for the next deployment.",
+        },
+        follow_redirects=True,
+    )
+
+    client.get("/logout", follow_redirects=True)
+
+    with app.app_context():
+        draft = BlogPost.query.filter_by(title="Draft Update").one()
+        slug = draft.slug
+        assert draft.is_published is False
+
+    list_response = client.get("/blog")
+    assert list_response.status_code == 200
+    assert b"Draft Update" not in list_response.data
+
+    detail_response = client.get(f"/blog/{slug}")
+    assert detail_response.status_code == 404
+
+
+def test_admin_can_update_blog_post_status(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    client.post(
+        "/blog/posts",
+        data={
+            "title": "Status Check",
+            "summary": "Initial summary",
+            "content": "Initial content",
+            "publish": "on",
+        },
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        post = BlogPost.query.filter_by(title="Status Check").one()
+        post_id = post.id
+        original_slug = post.slug
+
+    update_response = client.post(
+        f"/blog/posts/{post_id}",
+        data={
+            "title": "Status Check Updated",
+            "summary": "Revised summary",
+            "content": "Revised content",
+        },
+        follow_redirects=True,
+    )
+
+    assert update_response.status_code == 200
+    assert b"Blog post updated." in update_response.data
+
+    with app.app_context():
+        updated = BlogPost.query.get(post_id)
+        assert updated.title == "Status Check Updated"
+        assert updated.is_published is False
+        assert updated.published_at is None
+        assert updated.slug != original_slug
+
+    client.get("/logout", follow_redirects=True)
+
+    detail_response = client.get(f"/blog/{updated.slug}")
+    assert detail_response.status_code == 404
 
 
 def test_document_viewer_renders_pdf_inline(app, client):

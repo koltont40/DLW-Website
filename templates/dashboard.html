@@ -25,6 +25,7 @@
         <span class="sidebar-group-label">Site Experience</span>
         <a class="sidebar-link {% if active_section == 'navigation' %}active{% endif %}" href="{{ url_for('dashboard', section='navigation') }}">Header Links</a>
         <a class="sidebar-link {% if active_section == 'branding' %}active{% endif %}" href="{{ url_for('dashboard', section='branding') }}">Branding</a>
+        <a class="sidebar-link {% if active_section == 'blog' %}active{% endif %}" href="{{ url_for('dashboard', section='blog') }}">Blog</a>
         <a class="sidebar-link {% if active_section == 'legal' %}active{% endif %}" href="{{ url_for('dashboard', section='legal') }}">Legal</a>
       </div>
     </nav>
@@ -923,6 +924,95 @@
           </form>
         </article>
         {% endfor %}
+      </div>
+    </section>
+    {% elif active_section == 'blog' %}
+    <section class="card" id="blog">
+      <header class="section-header compact">
+        <div>
+          <h2>Blog Manager</h2>
+          <p class="subtle">Share network updates, local announcements, and service tips with your customers.</p>
+        </div>
+      </header>
+      <form class="stacked-form blog-create-form" method="post" action="{{ url_for('create_blog_post') }}">
+        <h3>Write a new post</h3>
+        <label>
+          Title
+          <input type="text" name="title" placeholder="Example: Network upgrades in Tallassee" required />
+        </label>
+        <label>
+          Summary
+          <textarea name="summary" rows="2" placeholder="Optional teaser that appears on the blog list."></textarea>
+        </label>
+        <label>
+          Content
+          <textarea name="content" rows="6" placeholder="Share the full update for your subscribers." required></textarea>
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="publish" />
+          <span>Publish immediately</span>
+        </label>
+        <div class="blog-admin-actions">
+          <button class="button primary" type="submit">Publish post</button>
+        </div>
+      </form>
+      <div class="blog-admin-list">
+        <h3>Existing posts</h3>
+        {% if blog_posts %}
+        {% for post in blog_posts %}
+        <article class="blog-admin-card">
+          <header class="blog-admin-header">
+            <div>
+              <h4>{{ post.title }}</h4>
+              <p class="subtle">
+                {% if post.is_published %}
+                Published {{ (post.published_at or post.created_at).strftime('%b %d, %Y %I:%M %p') }}
+                {% else %}
+                Draft saved {{ post.updated_at.strftime('%b %d, %Y %I:%M %p') }}
+                {% endif %}
+              </p>
+            </div>
+            <span class="status-pill {% if post.is_published %}status-active{% else %}status-disabled{% endif %}">
+              {% if post.is_published %}Published{% else %}Draft{% endif %}
+            </span>
+          </header>
+          <div class="blog-admin-body">
+            <form class="stacked-form" method="post" action="{{ url_for('update_blog_post', post_id=post.id) }}">
+              <label>
+                Title
+                <input type="text" name="title" value="{{ post.title }}" required />
+              </label>
+              <label>
+                Summary
+                <textarea name="summary" rows="2" placeholder="Optional teaser.">{{ post.summary or '' }}</textarea>
+              </label>
+              <label>
+                Content
+                <textarea name="content" rows="6" required>{{ post.content }}</textarea>
+              </label>
+              <label class="checkbox">
+                <input type="checkbox" name="publish" {% if post.is_published %}checked{% endif %} />
+                <span>Visible on the public blog</span>
+              </label>
+              <div class="blog-admin-actions">
+                <a class="button ghost" href="{{ url_for('blog_post', slug=post.slug) }}" target="_blank" rel="noopener">View</a>
+                <button class="button secondary" type="submit">Save changes</button>
+              </div>
+            </form>
+            <form
+              class="inline-form"
+              method="post"
+              action="{{ url_for('delete_blog_post', post_id=post.id) }}"
+              onsubmit="return confirm('Delete this post?');"
+            >
+              <button class="button small danger" type="submit">Delete</button>
+            </form>
+          </div>
+        </article>
+        {% endfor %}
+        {% else %}
+        <p class="subtle">No posts yet. Draft your first update to keep subscribers informed.</p>
+        {% endif %}
       </div>
     </section>
     {% elif active_section == 'legal' %}

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ post.title }} | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<article class="blog-post">
+  <header class="blog-post-header">
+    <p class="blog-date">{{ (post.published_at or post.created_at).strftime('%b %d, %Y') }}</p>
+    <h1>{{ post.title }}</h1>
+    {% if post.summary %}
+    <p class="blog-summary">{{ post.summary }}</p>
+    {% endif %}
+  </header>
+  <div class="blog-post-body">
+    {{ post.content | replace('\n', '<br />') | safe }}
+  </div>
+  <footer class="blog-post-footer">
+    <a class="button ghost" href="{{ url_for('blog') }}">Back to all posts</a>
+    <a class="button" href="mailto:{{ contact_email }}">Contact support</a>
+  </footer>
+</article>
+{% endblock %}

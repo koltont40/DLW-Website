@@ -44,6 +44,26 @@ def generate_account_reference() -> str:
     return f"DLW-{secrets.token_hex(3).upper()}"
 
 
+def generate_unique_slug(title: str, existing_id: int | None = None) -> str:
+    base_slug = secure_filename(title.lower()).strip("-")
+    if not base_slug:
+        base_slug = f"post-{secrets.token_hex(4)}"
+
+    slug = base_slug
+    suffix = 2
+
+    while True:
+        query = BlogPost.query.filter_by(slug=slug)
+        if existing_id is not None:
+            query = query.filter(BlogPost.id != existing_id)
+
+        if query.first() is None:
+            return slug
+
+        slug = f"{base_slug}-{suffix}"
+        suffix += 1
+
+
 class Client(db.Model):
     __tablename__ = "clients"
 
@@ -152,6 +172,7 @@ def get_default_navigation_items() -> list[tuple[str, str, bool]]:
     return [
         ("Sign Up", "/signup", False),
         ("Service Plans", "/services", False),
+        ("Blog", "/blog", False),
         ("About", "/about", False),
         ("Legal", "/legal", False),
         ("Contact", f"mailto:{contact_email}", False),
@@ -336,6 +357,25 @@ class SNMPConfig(db.Model):
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<SNMPConfig host={self.host} port={self.port}>"
+
+
+class BlogPost(db.Model):
+    __tablename__ = "blog_posts"
+
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    slug = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    summary = db.Column(db.String(500))
+    content = db.Column(db.Text, nullable=False)
+    is_published = db.Column(db.Boolean, nullable=False, default=False)
+    published_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<BlogPost {self.slug}>"
 
 
 def create_app(test_config: dict | None = None) -> Flask:
@@ -722,6 +762,24 @@ def register_routes(app: Flask) -> None:
     def about():
         return render_template("about.html")
 
+    @app.route("/blog")
+    def blog():
+        posts = (
+            BlogPost.query.filter_by(is_published=True)
+            .order_by(BlogPost.published_at.desc(), BlogPost.created_at.desc())
+            .all()
+        )
+        return render_template("blog.html", posts=posts)
+
+    @app.route("/blog/<slug>")
+    def blog_post(slug: str):
+        post = BlogPost.query.filter_by(slug=slug).first_or_404()
+
+        if not post.is_published and not session.get("admin_authenticated"):
+            abort(404)
+
+        return render_template("blog_post.html", post=post)
+
     @app.route("/signup", methods=["GET", "POST"])
     def signup():
         selected_plan = request.args.get("plan", "").strip()
@@ -1017,6 +1075,7 @@ def register_routes(app: Flask) -> None:
             "navigation",
             "branding",
             "legal",
+            "blog",
         }
         if active_section not in valid_sections:
             active_section = "overview"
@@ -1207,6 +1266,8 @@ def register_routes(app: Flask) -> None:
         snmp_enabled = bool(snmp_settings.get("host") or app.config.get("SNMP_EMAIL_SENDER"))
         snmp_config = SNMPConfig.query.first()
 
+        blog_posts = BlogPost.query.order_by(BlogPost.created_at.desc()).all()
+
         return render_template(
             "dashboard.html",
             clients=clients,
@@ -1238,6 +1299,7 @@ def register_routes(app: Flask) -> None:
             snmp_enabled=snmp_enabled,
             snmp_config=snmp_config,
             snmp_settings=snmp_settings,
+            blog_posts=blog_posts,
         )
 
     @app.post("/documents/upload")
@@ -1997,6 +2059,80 @@ def register_routes(app: Flask) -> None:
             as_attachment=False,
             download_name=asset_record.original_filename,
         )
+
+    @app.post("/blog/posts")
+    @login_required
+    def create_blog_post():
+        title = request.form.get("title", "").strip()
+        summary = request.form.get("summary", "").strip()
+        content = request.form.get("content", "").strip()
+        publish = request.form.get("publish") == "on"
+
+        if not title or not content:
+            flash("Title and content are required to publish a blog post.", "danger")
+            return redirect(url_for("dashboard", section="blog"))
+
+        slug = generate_unique_slug(title)
+        post = BlogPost(
+            title=title,
+            slug=slug,
+            summary=summary or None,
+            content=content,
+            is_published=publish,
+        )
+
+        if publish:
+            post.published_at = utcnow()
+
+        db.session.add(post)
+        db.session.commit()
+
+        flash("Blog post created.", "success")
+        return redirect(url_for("dashboard", section="blog"))
+
+    @app.post("/blog/posts/<int:post_id>")
+    @login_required
+    def update_blog_post(post_id: int):
+        post = BlogPost.query.get_or_404(post_id)
+
+        title = request.form.get("title", "").strip()
+        summary = request.form.get("summary", "").strip()
+        content = request.form.get("content", "").strip()
+        publish = request.form.get("publish") == "on"
+
+        if not title or not content:
+            flash("Title and content are required to update a blog post.", "danger")
+            return redirect(url_for("dashboard", section="blog"))
+
+        if title != post.title:
+            post.slug = generate_unique_slug(title, existing_id=post.id)
+
+        post.title = title
+        post.summary = summary or None
+        post.content = content
+
+        if publish:
+            post.is_published = True
+            if not post.published_at:
+                post.published_at = utcnow()
+        else:
+            post.is_published = False
+            post.published_at = None
+
+        db.session.commit()
+
+        flash("Blog post updated.", "success")
+        return redirect(url_for("dashboard", section="blog"))
+
+    @app.post("/blog/posts/<int:post_id>/delete")
+    @login_required
+    def delete_blog_post(post_id: int):
+        post = BlogPost.query.get_or_404(post_id)
+        db.session.delete(post)
+        db.session.commit()
+
+        flash("Blog post deleted.", "info")
+        return redirect(url_for("dashboard", section="blog"))
 
     @app.post("/clients/<int:client_id>/update")
     @login_required

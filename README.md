@@ -19,6 +19,7 @@ This project provides a self-hosted client onboarding, billing, and support port
 - **Field Appointments** – Schedule installs or service calls, capture customer responses, and approve reschedules from the admin dashboard.
 - **SNMP Notifications** – Stream appointment updates and on-demand emails to your operations tooling via configurable SNMP traps.
 - **Configurable Contact Details** – Set a single contact email that powers navigation links, portal reminders, and signup confirmations.
+- **Blog Publishing** – Draft, publish, and manage updates from the admin dashboard that surface on the public blog.
 - **One-Command Install** – Run `./install.sh` on Ubuntu 24.04 to provision dependencies, initialize the SQLite database, and start the development server.
 
 ## Quick Start (Ubuntu 24.04)
@@ -55,6 +56,10 @@ Each client can be issued a customer-portal password from the admin dashboard. G
     ├── document_viewer.html # Inline legal viewer
     ├── index.html      # Landing page
     ├── login.html      # Admin login form
+    ├── about.html      # Company story
+    ├── service_plans.html # Public service plans
+    ├── blog.html       # Public blog listing
+    ├── blog_post.html  # Individual blog article
     ├── portal_dashboard.html # Customer portal home
     ├── portal_login.html     # Customer login form
     └── signup.html     # Client signup form
