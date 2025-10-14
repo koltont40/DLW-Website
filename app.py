@@ -127,8 +127,12 @@ class Client(db.Model):
     address = db.Column(db.String(255))
     company = db.Column(db.String(255))
     project_type = db.Column(db.String(120))
+    residential_plan = db.Column(db.String(120))
+    phone_plan = db.Column(db.String(120))
+    business_plan = db.Column(db.String(120))
     notes = db.Column(db.Text)
     status = db.Column(db.String(50), nullable=False, default="New")
+    wifi_router_needed = db.Column(db.Boolean, nullable=False, default=False)
     portal_access_code = db.Column(
         db.String(64), nullable=False, unique=True, default=generate_portal_password
     )
@@ -159,6 +163,21 @@ class Client(db.Model):
 
     def __repr__(self) -> str:
         return f"<Client {self.email}>"
+
+    @property
+    def service_summary(self) -> str | None:
+        selections = [
+            plan
+            for plan in (
+                self.residential_plan,
+                self.phone_plan,
+                self.business_plan,
+            )
+            if plan
+        ]
+        if selections:
+            return ", ".join(selections)
+        return self.project_type
 
 
 class ServicePlan(db.Model):
@@ -256,6 +275,14 @@ DEFAULT_SERVICE_PLANS = [
     },
 ]
 
+PLAN_CATEGORY_ORDER = {"Residential": 0, "Phone Service": 1, "Business": 2}
+
+PLAN_FIELD_DEFINITIONS: list[tuple[str, str, str]] = [
+    ("Residential", "residential_plan", "Residential plan"),
+    ("Phone Service", "phone_plan", "Phone service plan"),
+    ("Business", "business_plan", "Business plan"),
+]
+
 LEGAL_DOCUMENT_TYPES = {
     "aup": {
         "label": "Acceptable Use Policy",
@@ -279,6 +306,14 @@ DOCUMENT_MIME_TYPES = {
     "doc": "application/msword",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
+
+TRUTHY_VALUES = {"1", "true", "yes", "on", "y"}
+
+
+def is_truthy(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in TRUTHY_VALUES
 
 PORTAL_SESSION_KEY = "client_portal_id"
 TECH_SESSION_KEY = "technician_portal_id"
@@ -811,6 +846,56 @@ def ensure_service_plans_seeded() -> None:
         db.session.commit()
 
 
+def get_ordered_service_plan_categories() -> list[tuple[str, list[ServicePlan]]]:
+    plans = (
+        ServicePlan.query.order_by(
+            ServicePlan.category.asc(),
+            ServicePlan.position.asc(),
+            ServicePlan.id.asc(),
+        ).all()
+    )
+    categories: dict[str, list[ServicePlan]] = defaultdict(list)
+    for plan in plans:
+        categories[plan.category].append(plan)
+
+    return sorted(
+        categories.items(),
+        key=lambda item: (
+            PLAN_CATEGORY_ORDER.get(item[0], len(PLAN_CATEGORY_ORDER)),
+            item[0],
+        ),
+    )
+
+
+def build_plan_field_config(
+    preselected_plan: str | None = None,
+) -> list[dict[str, object]]:
+    categorized_plans = {
+        category: plans for category, plans in get_ordered_service_plan_categories()
+    }
+    config: list[dict[str, object]] = []
+    for category, field_name, label in PLAN_FIELD_DEFINITIONS:
+        plans = categorized_plans.get(category)
+        if not plans:
+            continue
+        selected_name = (
+            preselected_plan
+            if preselected_plan
+            and any(plan.name == preselected_plan for plan in plans)
+            else ""
+        )
+        config.append(
+            {
+                "category": category,
+                "field": field_name,
+                "label": label,
+                "plans": plans,
+                "selected": selected_name,
+            }
+        )
+    return config
+
+
 def get_service_offerings() -> list[str]:
     plans = (
         ServicePlan.query.order_by(ServicePlan.position.asc(), ServicePlan.id.asc()).all()
@@ -847,6 +932,22 @@ def ensure_client_portal_fields() -> None:
         if "phone" not in columns:
             connection.execute(
                 text("ALTER TABLE clients ADD COLUMN phone VARCHAR(40)")
+            )
+        if "residential_plan" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN residential_plan VARCHAR(120)")
+            )
+        if "phone_plan" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN phone_plan VARCHAR(120)")
+            )
+        if "business_plan" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN business_plan VARCHAR(120)")
+            )
+        if "wifi_router_needed" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN wifi_router_needed BOOLEAN DEFAULT 0 NOT NULL")
             )
         if "address" not in columns:
             connection.execute(
@@ -1148,24 +1249,9 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/services")
     def service_plans():
-        plans = (
-            ServicePlan.query.order_by(
-                ServicePlan.category.asc(), ServicePlan.position.asc(), ServicePlan.id.asc()
-            ).all()
-        )
-        plans_by_category: dict[str, list[ServicePlan]] = defaultdict(list)
-        for plan in plans:
-            plans_by_category[plan.category].append(plan)
+        ordered_categories = get_ordered_service_plan_categories()
 
-        category_order = {"Residential": 0, "Phone Service": 1, "Business": 2}
-        ordered_categories = sorted(
-            plans_by_category.items(),
-            key=lambda item: (category_order.get(item[0], len(category_order)), item[0]),
-        )
-
-        return render_template(
-            "service_plans.html", plans_by_category=ordered_categories
-        )
+        return render_template("service_plans.html", plans_by_category=ordered_categories)
 
     @app.route("/phone-service")
     def phone_service():
@@ -1252,6 +1338,15 @@ def register_routes(app: Flask) -> None:
             phone = request.form.get("phone", "").strip()
             address = request.form.get("address", "").strip()
             service_plan = request.form.get("service_plan", "").strip()
+            wants_residential = is_truthy(request.form.get("wants_residential"))
+            wants_business = is_truthy(request.form.get("wants_business"))
+            wants_phone = request.form.get("wants_phone", "no").strip().lower() == "yes"
+            wifi_router_needed = (
+                request.form.get("wifi_router_needed", "no").strip().lower() == "yes"
+            )
+            residential_plan = request.form.get("residential_plan", "").strip()
+            phone_plan = request.form.get("phone_plan", "").strip()
+            business_plan = request.form.get("business_plan", "").strip()
             notes = request.form.get("notes", "").strip()
             driver_license_number = request.form.get("driver_license_number", "").strip()
             password = request.form.get("password", "").strip()
@@ -1302,15 +1397,45 @@ def register_routes(app: Flask) -> None:
                 flash("This email address has already been registered.", "warning")
                 return redirect(url_for("signup"))
 
+            if not wants_residential:
+                residential_plan = ""
+            if not wants_business:
+                business_plan = ""
+            if not wants_phone:
+                phone_plan = ""
+
+            if wants_residential and not residential_plan:
+                flash("Select a residential plan to continue.", "danger")
+                return redirect(url_for("signup"))
+
+            if wants_business and not business_plan:
+                flash("Select a business plan to continue.", "danger")
+                return redirect(url_for("signup"))
+
+            if wants_phone and not phone_plan:
+                flash("Select a phone service plan to continue.", "danger")
+                return redirect(url_for("signup"))
+
+            selected_services = [
+                value
+                for value in (residential_plan, phone_plan, business_plan)
+                if value
+            ]
+            plan_summary = ", ".join(selected_services) if selected_services else service_plan
+
             client = Client(
                 name=name,
                 email=email,
                 phone=phone or None,
                 address=address or None,
                 company=company or None,
-                project_type=service_plan or None,
+                project_type=plan_summary or None,
+                residential_plan=residential_plan or None,
+                phone_plan=phone_plan or None,
+                business_plan=business_plan or None,
                 notes=notes or None,
                 driver_license_number=driver_license_number or None,
+                wifi_router_needed=wifi_router_needed,
             )
             client.portal_password_hash = generate_password_hash(password)
             client.portal_password_updated_at = utcnow()
@@ -1327,7 +1452,16 @@ def register_routes(app: Flask) -> None:
             flash("Account created! You're signed in to the customer portal.", "success")
             return redirect(url_for("portal_dashboard"))
 
-        return render_template("signup.html", preselected_plan=selected_plan)
+        plan_field_config = build_plan_field_config(selected_plan)
+        plan_fields = {field["field"]: field for field in plan_field_config}
+        return render_template(
+            "signup.html",
+            preselected_plan=selected_plan,
+            plan_field_config=plan_field_config,
+            residential_field=plan_fields.get("residential_plan"),
+            phone_field=plan_fields.get("phone_plan"),
+            business_field=plan_fields.get("business_plan"),
+        )
 
     @app.route("/thank-you")
     def thank_you():
@@ -1415,6 +1549,16 @@ def register_routes(app: Flask) -> None:
             1 for ticket in tickets if ticket.status in {"Open", "In Progress"}
         )
 
+        selected_services = [
+            plan
+            for plan in (
+                client.residential_plan,
+                client.phone_plan,
+                client.business_plan,
+            )
+            if plan
+        ]
+
         return render_template(
             "portal_dashboard.html",
             client=client,
@@ -1425,6 +1569,7 @@ def register_routes(app: Flask) -> None:
             total_due_cents=total_due_cents,
             upcoming_due_date=upcoming_due_date,
             open_ticket_count=open_ticket_count,
+            selected_services=selected_services,
         )
 
     @app.post("/portal/tickets")
@@ -2071,20 +2216,13 @@ def register_routes(app: Flask) -> None:
 
         blog_posts = BlogPost.query.order_by(BlogPost.created_at.desc()).all()
 
-        service_plans = (
-            ServicePlan.query.order_by(
-                ServicePlan.category.asc(), ServicePlan.position.asc(), ServicePlan.id.asc()
-            ).all()
-        )
-        plans_by_category = defaultdict(list)
-        for plan in service_plans:
-            plans_by_category[plan.category].append(plan)
-
-        category_order = {"Residential": 0, "Phone Service": 1, "Business": 2}
-        ordered_plan_categories = sorted(
-            plans_by_category.items(),
-            key=lambda item: (category_order.get(item[0], len(category_order)), item[0]),
-        )
+        service_plans = ServicePlan.query.order_by(
+            ServicePlan.category.asc(),
+            ServicePlan.position.asc(),
+            ServicePlan.id.asc(),
+        ).all()
+        ordered_plan_categories = get_ordered_service_plan_categories()
+        plan_field_config = build_plan_field_config()
 
         return render_template(
             "dashboard.html",
@@ -2122,6 +2260,7 @@ def register_routes(app: Flask) -> None:
             down_detector_config=down_detector_config,
             service_plans=service_plans,
             service_plans_by_category=ordered_plan_categories,
+            plan_field_config=plan_field_config,
             recent_install_photos=recent_install_photos,
             install_photo_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
             field_requirements=field_requirements,
@@ -2290,12 +2429,18 @@ def register_routes(app: Flask) -> None:
         phone = request.form.get("phone", "").strip()
         address = request.form.get("address", "").strip()
         service_plan = request.form.get("service_plan", "").strip()
+        residential_plan = request.form.get("residential_plan", "").strip()
+        phone_plan = request.form.get("phone_plan", "").strip()
+        business_plan = request.form.get("business_plan", "").strip()
         status_value = request.form.get("status", "New").strip() or "New"
         notes = request.form.get("notes", "").strip()
         driver_license_number = request.form.get("driver_license_number", "").strip()
         password = request.form.get("password", "").strip()
         confirm_password = request.form.get("confirm_password", "").strip()
         verification_file = request.files.get("verification_photo")
+        wifi_router_needed = (
+            request.form.get("wifi_router_needed", "no").strip().lower() == "yes"
+        )
 
         if not name or not email:
             flash("Customer name and email are required.", "danger")
@@ -2323,16 +2468,27 @@ def register_routes(app: Flask) -> None:
             flash("Upload a JPG, PNG, HEIC, or PDF file for verification.", "danger")
             return _redirect_back_to_dashboard("customers")
 
+        selected_services = [
+            value
+            for value in (residential_plan, phone_plan, business_plan)
+            if value
+        ]
+        plan_summary = ", ".join(selected_services) if selected_services else service_plan
+
         client = Client(
             name=name,
             email=email,
             phone=phone or None,
             address=address or None,
             company=company or None,
-            project_type=service_plan or None,
+            project_type=plan_summary or None,
+            residential_plan=residential_plan or None,
+            phone_plan=phone_plan or None,
+            business_plan=business_plan or None,
             notes=notes or None,
             status=status_value,
             driver_license_number=driver_license_number or None,
+            wifi_router_needed=wifi_router_needed,
         )
 
         if password:
@@ -3305,6 +3461,7 @@ def register_routes(app: Flask) -> None:
         phone = request.form.get("phone", "").strip()
         address = request.form.get("address", "").strip()
         driver_license_number = request.form.get("driver_license_number", "").strip()
+        wifi_router_value = request.form.get("wifi_router_needed")
 
         if status not in STATUS_OPTIONS:
             abort(400, description="Invalid status value")
@@ -3314,6 +3471,10 @@ def register_routes(app: Flask) -> None:
         client.phone = phone or None
         client.address = address or None
         client.driver_license_number = driver_license_number or None
+        if wifi_router_value is not None:
+            client.wifi_router_needed = (
+                wifi_router_value.strip().lower() == "yes"
+            )
         db.session.commit()
         flash("Client updated successfully.", "success")
         return redirect(

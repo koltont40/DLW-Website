@@ -87,7 +87,7 @@
               </div>
               <div class="status-secondary">
                 <span>{{ customer.status }}</span>
-                <span class="subtle">{{ customer.project_type or 'Service TBD' }}</span>
+                <span class="subtle">{{ customer.service_summary or 'Service TBD' }}</span>
               </div>
             </li>
             {% endfor %}
@@ -228,15 +228,41 @@
           Service address
           <input type="text" name="address" placeholder="123 Main Street, Tallassee, AL" required />
         </label>
-        <label>
-          Service selection
-          <select name="service_plan">
-            <option value="">Select a service</option>
-            {% for offering in service_offerings %}
-            <option value="{{ offering }}">{{ offering }}</option>
+        {% if plan_field_config %}
+        <div class="full-width plan-choice-card">
+          <h3>Service plans</h3>
+          <p class="subtle helper-text">
+            Assign the residential, phone, and business packages tied to this account. Leave any category blank when it's
+            not part of the subscription.
+          </p>
+          <div class="field-grid">
+            {% for field in plan_field_config %}
+            <label>
+              {{ field.label }}
+              <select name="{{ field.field }}">
+                <option value="">No {{ field.category|lower }} plan</option>
+                {% for plan in field.plans %}
+                <option value="{{ plan.name }}">{{ plan.name }}{% if plan.price_cents %} ({{ plan.price_cents|currency }}/mo){% endif %}</option>
+                {% endfor %}
+              </select>
+            </label>
             {% endfor %}
-          </select>
-        </label>
+          </div>
+          <div class="wifi-toggle admin">
+            <span class="field-label">Provide managed Wi-Fi router?</span>
+            <div class="toggle-options">
+              <label class="toggle-option">
+                <input type="radio" name="wifi_router_needed" value="yes" />
+                <span>Yes</span>
+              </label>
+              <label class="toggle-option">
+                <input type="radio" name="wifi_router_needed" value="no" checked />
+                <span>No</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        {% endif %}
         <label>
           Driver's license number
           <input type="text" name="driver_license_number" placeholder="AL-9876543" required />
@@ -317,7 +343,20 @@
               </td>
               <td>{{ client.email }}</td>
               <td><code>{{ client.account_reference }}</code></td>
-              <td>{{ client.project_type or '—' }}</td>
+              <td>
+                {% if client.service_summary %}
+                {{ client.service_summary }}
+                {% else %}
+                —
+                {% endif %}
+                <div class="subtle router-summary">
+                  {% if client.wifi_router_needed %}
+                  Router: Provided by DIXIELAND
+                  {% else %}
+                  Router: Customer supplied
+                  {% endif %}
+                </div>
+              </td>
               <td class="contact-cell">
                 <div class="customer-contact-grid">
                   <label>
@@ -344,6 +383,31 @@
                       form="client-status-{{ client.id }}"
                     />
                   </label>
+                  <div class="full router-toggle">
+                    <span>Managed Wi-Fi router</span>
+                    <div class="toggle-options compact">
+                      <label class="toggle-option small">
+                        <input
+                          type="radio"
+                          name="wifi_router_needed"
+                          value="yes"
+                          form="client-status-{{ client.id }}"
+                          {% if client.wifi_router_needed %}checked{% endif %}
+                        />
+                        <span>Yes</span>
+                      </label>
+                      <label class="toggle-option small">
+                        <input
+                          type="radio"
+                          name="wifi_router_needed"
+                          value="no"
+                          form="client-status-{{ client.id }}"
+                          {% if not client.wifi_router_needed %}checked{% endif %}
+                        />
+                        <span>No</span>
+                      </label>
+                    </div>
+                  </div>
                 </div>
                 <div class="verification-panel">
                   {% if client.verification_photo_filename %}

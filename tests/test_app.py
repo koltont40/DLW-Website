@@ -144,11 +144,16 @@ def test_signup_creates_client_record(app, client):
         "company": "Acme",
         "phone": "334-555-1212",
         "address": "123 Main Street, Tallassee, AL 36078",
-        "service_plan": "Wireless Internet (WISP)",
+        "wants_residential": "yes",
+        "wants_phone": "yes",
+        "residential_plan": "Wireless Internet (WISP)",
+        "phone_plan": "Phone Service",
+        "business_plan": "",
         "notes": "Interested in onboarding next month.",
         "driver_license_number": "AL-1234567",
         "password": "SecurePass123",
         "confirm_password": "SecurePass123",
+        "wifi_router_needed": "yes",
         "verification_photo": (BytesIO(b"fake-id-data"), "id-card.jpg"),
     }
 
@@ -166,13 +171,18 @@ def test_signup_creates_client_record(app, client):
         client_record = Client.query.filter_by(email="alice@example.com").first()
         assert client_record is not None
         assert client_record.name == "Alice Smith"
-        assert client_record.project_type == "Wireless Internet (WISP)"
+        assert client_record.project_type == "Wireless Internet (WISP), Phone Service"
+        assert client_record.residential_plan == "Wireless Internet (WISP)"
+        assert client_record.phone_plan == "Phone Service"
+        assert client_record.business_plan is None
+        assert client_record.service_summary == "Wireless Internet (WISP), Phone Service"
         assert client_record.portal_password_hash is not None
         assert client_record.phone == "334-555-1212"
         assert client_record.address == "123 Main Street, Tallassee, AL 36078"
         assert client_record.driver_license_number == "AL-1234567"
         assert client_record.verification_photo_filename is not None
         assert client_record.verification_photo_uploaded_at is not None
+        assert client_record.wifi_router_needed is True
 
     photo_response = client.get(
         f"/clients/{client_record.id}/verification-photo"
@@ -224,12 +234,15 @@ def test_admin_can_add_customer_via_dashboard(app, client):
             "company": "Portal Test Co",
             "phone": "205-555-8899",
             "address": "500 Service Lane, Montgomery, AL",
-            "service_plan": "Phone Service",
+            "residential_plan": "",
+            "phone_plan": "Phone Service",
+            "business_plan": "Business Wireless Pro",
             "status": "Active",
             "notes": "Added from admin dashboard.",
             "driver_license_number": "AL-7654321",
             "password": "AdminPass123",
             "confirm_password": "AdminPass123",
+            "wifi_router_needed": "yes",
             "verification_photo": (BytesIO(b"admin-id"), "admin-id.png"),
         },
         follow_redirects=True,
@@ -241,12 +254,16 @@ def test_admin_can_add_customer_via_dashboard(app, client):
     with app.app_context():
         admin_client = Client.query.filter_by(email="portaladmin@example.com").one()
         assert admin_client.status == "Active"
-        assert admin_client.project_type == "Phone Service"
+        assert admin_client.project_type == "Phone Service, Business Wireless Pro"
+        assert admin_client.phone_plan == "Phone Service"
+        assert admin_client.business_plan == "Business Wireless Pro"
+        assert admin_client.residential_plan is None
         assert admin_client.portal_password_hash is not None
         assert admin_client.phone == "205-555-8899"
         assert admin_client.address == "500 Service Lane, Montgomery, AL"
         assert admin_client.driver_license_number == "AL-7654321"
         assert admin_client.verification_photo_filename is not None
+        assert admin_client.wifi_router_needed is True
 
     admin_photo_response = client.get(
         f"/clients/{admin_client.id}/verification-photo"

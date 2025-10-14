@@ -65,6 +65,20 @@
               <dt>Driver's license</dt>
               <dd>{{ client.driver_license_number or 'On file with the office' }}</dd>
             </div>
+            <div>
+              <dt>Service plans</dt>
+              <dd>{{ client.service_summary or 'Pending selection' }}</dd>
+            </div>
+            <div>
+              <dt>Wi-Fi router</dt>
+              <dd>
+                {% if client.wifi_router_needed %}
+                Provided by DIXIELAND WIRELESS LLC
+                {% else %}
+                Customer supplied equipment
+                {% endif %}
+              </dd>
+            </div>
           </dl>
         </section>
         <section class="portal-profile-card">
@@ -128,9 +142,12 @@
         <div>
           <h2>Installed Equipment</h2>
           <p class="subtle">Everything DIXIELAND WIRELESS LLC has configured for your service.</p>
+          {% if selected_services %}
+          <p class="subtle">Active plans: {{ selected_services|join(', ') }}</p>
+          {% endif %}
         </div>
       </header>
-      {% if not client.project_type %}
+      {% if not selected_services %}
       <div class="inline-callout">
         <strong>No service plan on file.</strong>
         <p>Contact us to set up your service and schedule an installation.</p>

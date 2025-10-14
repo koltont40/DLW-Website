@@ -39,17 +39,144 @@
         autocomplete="street-address"
       />
     </label>
-    <label>
-      Services
-      <select name="service_plan">
-        <option value="">Select a service</option>
-        {% for offering in service_offerings %}
-        <option value="{{ offering }}" {% if preselected_plan and preselected_plan == offering %}selected{% endif %}>
-          {{ offering }}
-        </option>
-        {% endfor %}
-      </select>
-    </label>
+    {% if residential_field or business_field or phone_field %}
+    <div class="full-width plan-choice-card">
+      <h2>Service preferences</h2>
+      <p class="subtle helper-text">
+        Tell us which connections you need. We'll only show plan choices for the services you select.
+      </p>
+      <div class="plan-toggle-grid">
+        {% if residential_field %}
+        <div class="plan-toggle">
+          <label class="checkbox-toggle">
+            <input
+              type="checkbox"
+              name="wants_residential"
+              value="yes"
+              data-plan-toggle="residential"
+              {% if residential_field.selected %}checked{% endif %}
+            />
+            <span>Residential internet</span>
+          </label>
+          <div
+            class="conditional-plan"
+            data-plan-target="residential"
+            {% if not residential_field.selected %}hidden{% endif %}
+          >
+            <label>
+              <span class="field-label">{{ residential_field.label }}</span>
+              <select
+                name="residential_plan"
+                {% if not residential_field.selected %}disabled{% endif %}
+              >
+                <option value="">Select a residential plan</option>
+                {% for plan in residential_field.plans %}
+                <option value="{{ plan.name }}" {% if residential_field.selected == plan.name %}selected{% endif %}>
+                  {{ plan.name }}{% if plan.price_cents %} ({{ plan.price_cents|currency }}/mo){% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if business_field %}
+        <div class="plan-toggle">
+          <label class="checkbox-toggle">
+            <input
+              type="checkbox"
+              name="wants_business"
+              value="yes"
+              data-plan-toggle="business"
+              {% if business_field.selected %}checked{% endif %}
+            />
+            <span>Business internet</span>
+          </label>
+          <div
+            class="conditional-plan"
+            data-plan-target="business"
+            {% if not business_field.selected %}hidden{% endif %}
+          >
+            <label>
+              <span class="field-label">{{ business_field.label }}</span>
+              <select name="business_plan" {% if not business_field.selected %}disabled{% endif %}>
+                <option value="">Select a business plan</option>
+                {% for plan in business_field.plans %}
+                <option value="{{ plan.name }}" {% if business_field.selected == plan.name %}selected{% endif %}>
+                  {{ plan.name }}{% if plan.price_cents %} ({{ plan.price_cents|currency }}/mo){% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if phone_field %}
+        <div class="plan-toggle">
+          <fieldset class="radio-toggle">
+            <legend>Phone service</legend>
+            <div class="toggle-options">
+              <label class="toggle-option">
+                <input
+                  type="radio"
+                  name="wants_phone"
+                  value="yes"
+                  data-plan-toggle="phone"
+                  {% if phone_field.selected %}checked{% endif %}
+                />
+                <span>Yes</span>
+              </label>
+              <label class="toggle-option">
+                <input
+                  type="radio"
+                  name="wants_phone"
+                  value="no"
+                  data-plan-toggle="phone"
+                  {% if not phone_field.selected %}checked{% endif %}
+                />
+                <span>No</span>
+              </label>
+            </div>
+          </fieldset>
+          <div
+            class="conditional-plan"
+            data-plan-target="phone"
+            {% if not phone_field.selected %}hidden{% endif %}
+          >
+            <label>
+              <span class="field-label">{{ phone_field.label }}</span>
+              <select name="phone_plan" {% if not phone_field.selected %}disabled{% endif %}>
+                <option value="">Select a phone service plan</option>
+                {% for plan in phone_field.plans %}
+                <option value="{{ plan.name }}" {% if phone_field.selected == plan.name %}selected{% endif %}>
+                  {{ plan.name }}{% if plan.price_cents %} ({{ plan.price_cents|currency }}/mo){% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="wifi-toggle">
+        <span class="field-label">Do you need a Wi-Fi router provided by us?</span>
+        <div class="toggle-options">
+          <label class="toggle-option">
+            <input type="radio" name="wifi_router_needed" value="yes" />
+            <span>Yes</span>
+          </label>
+          <label class="toggle-option">
+            <input type="radio" name="wifi_router_needed" value="no" checked />
+            <span>No</span>
+          </label>
+        </div>
+        <p class="subtle helper-text">We can bring a managed router to the install if you'd prefer not to supply one.</p>
+      </div>
+    </div>
+    {% endif %}
     <label>
       Driver's license number
       <input type="text" name="driver_license_number" placeholder="AL-1234567" required />
@@ -95,4 +222,41 @@
     <button class="button primary" type="submit">Complete signup</button>
   </form>
 </section>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const updateVisibility = (targetKey) => {
+      const container = document.querySelector(`[data-plan-target="${targetKey}"]`);
+      if (!container) return;
+      const select = container.querySelector("select");
+      const toggles = document.querySelectorAll(`[data-plan-toggle="${targetKey}"]`);
+      let active = false;
+      toggles.forEach((toggle) => {
+        if (toggle.type === "checkbox" && toggle.checked) {
+          active = true;
+        }
+        if (toggle.type === "radio" && toggle.checked && toggle.value === "yes") {
+          active = true;
+        }
+      });
+      if (active) {
+        container.removeAttribute("hidden");
+        if (select) {
+          select.disabled = false;
+        }
+      } else {
+        container.setAttribute("hidden", "hidden");
+        if (select) {
+          select.value = "";
+          select.disabled = true;
+        }
+      }
+    };
+
+    document.querySelectorAll("[data-plan-toggle]").forEach((toggle) => {
+      const targetKey = toggle.getAttribute("data-plan-toggle");
+      toggle.addEventListener("change", () => updateVisibility(targetKey));
+      updateVisibility(targetKey);
+    });
+  });
+</script>
 {% endblock %}
