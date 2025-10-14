@@ -1550,21 +1550,48 @@
             <p>Pick the primary background color for the public site and dashboard.</p>
           </header>
           <div
-            class="branding-theme-preview"
+            class="branding-theme-preview{% if site_theme.background_image_filename %} has-image{% endif %}"
             style="background: {{ site_theme.background_color }}; color: {{ site_theme.text_color }};"
             aria-hidden="true"
           >
+            {% if site_theme.background_image_filename %}
+            <img
+              class="branding-theme-preview-image"
+              src="{{ url_for('theme_background') }}"
+              alt=""
+              role="presentation"
+            />
+            {% endif %}
             <span class="branding-theme-preview-label">Preview</span>
             <span class="branding-theme-preview-text">DIXIELAND WIRELESS LLC</span>
           </div>
-          <form class="stacked-form" method="post" action="{{ url_for('update_site_theme') }}">
+          <form
+            class="stacked-form"
+            method="post"
+            action="{{ url_for('update_site_theme') }}"
+            enctype="multipart/form-data"
+          >
             <label>
               Background color
               <input type="color" name="background_color" value="{{ site_theme.background_color }}" aria-describedby="theme-color-help" required />
             </label>
             <p class="helper-text" id="theme-color-help">Text automatically adjusts to {{ site_theme.text_color }} for readability.</p>
-            <div class="form-actions">
-              <button class="button secondary" type="submit">Update background</button>
+            <label class="file-input">
+              <span>Background photo</span>
+              <input type="file" name="background_photo" accept="image/*" />
+            </label>
+            <p class="helper-text">
+              {% if site_theme.background_image_filename %}
+              Currently using {{ site_theme.background_image_original or 'the uploaded photo' }}. Upload a new image to replace it.
+              {% else %}
+              Optional: upload a high-resolution photo to cover the site background.
+              {% endif %}
+            </p>
+            <div class="form-actions branding-theme-actions">
+              <button class="button secondary" type="submit">Save background settings</button>
+              {% if site_theme.background_image_filename %}
+              <button class="button link" type="submit" name="remove_background_photo" value="1">Remove photo</button>
+              {% endif %}
             </div>
           </form>
         </article>

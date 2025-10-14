@@ -511,6 +511,8 @@ class SiteTheme(db.Model):
     background_color = db.Column(db.String(7), nullable=False, default="#0e071a")
     text_color = db.Column(db.String(7), nullable=False, default="#f5f3ff")
     muted_color = db.Column(db.String(7), nullable=False, default="#b5a6d8")
+    background_image_filename = db.Column(db.String(255))
+    background_image_original = db.Column(db.String(255))
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<SiteTheme bg={self.background_color} text={self.text_color}>"
@@ -790,6 +792,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         "ADMIN_PASSWORD": os.environ.get("ADMIN_PASSWORD", "admin123"),
         "LEGAL_UPLOAD_FOLDER": str(instance_path / "legal"),
         "BRANDING_UPLOAD_FOLDER": str(instance_path / "branding"),
+        "THEME_UPLOAD_FOLDER": str(instance_path / "theme"),
         "INSTALL_PHOTOS_FOLDER": str(instance_path / "install_photos"),
         "CLIENT_VERIFICATION_FOLDER": str(instance_path / "verification"),
         "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(instance_path / "ticket_attachments"),
@@ -821,6 +824,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         for folder_key in [
             "LEGAL_UPLOAD_FOLDER",
             "BRANDING_UPLOAD_FOLDER",
+            "THEME_UPLOAD_FOLDER",
             "INSTALL_PHOTOS_FOLDER",
             "CLIENT_VERIFICATION_FOLDER",
             "SUPPORT_TICKET_ATTACHMENT_FOLDER",
@@ -839,6 +843,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
         ensure_site_theme()
@@ -859,6 +864,7 @@ def init_db() -> None:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
         ensure_site_theme()
@@ -1281,6 +1287,31 @@ def ensure_support_ticket_priority_field() -> None:
         )
 
 
+def ensure_site_theme_background_fields() -> None:
+    inspector = inspect(db.engine)
+    try:
+        columns = {column["name"] for column in inspector.get_columns("site_theme")}
+    except NoSuchTableError:
+        return
+
+    alterations: list[str] = []
+    if "background_image_filename" not in columns:
+        alterations.append(
+            "ALTER TABLE site_theme ADD COLUMN background_image_filename VARCHAR(255)"
+        )
+    if "background_image_original" not in columns:
+        alterations.append(
+            "ALTER TABLE site_theme ADD COLUMN background_image_original VARCHAR(255)"
+        )
+
+    if not alterations:
+        return
+
+    with db.engine.begin() as connection:
+        for statement in alterations:
+            connection.execute(text(statement))
+
+
 def ensure_snmp_configuration() -> None:
     config = SNMPConfig.query.first()
     if config:
@@ -1348,6 +1379,14 @@ def ensure_site_theme() -> None:
     if theme.muted_color != muted_color:
         theme.muted_color = muted_color
         changed = True
+
+    if theme.background_image_filename:
+        upload_folder = Path(current_app.config["THEME_UPLOAD_FOLDER"])
+        file_path = upload_folder / theme.background_image_filename
+        if not file_path.exists():
+            theme.background_image_filename = None
+            theme.background_image_original = None
+            changed = True
 
     if changed:
         db.session.commit()
@@ -4123,18 +4162,73 @@ def register_routes(app: Flask) -> None:
             flash("Please choose a valid background color.", "danger")
             return redirect(url_for("dashboard", section="branding"))
 
-        text_color, muted_color = derive_theme_palette(normalized)
+        photo_file = request.files.get("background_photo")
+        remove_photo = request.form.get("remove_background_photo") == "1"
+
         theme = SiteTheme.query.first()
         if theme is None:
             theme = SiteTheme()
             db.session.add(theme)
 
+        upload_folder = Path(app.config["THEME_UPLOAD_FOLDER"])
+        os.makedirs(upload_folder, exist_ok=True)
+
+        photo_uploaded = False
+        photo_removed = False
+
+        if photo_file and photo_file.filename:
+            filename = secure_filename(photo_file.filename)
+            extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            if extension not in ALLOWED_BRANDING_EXTENSIONS:
+                allowed = ", ".join(sorted(ALLOWED_BRANDING_EXTENSIONS))
+                flash(
+                    f"Unsupported background image type. Allowed formats: {allowed}.",
+                    "danger",
+                )
+                return redirect(url_for("dashboard", section="branding"))
+
+            stored_name = f"theme_bg_{int(utcnow().timestamp())}.{extension}"
+            file_path = upload_folder / stored_name
+            photo_file.save(file_path)
+
+            if theme.background_image_filename:
+                previous_path = upload_folder / theme.background_image_filename
+                if previous_path.exists():
+                    try:
+                        previous_path.unlink()
+                    except OSError:
+                        pass
+
+            theme.background_image_filename = stored_name
+            theme.background_image_original = photo_file.filename
+            photo_uploaded = True
+            remove_photo = False
+
+        if remove_photo and theme.background_image_filename:
+            previous_path = upload_folder / theme.background_image_filename
+            if previous_path.exists():
+                try:
+                    previous_path.unlink()
+                except OSError:
+                    pass
+            theme.background_image_filename = None
+            theme.background_image_original = None
+            photo_removed = True
+
+        text_color, muted_color = derive_theme_palette(normalized)
         theme.background_color = normalized
         theme.text_color = text_color
         theme.muted_color = muted_color
         db.session.commit()
 
-        flash("Updated the site background and text colors.", "success")
+        if photo_uploaded:
+            message = "Updated the site background image and colors."
+        elif photo_removed:
+            message = "Removed the background photo and refreshed colors."
+        else:
+            message = "Updated the site background and text colors."
+
+        flash(message, "success")
         return redirect(url_for("dashboard", section="branding"))
 
     @app.post("/branding/upload")
@@ -4206,6 +4300,24 @@ def register_routes(app: Flask) -> None:
             asset_record.stored_filename,
             as_attachment=False,
             download_name=asset_record.original_filename,
+        )
+
+    @app.get("/branding/theme-background")
+    def theme_background():
+        theme = SiteTheme.query.first()
+        if not theme or not theme.background_image_filename:
+            abort(404)
+
+        upload_folder = Path(app.config["THEME_UPLOAD_FOLDER"])
+        file_path = upload_folder / theme.background_image_filename
+        if not file_path.exists():
+            abort(404)
+
+        return send_from_directory(
+            str(upload_folder),
+            theme.background_image_filename,
+            as_attachment=False,
+            download_name=theme.background_image_original or "background",
         )
 
     @app.post("/blog/posts")

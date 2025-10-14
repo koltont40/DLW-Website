@@ -38,6 +38,7 @@ def app(tmp_path):
     test_db_path = tmp_path / "test.db"
     legal_folder = tmp_path / "legal"
     branding_folder = tmp_path / "branding"
+    theme_folder = tmp_path / "theme"
     install_folder = tmp_path / "install_photos"
     verification_folder = tmp_path / "verification"
     ticket_attachment_folder = tmp_path / "ticket_attachments"
@@ -53,6 +54,7 @@ def app(tmp_path):
             "SQLALCHEMY_DATABASE_URI": f"sqlite:///{test_db_path}",
             "LEGAL_UPLOAD_FOLDER": str(legal_folder),
             "BRANDING_UPLOAD_FOLDER": str(branding_folder),
+            "THEME_UPLOAD_FOLDER": str(theme_folder),
             "INSTALL_PHOTOS_FOLDER": str(install_folder),
             "CLIENT_VERIFICATION_FOLDER": str(verification_folder),
             "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(ticket_attachment_folder),
@@ -921,6 +923,57 @@ def test_admin_can_update_site_theme(app, client):
         assert theme.text_color == "#111827"
         assert theme.muted_color == "#475569"
 
+
+def test_admin_can_manage_theme_background_image(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    image_bytes = b"fake-image-bytes"
+    response = client.post(
+        "/branding/theme",
+        data={
+            "background_color": "#123456",
+            "background_photo": (io.BytesIO(image_bytes), "skyline.jpg"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Updated the site background image and colors." in response.data
+
+    with app.app_context():
+        theme = SiteTheme.query.first()
+        assert theme is not None
+        assert theme.background_color == "#123456"
+        assert theme.background_image_filename is not None
+        upload_folder = Path(app.config["THEME_UPLOAD_FOLDER"])
+        stored_path = upload_folder / theme.background_image_filename
+        assert stored_path.exists()
+
+    background_response = client.get("/branding/theme-background")
+    assert background_response.status_code == 200
+    assert background_response.data == image_bytes
+
+    response = client.post(
+        "/branding/theme",
+        data={"background_color": "#654321", "remove_background_photo": "1"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Removed the background photo and refreshed colors." in response.data
+
+    with app.app_context():
+        theme = SiteTheme.query.first()
+        assert theme is not None
+        assert theme.background_color == "#654321"
+        assert theme.background_image_filename is None
+        upload_folder = Path(app.config["THEME_UPLOAD_FOLDER"])
+        assert not any(upload_folder.iterdir())
 
 def test_default_navigation_excludes_support_dropdown_links(app):
     with app.app_context():
