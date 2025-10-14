@@ -28,7 +28,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from sqlalchemy import inspect, or_, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, NoSuchTableError
 
 load_dotenv()
 
@@ -743,6 +743,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_service_plans_seeded()
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
+        ensure_support_ticket_priority_field()
         ensure_down_detector_configuration()
 
     return app
@@ -759,6 +760,7 @@ def init_db() -> None:
         ensure_service_plans_seeded()
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
+        ensure_support_ticket_priority_field()
         ensure_down_detector_configuration()
 
 
@@ -1079,6 +1081,33 @@ def ensure_appointment_technician_field() -> None:
             connection.execute(
                 text("ALTER TABLE appointments ADD COLUMN technician_id INTEGER")
             )
+
+
+def ensure_support_ticket_priority_field() -> None:
+    inspector = inspect(db.engine)
+    try:
+        columns = {
+            column["name"] for column in inspector.get_columns("support_tickets")
+        }
+    except NoSuchTableError:
+        return
+
+    if "priority" in columns:
+        return
+
+    with db.engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE support_tickets ADD COLUMN priority VARCHAR(20)"
+                " DEFAULT 'Normal' NOT NULL"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE support_tickets SET priority = 'Normal' WHERE priority IS NULL"
+            )
+        )
+
 
 def ensure_snmp_configuration() -> None:
     config = SNMPConfig.query.first()
