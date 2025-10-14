@@ -13,10 +13,10 @@
         <a class="sidebar-link {% if active_section == 'overview' %}active{% endif %}" href="{{ url_for('dashboard', section='overview') }}">Operations</a>
       </div>
       <div class="sidebar-group">
-        <span class="sidebar-group-label">Customer Ops</span>
+        <span class="sidebar-group-label">CRM</span>
         <a class="sidebar-link {% if active_section == 'customers' %}active{% endif %}" href="{{ url_for('dashboard', section='customers') }}">Customers</a>
+        <a class="sidebar-link {% if active_section == 'billing' %}active{% endif %}" href="{{ url_for('dashboard', section='billing') }}">Billing</a>
         <a class="sidebar-link {% if active_section == 'support' %}active{% endif %}" href="{{ url_for('dashboard', section='support') }}">Support</a>
-        <a class="sidebar-link {% if active_section == 'field' %}active{% endif %}" href="{{ url_for('dashboard', section='field') }}">Field Ops</a>
       </div>
       <div class="sidebar-group">
         <span class="sidebar-group-label">Site Experience</span>
@@ -27,7 +27,9 @@
         <a class="sidebar-link {% if active_section == 'legal' %}active{% endif %}" href="{{ url_for('dashboard', section='legal') }}">Legal</a>
       </div>
       <div class="sidebar-group">
-        <span class="sidebar-group-label">Infrastructure</span>
+        <span class="sidebar-group-label">NMS</span>
+        <a class="sidebar-link {% if active_section == 'network' %}active{% endif %}" href="{{ url_for('dashboard', section='network') }}">Network</a>
+        <a class="sidebar-link {% if active_section == 'field' %}active{% endif %}" href="{{ url_for('dashboard', section='field') }}">Field Ops</a>
         <a class="sidebar-link {% if active_section == 'security' %}active{% endif %}" href="{{ url_for('dashboard', section='security') }}">Security</a>
       </div>
     </nav>
@@ -640,12 +642,18 @@
           <h2>Billing Management</h2>
           <p class="subtle">Create and reconcile invoices for every subscriber.</p>
         </div>
+        <div class="section-actions">
+          <form method="post" action="{{ url_for('run_autopay') }}">
+            <button class="button secondary" type="submit">Run Autopay</button>
+          </form>
+        </div>
       </header>
       {% if clients %}
       <div class="client-stack">
         {% for client in clients %}
         {% set outstanding_invoices = client.invoices | selectattr('status', 'in', ['Pending', 'Overdue']) | list %}
         {% set balance_cents = outstanding_invoices | map(attribute='amount_cents') | sum %}
+        {% set default_method = client.default_payment_method() %}
         <article class="client-card">
           <header>
             <div>
@@ -659,6 +667,14 @@
             <div class="client-metrics">
               <span><strong>{{ client.invoices|length }}</strong> invoices</span>
               <span><strong>{{ balance_cents|currency }}</strong> due</span>
+            </div>
+            <div class="client-status-pills">
+              <span class="badge {% if client.service_suspended %}danger{% else %}subtle{% endif %}">{{ client.billing_status }}</span>
+              {% if client.autopay_enabled %}
+              <span class="badge success">Autopay {{ default_method.describe() if default_method else 'active' }}</span>
+              {% else %}
+              <span class="badge warning">Autopay off</span>
+              {% endif %}
             </div>
           </header>
           <div class="client-card-body">
@@ -725,6 +741,28 @@
         </article>
         {% endfor %}
       </div>
+      {% if recent_autopay_events %}
+      <section class="autopay-log">
+        <h3>Recent autopay activity</h3>
+        <ul class="autopay-event-list">
+          {% for event in recent_autopay_events %}
+          <li>
+            <div class="event-primary">
+              <strong>{{ event.client.name if event.client else 'Account' }}</strong>
+              <span class="badge {% if event.status == 'success' %}success{% elif event.status == 'failed' %}danger{% else %}subtle{% endif %}">{{ event.status | capitalize }}</span>
+            </div>
+            <div class="event-meta">
+              <span>{{ (event.amount_cents or 0)|currency }}</span>
+              <span class="subtle">{{ event.attempted_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+            </div>
+            {% if event.message %}
+            <p class="subtle">{{ event.message }}</p>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
       {% else %}
       <p class="subtle">Customers will appear here once they have been added to the directory.</p>
       {% endif %}
@@ -737,6 +775,12 @@
           <p class="subtle">Track every antenna, router, and install detail.</p>
         </div>
       </header>
+      {% if suspended_clients %}
+      <div class="suspension-callout">
+        <strong>{{ suspended_clients|length }} account{{ 's' if suspended_clients|length != 1 else '' }} suspended for billing</strong>
+        <p class="subtle">CRM billing status changes automatically lift these holds when payments post.</p>
+      </div>
+      {% endif %}
       {% if clients %}
       <div class="client-stack">
         {% for client in clients %}
@@ -750,7 +794,12 @@
               </h3>
               <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
             </div>
-            <span class="badge subtle">{{ client.status }}</span>
+            <div class="client-status-pills">
+              <span class="badge subtle">{{ client.status }}</span>
+              {% if client.service_suspended %}
+              <span class="badge danger">Billing suspension</span>
+              {% endif %}
+            </div>
           </header>
           <div class="client-card-body">
             <div class="record-list">

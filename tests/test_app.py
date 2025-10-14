@@ -15,6 +15,7 @@ from app import (
     Invoice,
     Appointment,
     InstallPhoto,
+    InstallAcknowledgement,
     ServicePlan,
     SNMPConfig,
     Technician,
@@ -24,6 +25,8 @@ from app import (
     BlogPost,
     SupportTicket,
     SupportTicketAttachment,
+    PaymentMethod,
+    AutopayEvent,
     SiteTheme,
     REQUIRED_INSTALL_PHOTO_CATEGORIES,
     create_app,
@@ -40,6 +43,7 @@ def app(tmp_path):
     branding_folder = tmp_path / "branding"
     theme_folder = tmp_path / "theme"
     install_folder = tmp_path / "install_photos"
+    signature_folder = tmp_path / "install_signatures"
     verification_folder = tmp_path / "verification"
     ticket_attachment_folder = tmp_path / "ticket_attachments"
     tls_challenge_folder = tmp_path / "acme-challenges"
@@ -56,6 +60,7 @@ def app(tmp_path):
             "BRANDING_UPLOAD_FOLDER": str(branding_folder),
             "THEME_UPLOAD_FOLDER": str(theme_folder),
             "INSTALL_PHOTOS_FOLDER": str(install_folder),
+            "INSTALL_SIGNATURE_FOLDER": str(signature_folder),
             "CLIENT_VERIFICATION_FOLDER": str(verification_folder),
             "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(ticket_attachment_folder),
             "TLS_CHALLENGE_FOLDER": str(tls_challenge_folder),
@@ -654,6 +659,102 @@ def test_admin_adds_invoice_from_account_view(app, client):
         assert len(invoices) == 1
         assert invoices[0].description == "Monthly service"
         assert invoices[0].amount_cents == 7999
+
+
+def test_autopay_run_pays_due_invoices(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        customer = Client(
+            name="Autopay Success",
+            email="auto-success@example.com",
+            status="Active",
+            autopay_enabled=True,
+        )
+        db.session.add(customer)
+        db.session.commit()
+
+        method = PaymentMethod(
+            client_id=customer.id,
+            nickname="Primary",
+            brand="Visa",
+            last4="1111",
+            exp_month=12,
+            exp_year=date.today().year + 1,
+            token="tok-success",
+            is_default=True,
+        )
+        invoice = Invoice(
+            client_id=customer.id,
+            description="Internet service",
+            amount_cents=5000,
+            status="Pending",
+            due_date=date.today(),
+        )
+        db.session.add_all([method, invoice])
+        db.session.commit()
+        customer_id = customer.id
+
+    response = client.post("/autopay/run", follow_redirects=True)
+    assert response.status_code == 200
+    assert b"Autopay processed" in response.data
+
+    with app.app_context():
+        invoice = Invoice.query.filter_by(client_id=customer_id).one()
+        assert invoice.status == "Paid"
+        assert invoice.paid_via.startswith("Autopay")
+        customer = Client.query.get(customer_id)
+        assert customer.billing_status == "Good Standing"
+        assert customer.service_suspended is False
+        events = AutopayEvent.query.filter_by(client_id=customer_id).all()
+        assert len(events) == 1
+        assert events[0].status == "success"
+
+
+def test_autopay_run_suspends_when_no_method(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        customer = Client(
+            name="Autopay Failure",
+            email="auto-fail@example.com",
+            status="Active",
+            autopay_enabled=True,
+        )
+        db.session.add(customer)
+        db.session.commit()
+
+        invoice = Invoice(
+            client_id=customer.id,
+            description="Managed service",
+            amount_cents=4200,
+            status="Pending",
+            due_date=date.today(),
+        )
+        db.session.add(invoice)
+        db.session.commit()
+        customer_id = customer.id
+
+    response = client.post("/autopay/run", follow_redirects=True)
+    assert response.status_code == 200
+
+    with app.app_context():
+        invoice = Invoice.query.filter_by(client_id=customer_id).one()
+        assert invoice.status == "Pending"
+        assert invoice.autopay_status == "Missing Method"
+        customer = Client.query.get(customer_id)
+        assert customer.service_suspended is True
+        assert customer.billing_status == "Delinquent"
+        events = AutopayEvent.query.filter_by(client_id=customer_id).all()
+        assert any(event.status == "failed" for event in events)
 
 
 def test_admin_adds_equipment_from_account_view(app, client):
@@ -1665,3 +1766,64 @@ def test_technician_uploads_install_photo(app, client):
         assert len(photos) == 1
         stored_path = Path(app.config["INSTALL_PHOTOS_FOLDER"]) / photos[0].stored_filename
         assert stored_path.exists()
+
+
+def test_technician_captures_install_acknowledgement(app, client):
+    with app.app_context():
+        technician = Technician(
+            name="Signature Tech",
+            email="signature@example.com",
+            password_hash=generate_password_hash("Signature123"),
+            is_active=True,
+        )
+        customer = Client(
+            name="Signature Customer",
+            email="signature-customer@example.com",
+            status="Active",
+        )
+        appointment = Appointment(
+            client=customer,
+            technician=technician,
+            title="Signature walkthrough",
+            scheduled_for=utcnow() + timedelta(hours=3),
+            status="Pending",
+        )
+        db.session.add_all([technician, customer, appointment])
+        db.session.commit()
+        appointment_id = appointment.id
+        client_id = customer.id
+        technician_id = technician.id
+
+    login_response = client.post(
+        "/tech/login",
+        data={"email": "signature@example.com", "password": "Signature123"},
+        follow_redirects=True,
+    )
+    assert login_response.status_code == 200
+
+    signature_data = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAukB9XY3YoAAAAAASUVORK5CYII="
+    )
+
+    response = client.post(
+        f"/tech/appointments/{appointment_id}/acknowledgements",
+        data={
+            "signed_name": "Signature Customer",
+            "signature_data": signature_data,
+            "accept_aup": "on",
+            "accept_privacy": "on",
+            "accept_tos": "on",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Customer acknowledgement captured" in response.data
+
+    with app.app_context():
+        acknowledgement = InstallAcknowledgement.query.filter_by(appointment_id=appointment_id).one()
+        assert acknowledgement.signed_name == "Signature Customer"
+        assert acknowledgement.technician_id == technician_id
+        signature_path = Path(app.config["INSTALL_SIGNATURE_FOLDER"]) / acknowledgement.signature_filename
+        assert signature_path.exists()

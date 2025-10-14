@@ -1,4 +1,7 @@
+import base64
+import binascii
 import errno
+import hashlib
 import mimetypes
 import os
 import re
@@ -188,6 +191,113 @@ def delete_ticket_attachment_files(app: Flask, ticket: "SupportTicket") -> None:
         pass
 
 
+SIGNATURE_DATA_PREFIX = "data:image/png;base64,"
+
+
+def store_install_signature_image(
+    app: Flask, acknowledgement: "InstallAcknowledgement", data_url: str
+) -> None:
+    if not data_url or not data_url.startswith(SIGNATURE_DATA_PREFIX):
+        raise ValueError("Signature must be provided as a base64-encoded PNG data URL.")
+
+    encoded = data_url.split(",", 1)[1]
+    try:
+        binary = base64.b64decode(encoded)
+    except (binascii.Error, ValueError) as exc:  # pragma: no cover - sanity
+        raise ValueError("Unable to decode signature image.") from exc
+
+    signature_folder = (
+        Path(app.config["INSTALL_SIGNATURE_FOLDER"]) / f"client_{acknowledgement.client_id}"
+    )
+    signature_folder.mkdir(parents=True, exist_ok=True)
+
+    timestamp = utcnow().strftime("%Y%m%d%H%M%S")
+    filename = f"{timestamp}_{secrets.token_hex(4)}.png"
+    relative_path = Path(f"client_{acknowledgement.client_id}") / filename
+    (signature_folder / filename).write_bytes(binary)
+
+    acknowledgement.signature_filename = str(relative_path)
+
+
+def delete_install_signature_image(app: Flask, acknowledgement: "InstallAcknowledgement") -> None:
+    if not acknowledgement.signature_filename:
+        return
+    signature_folder = Path(app.config["INSTALL_SIGNATURE_FOLDER"])
+    file_path = signature_folder / acknowledgement.signature_filename
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError:
+        pass
+
+
+def normalize_card_number(card_number: str) -> str:
+    return re.sub(r"[^0-9]", "", card_number or "")
+
+
+def generate_payment_token(client_id: int, digits: str) -> str:
+    seed = f"{client_id}:{digits}:{secrets.token_hex(8)}".encode()
+    return hashlib.sha256(seed).hexdigest()
+
+
+def recalculate_client_billing_state(client: "Client") -> None:
+    outstanding = [
+        invoice
+        for invoice in client.invoices
+        if invoice.status not in {"Paid", "Cancelled"}
+    ]
+    today = date.today()
+    has_overdue = any(
+        invoice.status == "Overdue"
+        or (invoice.due_date is not None and invoice.due_date < today)
+        for invoice in outstanding
+    )
+    failed_autopay = any(
+        invoice.autopay_status
+        and invoice.autopay_status not in {"Paid", "Manual"}
+        for invoice in outstanding
+    )
+
+    if has_overdue or failed_autopay:
+        client.billing_status = "Delinquent"
+        client.service_suspended = True
+        if has_overdue:
+            client.suspension_reason = "Billing hold: overdue balance"
+        else:
+            client.suspension_reason = "Billing hold: autopay method required"
+    elif outstanding:
+        client.billing_status = "Pending"
+        client.service_suspended = False
+        client.suspension_reason = None
+    else:
+        client.billing_status = "Good Standing"
+        client.service_suspended = False
+        client.suspension_reason = None
+
+    client.billing_status_updated_at = utcnow()
+
+
+def record_autopay_event(
+    *,
+    client: "Client",
+    invoice: "Invoice | None",
+    payment_method: "PaymentMethod | None",
+    status: str,
+    message: str | None,
+    amount_cents: int,
+) -> "AutopayEvent":
+    event = AutopayEvent(
+        client_id=client.id,
+        invoice_id=invoice.id if invoice else None,
+        payment_method_id=payment_method.id if payment_method else None,
+        status=status,
+        message=message,
+        amount_cents=amount_cents,
+    )
+    db.session.add(event)
+    return event
+
+
 class Client(db.Model):
     __tablename__ = "clients"
 
@@ -215,6 +325,13 @@ class Client(db.Model):
     driver_license_number = db.Column(db.String(120))
     verification_photo_filename = db.Column(db.String(255))
     verification_photo_uploaded_at = db.Column(db.DateTime(timezone=True))
+    autopay_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    billing_status = db.Column(db.String(40), nullable=False, default="Good Standing")
+    billing_status_updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    service_suspended = db.Column(db.Boolean, nullable=False, default=False)
+    suspension_reason = db.Column(db.String(255))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
     invoices = db.relationship(
         "Invoice", back_populates="client", cascade="all, delete-orphan"
@@ -230,6 +347,17 @@ class Client(db.Model):
     )
     install_photos = db.relationship(
         "InstallPhoto", back_populates="client", cascade="all, delete-orphan"
+    )
+    payment_methods = db.relationship(
+        "PaymentMethod", back_populates="client", cascade="all, delete-orphan"
+    )
+    autopay_events = db.relationship(
+        "AutopayEvent", back_populates="client", cascade="all, delete-orphan"
+    )
+    install_acknowledgements = db.relationship(
+        "InstallAcknowledgement",
+        back_populates="client",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self) -> str:
@@ -249,6 +377,15 @@ class Client(db.Model):
         if selections:
             return ", ".join(selections)
         return self.project_type
+
+    def default_payment_method(self) -> "PaymentMethod | None":
+        active_methods = [
+            method for method in self.payment_methods if method.status == "Active"
+        ]
+        if not active_methods:
+            return None
+        active_methods.sort(key=lambda method: (not method.is_default, method.created_at))
+        return active_methods[0]
 
 
 class ServicePlan(db.Model):
@@ -531,8 +668,15 @@ class Invoice(db.Model):
     updated_at = db.Column(
         db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
+    paid_at = db.Column(db.DateTime(timezone=True))
+    paid_via = db.Column(db.String(120))
+    autopay_attempted_at = db.Column(db.DateTime(timezone=True))
+    autopay_status = db.Column(db.String(40))
 
     client = db.relationship("Client", back_populates="invoices")
+    autopay_events = db.relationship(
+        "AutopayEvent", back_populates="invoice", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Invoice {self.id} for client {self.client_id}>"
@@ -574,6 +718,11 @@ class Technician(db.Model):
     install_photos = db.relationship(
         "InstallPhoto", back_populates="technician", cascade="all, delete-orphan"
     )
+    install_acknowledgements = db.relationship(
+        "InstallAcknowledgement",
+        back_populates="technician",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Technician {self.email}>"
@@ -598,6 +747,85 @@ class InstallPhoto(db.Model):
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<InstallPhoto {self.stored_filename} for client {self.client_id}>"
+
+
+class InstallAcknowledgement(db.Model):
+    __tablename__ = "install_acknowledgements"
+
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
+    technician_id = db.Column(
+        db.Integer, db.ForeignKey("technicians.id"), nullable=False
+    )
+    appointment_id = db.Column(db.Integer, db.ForeignKey("appointments.id"))
+    signed_name = db.Column(db.String(120), nullable=False)
+    signature_filename = db.Column(db.String(255), nullable=False)
+    signed_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    aup_document_id = db.Column(db.Integer, db.ForeignKey("documents.id"))
+    privacy_document_id = db.Column(db.Integer, db.ForeignKey("documents.id"))
+    tos_document_id = db.Column(db.Integer, db.ForeignKey("documents.id"))
+
+    client = db.relationship("Client", back_populates="install_acknowledgements")
+    technician = db.relationship("Technician", back_populates="install_acknowledgements")
+    appointment = db.relationship("Appointment", back_populates="acknowledgements")
+    aup_document = db.relationship("Document", foreign_keys=[aup_document_id])
+    privacy_document = db.relationship("Document", foreign_keys=[privacy_document_id])
+    tos_document = db.relationship("Document", foreign_keys=[tos_document_id])
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return (
+            f"<InstallAcknowledgement client={self.client_id} "
+            f"signed={self.signed_at:%Y-%m-%d}>"
+        )
+
+
+class PaymentMethod(db.Model):
+    __tablename__ = "payment_methods"
+
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
+    nickname = db.Column(db.String(120))
+    brand = db.Column(db.String(40), nullable=False)
+    last4 = db.Column(db.String(4), nullable=False)
+    exp_month = db.Column(db.Integer, nullable=False)
+    exp_year = db.Column(db.Integer, nullable=False)
+    token = db.Column(db.String(128), nullable=False, unique=True)
+    billing_zip = db.Column(db.String(12))
+    cardholder_name = db.Column(db.String(120))
+    is_default = db.Column(db.Boolean, nullable=False, default=False)
+    status = db.Column(db.String(20), nullable=False, default="Active")
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    client = db.relationship("Client", back_populates="payment_methods")
+    autopay_events = db.relationship(
+        "AutopayEvent", back_populates="payment_method", cascade="all, delete-orphan"
+    )
+
+    def describe(self) -> str:
+        return f"{self.brand} ••••{self.last4}"
+
+
+class AutopayEvent(db.Model):
+    __tablename__ = "autopay_events"
+
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
+    invoice_id = db.Column(db.Integer, db.ForeignKey("invoices.id"))
+    payment_method_id = db.Column(db.Integer, db.ForeignKey("payment_methods.id"))
+    status = db.Column(db.String(20), nullable=False)
+    message = db.Column(db.String(255))
+    attempted_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    amount_cents = db.Column(db.Integer, nullable=False, default=0)
+
+    client = db.relationship("Client", back_populates="autopay_events")
+    invoice = db.relationship("Invoice", back_populates="autopay_events")
+    payment_method = db.relationship("PaymentMethod", back_populates="autopay_events")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<AutopayEvent {self.status} client={self.client_id}>"
 
 
 class SupportTicket(db.Model):
@@ -682,6 +910,11 @@ class Appointment(db.Model):
 
     client = db.relationship("Client", back_populates="appointments")
     technician = db.relationship("Technician", back_populates="appointments")
+    acknowledgements = db.relationship(
+        "InstallAcknowledgement",
+        back_populates="appointment",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Appointment {self.title} for client {self.client_id}>"
@@ -794,6 +1027,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         "BRANDING_UPLOAD_FOLDER": str(instance_path / "branding"),
         "THEME_UPLOAD_FOLDER": str(instance_path / "theme"),
         "INSTALL_PHOTOS_FOLDER": str(instance_path / "install_photos"),
+        "INSTALL_SIGNATURE_FOLDER": str(instance_path / "install_signatures"),
         "CLIENT_VERIFICATION_FOLDER": str(instance_path / "verification"),
         "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(instance_path / "ticket_attachments"),
         "TLS_CHALLENGE_FOLDER": str(instance_path / "acme-challenges"),
@@ -826,6 +1060,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "BRANDING_UPLOAD_FOLDER",
             "THEME_UPLOAD_FOLDER",
             "INSTALL_PHOTOS_FOLDER",
+            "INSTALL_SIGNATURE_FOLDER",
             "CLIENT_VERIFICATION_FOLDER",
             "SUPPORT_TICKET_ATTACHMENT_FOLDER",
             "TLS_CHALLENGE_FOLDER",
@@ -843,6 +1078,8 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_client_billing_fields()
+        ensure_invoice_payment_fields()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
@@ -864,6 +1101,8 @@ def init_db() -> None:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_client_billing_fields()
+        ensure_invoice_payment_fields()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
@@ -1286,6 +1525,85 @@ def ensure_support_ticket_priority_field() -> None:
             )
         )
 
+
+def ensure_client_billing_fields() -> None:
+    inspector = inspect(db.engine)
+    try:
+        columns = {column["name"] for column in inspector.get_columns("clients")}
+    except NoSuchTableError:
+        return
+
+    statements: list[str] = []
+    if "autopay_enabled" not in columns:
+        statements.append(
+            "ALTER TABLE clients ADD COLUMN autopay_enabled BOOLEAN DEFAULT 0 NOT NULL"
+        )
+    if "billing_status" not in columns:
+        statements.append(
+            "ALTER TABLE clients ADD COLUMN billing_status VARCHAR(40)"
+        )
+    if "billing_status_updated_at" not in columns:
+        statements.append(
+            "ALTER TABLE clients ADD COLUMN billing_status_updated_at TIMESTAMP"
+        )
+    if "service_suspended" not in columns:
+        statements.append(
+            "ALTER TABLE clients ADD COLUMN service_suspended BOOLEAN DEFAULT 0 NOT NULL"
+        )
+    if "suspension_reason" not in columns:
+        statements.append(
+            "ALTER TABLE clients ADD COLUMN suspension_reason VARCHAR(255)"
+        )
+
+    if statements:
+        with db.engine.begin() as connection:
+            for stmt in statements:
+                connection.execute(text(stmt))
+
+    updated = False
+    for client in Client.query.all():
+        if not client.billing_status:
+            client.billing_status = "Good Standing"
+            updated = True
+        if not client.billing_status_updated_at:
+            client.billing_status_updated_at = utcnow()
+            updated = True
+        if client.service_suspended is None:
+            client.service_suspended = False
+            updated = True
+    if updated:
+        db.session.commit()
+
+
+def ensure_invoice_payment_fields() -> None:
+    inspector = inspect(db.engine)
+    try:
+        columns = {column["name"] for column in inspector.get_columns("invoices")}
+    except NoSuchTableError:
+        return
+
+    statements: list[str] = []
+    if "paid_at" not in columns:
+        statements.append(
+            "ALTER TABLE invoices ADD COLUMN paid_at TIMESTAMP"
+        )
+    if "paid_via" not in columns:
+        statements.append(
+            "ALTER TABLE invoices ADD COLUMN paid_via VARCHAR(120)"
+        )
+    if "autopay_attempted_at" not in columns:
+        statements.append(
+            "ALTER TABLE invoices ADD COLUMN autopay_attempted_at TIMESTAMP"
+        )
+    if "autopay_status" not in columns:
+        statements.append(
+            "ALTER TABLE invoices ADD COLUMN autopay_status VARCHAR(40)"
+        )
+
+    if statements:
+        with db.engine.begin() as connection:
+            for stmt in statements:
+                connection.execute(text(stmt))
 
 def ensure_site_theme_background_fields() -> None:
     inspector = inspect(db.engine)
@@ -2140,6 +2458,7 @@ def register_routes(app: Flask) -> None:
         raw_photo_map: dict[int, dict[str, list[InstallPhoto]]] = defaultdict(
             lambda: defaultdict(list)
         )
+        acknowledgements_map: dict[int, InstallAcknowledgement] = {}
         if client_ids:
             photos = (
                 InstallPhoto.query.filter(InstallPhoto.client_id.in_(client_ids))
@@ -2148,6 +2467,17 @@ def register_routes(app: Flask) -> None:
             )
             for photo in photos:
                 raw_photo_map[photo.client_id][photo.category].append(photo)
+            acknowledgements = (
+                InstallAcknowledgement.query.filter(
+                    InstallAcknowledgement.client_id.in_(client_ids)
+                )
+                .order_by(InstallAcknowledgement.signed_at.desc())
+                .all()
+            )
+            for acknowledgement in acknowledgements:
+                acknowledgements_map.setdefault(
+                    acknowledgement.client_id, acknowledgement
+                )
 
         photo_map = {cid: dict(category_map) for cid, category_map in raw_photo_map.items()}
         missing_requirements: dict[int, list[str]] = {}
@@ -2157,6 +2487,8 @@ def register_routes(app: Flask) -> None:
                 for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
                 if not raw_photo_map[ap.client_id].get(category)
             ]
+            if ap.client_id not in acknowledgements_map:
+                missing.append("Customer Acceptance Signature")
             missing_requirements[ap.client_id] = missing
 
         recent_uploads = (
@@ -2176,6 +2508,7 @@ def register_routes(app: Flask) -> None:
             photo_categories=INSTALL_PHOTO_CATEGORY_CHOICES,
             required_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
             recent_uploads=recent_uploads,
+            acknowledgements_map=acknowledgements_map,
         )
 
     @app.route("/tech/appointments/<int:appointment_id>")
@@ -2200,6 +2533,23 @@ def register_routes(app: Flask) -> None:
             if not photos_by_category.get(category)
         ]
 
+        acknowledgement = (
+            InstallAcknowledgement.query.filter_by(appointment_id=appointment.id)
+            .order_by(InstallAcknowledgement.signed_at.desc())
+            .first()
+        )
+        if acknowledgement is None:
+            acknowledgement = (
+                InstallAcknowledgement.query.filter_by(client_id=appointment.client_id)
+                .order_by(InstallAcknowledgement.signed_at.desc())
+                .first()
+            )
+
+        legal_documents = {
+            key: Document.query.filter_by(doc_type=key).first()
+            for key in ("aup", "privacy", "tos")
+        }
+
         return render_template(
             "tech_appointment.html",
             technician=technician,
@@ -2209,6 +2559,8 @@ def register_routes(app: Flask) -> None:
             missing_categories=missing_categories,
             photo_categories=INSTALL_PHOTO_CATEGORY_CHOICES,
             required_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
+            acknowledgement=acknowledgement,
+            legal_documents=legal_documents,
         )
 
     @app.post("/tech/clients/<int:client_id>/photos")
@@ -2282,6 +2634,77 @@ def register_routes(app: Flask) -> None:
         )
         return redirect(redirect_target)
 
+    @app.post("/tech/appointments/<int:appointment_id>/acknowledgements")
+    @technician_login_required
+    def submit_install_acknowledgement(
+        technician: Technician, appointment_id: int
+    ):
+        appointment = (
+            Appointment.query.filter_by(id=appointment_id, technician_id=technician.id)
+            .first_or_404()
+        )
+        signed_name = request.form.get("signed_name", "").strip()
+        signature_data = request.form.get("signature_data", "")
+        aup_accept = request.form.get("accept_aup")
+        privacy_accept = request.form.get("accept_privacy")
+        tos_accept = request.form.get("accept_tos")
+
+        if not signed_name:
+            flash("Enter the customer's printed name before capturing their signature.", "danger")
+            return redirect(url_for("tech_appointment_detail", appointment_id=appointment.id))
+
+        if not (aup_accept and privacy_accept and tos_accept):
+            flash("Confirm the customer acknowledged the AUP, Privacy Policy, and TOS.", "danger")
+            return redirect(url_for("tech_appointment_detail", appointment_id=appointment.id))
+
+        acknowledgement = (
+            InstallAcknowledgement.query.filter_by(appointment_id=appointment.id)
+            .order_by(InstallAcknowledgement.signed_at.desc())
+            .first()
+        )
+        if acknowledgement is None:
+            acknowledgement = InstallAcknowledgement(
+                client_id=appointment.client_id,
+                technician_id=technician.id,
+                appointment_id=appointment.id,
+                signed_name=signed_name,
+                signature_filename="",
+            )
+            db.session.add(acknowledgement)
+        else:
+            delete_install_signature_image(app, acknowledgement)
+            acknowledgement.signed_name = signed_name
+            acknowledgement.technician_id = technician.id
+            acknowledgement.appointment_id = appointment.id
+
+        acknowledgement.signed_at = utcnow()
+
+        documents = {
+            key: Document.query.filter_by(doc_type=key).first()
+            for key in ("aup", "privacy", "tos")
+        }
+        acknowledgement.aup_document_id = (
+            documents["aup"].id if documents.get("aup") else None
+        )
+        acknowledgement.privacy_document_id = (
+            documents["privacy"].id if documents.get("privacy") else None
+        )
+        acknowledgement.tos_document_id = (
+            documents["tos"].id if documents.get("tos") else None
+        )
+
+        try:
+            store_install_signature_image(app, acknowledgement, signature_data)
+        except ValueError as exc:
+            db.session.rollback()
+            flash(str(exc), "danger")
+            return redirect(url_for("tech_appointment_detail", appointment_id=appointment.id))
+
+        db.session.commit()
+
+        flash("Customer acknowledgement captured and stored.", "success")
+        return redirect(url_for("tech_appointment_detail", appointment_id=appointment.id))
+
     @app.get("/install-photos/<int:photo_id>")
     def serve_install_photo(photo_id: int):
         photo = InstallPhoto.query.get_or_404(photo_id)
@@ -2305,6 +2728,32 @@ def register_routes(app: Flask) -> None:
         directory = str(file_path.parent)
         mimetype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
         return send_from_directory(directory, file_path.name, mimetype=mimetype)
+
+    @app.get("/install-signatures/<int:ack_id>")
+    def serve_install_signature(ack_id: int):
+        acknowledgement = InstallAcknowledgement.query.get_or_404(ack_id)
+        authorized = False
+        if session.get("admin_authenticated"):
+            authorized = True
+        technician_id = session.get(TECH_SESSION_KEY)
+        if technician_id and technician_id == acknowledgement.technician_id:
+            authorized = True
+        client_id = session.get(PORTAL_SESSION_KEY)
+        if client_id and client_id == acknowledgement.client_id:
+            authorized = True
+        if not authorized:
+            abort(403)
+
+        base_folder = Path(app.config["INSTALL_SIGNATURE_FOLDER"])
+        file_path = base_folder / acknowledgement.signature_filename
+        if not file_path.exists():
+            abort(404)
+
+        return send_from_directory(
+            str(file_path.parent),
+            file_path.name,
+            mimetype="image/png",
+        )
 
     @app.get("/support-ticket-attachments/<int:attachment_id>")
     def serve_ticket_attachment(attachment_id: int):
@@ -2442,6 +2891,8 @@ def register_routes(app: Flask) -> None:
         tls_certificate_ready = False
         tls_challenge_folder = current_app.config.get("TLS_CHALLENGE_FOLDER")
         admin_users: list[AdminUser] = []
+        recent_autopay_events: list[AutopayEvent] = []
+        suspended_clients: list[Client] = []
         if active_section in {
             "customers",
             "billing",
@@ -2453,6 +2904,16 @@ def register_routes(app: Flask) -> None:
             if status_filter:
                 query = query.filter_by(status=status_filter)
             clients = query.all()
+
+        if active_section == "billing":
+            recent_autopay_events = (
+                AutopayEvent.query.order_by(AutopayEvent.attempted_at.desc())
+                .limit(15)
+                .all()
+            )
+
+        if active_section in {"network", "field"} and clients:
+            suspended_clients = [client for client in clients if client.service_suspended]
 
         if active_section == "customers" and focus_client_id:
             selected_client = Client.query.get(focus_client_id)
@@ -2801,6 +3262,8 @@ def register_routes(app: Flask) -> None:
             tls_challenge_folder=tls_challenge_folder,
             admin_users=admin_users,
             site_theme=site_theme,
+            recent_autopay_events=recent_autopay_events,
+            suspended_clients=suspended_clients,
         )
 
     @app.get("/dashboard/customers/<int:client_id>")
@@ -2919,6 +3382,24 @@ def register_routes(app: Flask) -> None:
             Technician.query.order_by(Technician.name.asc()).all()
         )
 
+        payment_methods = (
+            PaymentMethod.query.filter_by(client_id=client.id)
+            .order_by(PaymentMethod.created_at.desc())
+            .all()
+        )
+        autopay_activity = (
+            AutopayEvent.query.filter_by(client_id=client.id)
+            .order_by(AutopayEvent.attempted_at.desc())
+            .limit(10)
+            .all()
+        )
+        latest_acknowledgement = (
+            InstallAcknowledgement.query.filter_by(client_id=client.id)
+            .order_by(InstallAcknowledgement.signed_at.desc())
+            .first()
+        )
+        current_year = date.today().year
+
         return render_template(
             "admin_client_account.html",
             client=client,
@@ -2944,6 +3425,10 @@ def register_routes(app: Flask) -> None:
             invoice_status_options=INVOICE_STATUS_OPTIONS,
             appointment_status_options=APPOINTMENT_STATUS_OPTIONS,
             technicians=technicians,
+            payment_methods=payment_methods,
+            autopay_activity=autopay_activity,
+            latest_acknowledgement=latest_acknowledgement,
+            current_year=current_year,
         )
 
     @app.post("/documents/upload")
@@ -3263,6 +3748,233 @@ def register_routes(app: Flask) -> None:
         flash("Verification photo updated.", "success")
         return _redirect_back_to_dashboard("customers")
 
+    @app.post("/clients/<int:client_id>/payment-methods")
+    @login_required
+    def add_payment_method(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        card_number_raw = request.form.get("card_number", "")
+        digits = normalize_card_number(card_number_raw)
+        if len(digits) < 12 or len(digits) > 19:
+            flash("Enter a valid card number before saving the payment method.", "danger")
+            return _redirect_back_to_dashboard("billing", focus=client.id)
+
+        try:
+            exp_month = int(request.form.get("exp_month", ""))
+            exp_year = int(request.form.get("exp_year", ""))
+        except (TypeError, ValueError):
+            flash("Provide a valid expiration month and year.", "danger")
+            return _redirect_back_to_dashboard("billing", focus=client.id)
+
+        if not 1 <= exp_month <= 12:
+            flash("Expiration month must be between 1 and 12.", "danger")
+            return _redirect_back_to_dashboard("billing", focus=client.id)
+
+        current_year = utcnow().year
+        current_month = utcnow().month
+        if exp_year < current_year or (exp_year == current_year and exp_month < current_month):
+            flash("The card appears to be expired.", "danger")
+            return _redirect_back_to_dashboard("billing", focus=client.id)
+
+        brand = request.form.get("brand", "").strip() or "Card"
+        cardholder_name = request.form.get("cardholder_name", "").strip() or None
+        billing_zip = request.form.get("billing_zip", "").strip() or None
+        nickname = request.form.get("nickname", "").strip() or None
+
+        token = generate_payment_token(client.id, digits)
+        set_default = bool(request.form.get("set_default")) or not client.payment_methods
+        if set_default:
+            for method in client.payment_methods:
+                method.is_default = False
+
+        payment_method = PaymentMethod(
+            client_id=client.id,
+            nickname=nickname or None,
+            brand=brand,
+            last4=digits[-4:],
+            exp_month=exp_month,
+            exp_year=exp_year,
+            token=token,
+            billing_zip=billing_zip or None,
+            cardholder_name=cardholder_name or None,
+            is_default=set_default,
+        )
+        db.session.add(payment_method)
+        db.session.commit()
+
+        flash(f"Saved {payment_method.describe()} for {client.name}.", "success")
+
+        next_url = request.form.get("next") or request.args.get("next")
+        if next_url:
+            return redirect(next_url)
+        return redirect(url_for("admin_client_account", client_id=client.id))
+
+    @app.post("/payment-methods/<int:method_id>/make-default")
+    @login_required
+    def make_default_payment_method(method_id: int):
+        method = PaymentMethod.query.get_or_404(method_id)
+        client = method.client
+        for other in client.payment_methods:
+            other.is_default = other.id == method.id
+        db.session.commit()
+
+        flash(f"{method.describe()} is now the default payment method.", "success")
+
+        next_url = request.form.get("next") or request.args.get("next")
+        if next_url:
+            return redirect(next_url)
+        return redirect(url_for("admin_client_account", client_id=client.id))
+
+    @app.post("/payment-methods/<int:method_id>/delete")
+    @login_required
+    def delete_payment_method(method_id: int):
+        method = PaymentMethod.query.get_or_404(method_id)
+        client = method.client
+        db.session.delete(method)
+        db.session.flush()
+
+        autopay_disabled = False
+        if client.autopay_enabled and not client.default_payment_method():
+            client.autopay_enabled = False
+            autopay_disabled = True
+
+        db.session.commit()
+
+        message = f"Removed {method.describe()} from {client.name}."
+        if autopay_disabled:
+            message += " Autopay was disabled because no default method remains."
+        flash(message, "info")
+
+        next_url = request.form.get("next") or request.args.get("next")
+        if next_url:
+            return redirect(next_url)
+        return redirect(url_for("admin_client_account", client_id=client.id))
+
+    @app.post("/clients/<int:client_id>/autopay")
+    @login_required
+    def configure_autopay(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        action = (request.form.get("action") or "enable").strip().lower()
+
+        if action == "disable":
+            client.autopay_enabled = False
+            db.session.commit()
+            flash(f"Autopay disabled for {client.name}.", "info")
+            next_url = request.form.get("next") or request.args.get("next")
+            if next_url:
+                return redirect(next_url)
+            return redirect(url_for("admin_client_account", client_id=client.id))
+
+        method_id = request.form.get("payment_method_id", type=int)
+        if method_id:
+            method = PaymentMethod.query.filter_by(id=method_id, client_id=client.id).first()
+            if method is None:
+                flash("Select a valid payment method to enable autopay.", "danger")
+                return redirect(url_for("admin_client_account", client_id=client.id))
+        else:
+            method = client.default_payment_method()
+
+        if method is None:
+            flash("Add a payment method before enabling autopay.", "danger")
+            return redirect(url_for("admin_client_account", client_id=client.id))
+
+        for other in client.payment_methods:
+            other.is_default = other.id == method.id
+        client.autopay_enabled = True
+        db.session.commit()
+
+        flash(f"Autopay enabled using {method.describe()}.", "success")
+
+        next_url = request.form.get("next") or request.args.get("next")
+        if next_url:
+            return redirect(next_url)
+        return redirect(url_for("admin_client_account", client_id=client.id))
+
+    @app.post("/autopay/run")
+    @login_required
+    def run_autopay():
+        today = date.today()
+        autopay_clients = Client.query.filter_by(autopay_enabled=True).all()
+        processed_accounts = 0
+        successful_charges = 0
+        failed_charges = 0
+        skipped_accounts = 0
+
+        for client in autopay_clients:
+            default_method = client.default_payment_method()
+            due_invoices = [
+                invoice
+                for invoice in client.invoices
+                if invoice.status in {"Pending", "Overdue"}
+                and (invoice.due_date is None or invoice.due_date <= today)
+            ]
+
+            if not due_invoices:
+                if default_method:
+                    record_autopay_event(
+                        client=client,
+                        invoice=None,
+                        payment_method=default_method,
+                        status="skipped",
+                        message="No invoices due",
+                        amount_cents=0,
+                    )
+                skipped_accounts += 1
+                continue
+
+            processed_accounts += 1
+
+            if default_method is None:
+                for invoice in due_invoices:
+                    invoice.autopay_attempted_at = utcnow()
+                    invoice.autopay_status = "Missing Method"
+                    record_autopay_event(
+                        client=client,
+                        invoice=invoice,
+                        payment_method=None,
+                        status="failed",
+                        message="Autopay failed: no default method",
+                        amount_cents=invoice.amount_cents,
+                    )
+                    failed_charges += 1
+                recalculate_client_billing_state(client)
+                continue
+
+            for invoice in due_invoices:
+                charge_time = utcnow()
+                invoice.status = "Paid"
+                invoice.paid_at = charge_time
+                invoice.paid_via = f"Autopay {default_method.describe()}"
+                invoice.autopay_attempted_at = charge_time
+                invoice.autopay_status = "Paid"
+                record_autopay_event(
+                    client=client,
+                    invoice=invoice,
+                    payment_method=default_method,
+                    status="success",
+                    message=f"Charged via autopay {default_method.describe()}",
+                    amount_cents=invoice.amount_cents,
+                )
+                successful_charges += 1
+
+            recalculate_client_billing_state(client)
+
+        for client in Client.query.filter_by(autopay_enabled=False).all():
+            recalculate_client_billing_state(client)
+
+        db.session.commit()
+
+        summary = (
+            f"Autopay processed {processed_accounts} accounts with "
+            f"{successful_charges} successful charges"
+        )
+        if failed_charges:
+            summary += f" and {failed_charges} failures"
+        if skipped_accounts:
+            summary += f"; {skipped_accounts} accounts had nothing due"
+
+        flash(summary + ".", "info" if failed_charges == 0 else "warning")
+        return _redirect_back_to_dashboard("billing")
+
     @app.post("/clients/<int:client_id>/invoices")
     @login_required
     def create_invoice(client_id: int):
@@ -3305,7 +4017,12 @@ def register_routes(app: Flask) -> None:
             due_date=due_date_value,
             status=status_value,
         )
+        if status_value == "Paid":
+            invoice.paid_at = utcnow()
+            invoice.paid_via = "Manual entry"
+            invoice.autopay_status = "Manual"
         db.session.add(invoice)
+        recalculate_client_billing_state(client)
         db.session.commit()
 
         flash(f"Invoice added for {client.name}.", "success")
@@ -3352,6 +4069,16 @@ def register_routes(app: Flask) -> None:
         invoice.due_date = due_date_value
         invoice.status = status_value
         invoice.updated_at = utcnow()
+        if status_value == "Paid":
+            invoice.paid_at = invoice.paid_at or utcnow()
+            if not invoice.paid_via:
+                invoice.paid_via = "Manual update"
+            invoice.autopay_status = invoice.autopay_status or "Manual"
+        else:
+            invoice.paid_via = None
+            if status_value != "Paid":
+                invoice.paid_at = None
+        recalculate_client_billing_state(invoice.client)
         db.session.commit()
 
         flash("Invoice updated.", "success")
@@ -3361,7 +4088,9 @@ def register_routes(app: Flask) -> None:
     @login_required
     def delete_invoice(invoice_id: int):
         invoice = Invoice.query.get_or_404(invoice_id)
+        client = invoice.client
         db.session.delete(invoice)
+        recalculate_client_billing_state(client)
         db.session.commit()
         flash("Invoice removed.", "info")
         return _redirect_back_to_dashboard("billing")

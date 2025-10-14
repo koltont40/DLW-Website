@@ -439,6 +439,98 @@
             <button class="button small primary" type="submit">Add invoice</button>
           </form>
         </article>
+        <article class="management-column autopay-management">
+          {% set default_method = client.default_payment_method() %}
+          <h4>Autopay &amp; cards</h4>
+          <p class="subtle">
+            Billing status: {{ client.billing_status }}{% if client.service_suspended %} • Service is currently suspended until payment is received{% endif %}
+          </p>
+          <div class="payment-method-list">
+            {% if payment_methods %}
+            {% for method in payment_methods %}
+            <div class="payment-method-row">
+              <div>
+                <strong>{{ method.describe() }}</strong>
+                <p class="subtle">Expires {{ "%02d"|format(method.exp_month) }}/{{ method.exp_year }}{% if method.cardholder_name %} • {{ method.cardholder_name }}{% endif %}</p>
+              </div>
+              <div class="payment-actions">
+                {% if method.is_default %}
+                <span class="badge success">Default</span>
+                {% else %}
+                <form method="post" action="{{ url_for('make_default_payment_method', method_id=method.id) }}">
+                  <input type="hidden" name="next" value="{{ account_url }}" />
+                  <button class="button small secondary" type="submit">Make default</button>
+                </form>
+                {% endif %}
+                <form method="post" action="{{ url_for('delete_payment_method', method_id=method.id) }}" onsubmit="return confirm('Remove this payment method?');">
+                  <input type="hidden" name="next" value="{{ account_url }}" />
+                  <button class="button small danger" type="submit">Remove</button>
+                </form>
+              </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">No payment methods on file.</p>
+            {% endif %}
+          </div>
+          <form class="stacked-form autopay-add-form" method="post" action="{{ url_for('add_payment_method', client_id=client.id) }}">
+            <input type="hidden" name="next" value="{{ account_url }}" />
+            <label>
+              Card number
+              <input type="text" name="card_number" inputmode="numeric" pattern="[0-9 ]{12,19}" placeholder="4242 4242 4242 4242" required />
+            </label>
+            <div class="field-row">
+              <label>
+                Exp month
+                <input type="number" name="exp_month" min="1" max="12" required />
+              </label>
+              <label>
+                Exp year
+                <input type="number" name="exp_year" min="{{ current_year }}" required />
+              </label>
+            </div>
+            <label>
+              Brand
+              <input type="text" name="brand" placeholder="Visa" required />
+            </label>
+            <label>
+              Cardholder
+              <input type="text" name="cardholder_name" placeholder="Customer name" />
+            </label>
+            <label>
+              Billing ZIP
+              <input type="text" name="billing_zip" placeholder="36083" />
+            </label>
+            <label class="checkbox-inline">
+              <input type="checkbox" name="set_default" {% if not payment_methods %}checked{% endif %} />
+              Set as default for autopay
+            </label>
+            <button class="button small primary" type="submit">Add payment method</button>
+          </form>
+          <form class="stacked-form autopay-toggle" method="post" action="{{ url_for('configure_autopay', client_id=client.id) }}">
+            <input type="hidden" name="next" value="{{ account_url }}" />
+            {% if client.autopay_enabled %}
+            <p class="subtle">Autopay charges {{ default_method.describe() if default_method else 'the default card' }} on invoice due dates.</p>
+            <button class="button small danger" type="submit" name="action" value="disable">Disable autopay</button>
+            {% else %}
+            <p class="subtle">Enable autopay to automatically collect balances when they are due.</p>
+            {% if payment_methods %}
+            <label>
+              Use card
+              <select name="payment_method_id">
+                {% for method in payment_methods %}
+                <option value="{{ method.id }}" {% if method.is_default %}selected{% endif %}>{{ method.describe() }} • Exp {{ "%02d"|format(method.exp_month) }}/{{ method.exp_year }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="button small primary" type="submit">Enable autopay</button>
+            {% else %}
+            <p class="subtle">Add a payment method to enable autopay.</p>
+            <button class="button small primary" type="submit" disabled>Enable autopay</button>
+            {% endif %}
+            {% endif %}
+          </form>
+        </article>
       </div>
     </section>
 

@@ -100,5 +100,156 @@
       {% endfor %}
     </div>
   </section>
+  <section class="tech-section">
+    <header class="tech-section-header">
+      <div>
+        <h2>Customer acknowledgement</h2>
+        <p class="subtle">Capture the customer signature confirming they reviewed the AUP, Privacy Policy, and Terms of Service.</p>
+      </div>
+    </header>
+    {% if acknowledgement %}
+    <div class="acknowledgement-summary">
+      <p class="subtle">Last signed by {{ acknowledgement.signed_name }} on {{ acknowledgement.signed_at.strftime('%b %d, %Y %I:%M %p') }}.</p>
+      <img src="{{ url_for('serve_install_signature', ack_id=acknowledgement.id) }}" alt="Customer signature" />
+    </div>
+    {% endif %}
+    <form class="stacked-form signature-form" id="signature-form" method="post" action="{{ url_for('submit_install_acknowledgement', appointment_id=appointment.id) }}">
+      <label>
+        Printed name
+        <input type="text" name="signed_name" placeholder="Customer name" required />
+      </label>
+      <div class="signature-canvas-wrapper">
+        <canvas id="signature-pad" width="640" height="220"></canvas>
+        <div class="signature-actions">
+          <button class="button small secondary" type="button" id="clear-signature">Clear signature</button>
+        </div>
+      </div>
+      <fieldset class="policy-checklist">
+        <legend>Customer confirmed:</legend>
+        <label>
+          <input type="checkbox" name="accept_aup" required />
+          Acceptable Use Policy
+          {% if legal_documents['aup'] %}
+          <a class="inline-link" href="{{ url_for('view_document', doc_type='aup') }}" target="_blank" rel="noopener">Review</a>
+          {% else %}
+          <span class="subtle">(Upload the AUP in the admin dashboard)</span>
+          {% endif %}
+        </label>
+        <label>
+          <input type="checkbox" name="accept_privacy" required />
+          Privacy Policy
+          {% if legal_documents['privacy'] %}
+          <a class="inline-link" href="{{ url_for('view_document', doc_type='privacy') }}" target="_blank" rel="noopener">Review</a>
+          {% else %}
+          <span class="subtle">(Upload the Privacy Policy in the admin dashboard)</span>
+          {% endif %}
+        </label>
+        <label>
+          <input type="checkbox" name="accept_tos" required />
+          Terms of Service
+          {% if legal_documents['tos'] %}
+          <a class="inline-link" href="{{ url_for('view_document', doc_type='tos') }}" target="_blank" rel="noopener">Review</a>
+          {% else %}
+          <span class="subtle">(Upload the Terms of Service in the admin dashboard)</span>
+          {% endif %}
+        </label>
+      </fieldset>
+      <input type="hidden" name="signature_data" id="signature-data" />
+      <button class="button primary" type="submit">Save acknowledgement</button>
+    </form>
+  </section>
 </div>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const canvas = document.getElementById('signature-pad');
+    const form = document.getElementById('signature-form');
+    const clearButton = document.getElementById('clear-signature');
+    const signatureInput = document.getElementById('signature-data');
+    if (!canvas || !form || !clearButton || !signatureInput) {
+      return;
+    }
+
+    const ctx = canvas.getContext('2d');
+    let drawing = false;
+    let hasSignature = false;
+
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = getComputedStyle(canvas).getPropertyValue('--secondary') || '#f5f3ff';
+
+    const getPoint = (event) => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      if (event.touches && event.touches.length > 0) {
+        return {
+          x: (event.touches[0].clientX - rect.left) * scaleX,
+          y: (event.touches[0].clientY - rect.top) * scaleY,
+        };
+      }
+      return {
+        x: (event.clientX - rect.left) * scaleX,
+        y: (event.clientY - rect.top) * scaleY,
+      };
+    };
+
+    const startDrawing = (event) => {
+      event.preventDefault();
+      drawing = true;
+      hasSignature = true;
+      const point = getPoint(event);
+      ctx.beginPath();
+      ctx.moveTo(point.x, point.y);
+    };
+
+    const draw = (event) => {
+      if (!drawing) {
+        return;
+      }
+      event.preventDefault();
+      const point = getPoint(event);
+      ctx.lineTo(point.x, point.y);
+      ctx.stroke();
+    };
+
+    const endDrawing = (event) => {
+      if (!drawing) {
+        return;
+      }
+      event.preventDefault();
+      drawing = false;
+      ctx.closePath();
+    };
+
+    const clearSignature = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      hasSignature = false;
+      signatureInput.value = '';
+    };
+
+    canvas.addEventListener('mousedown', startDrawing);
+    canvas.addEventListener('mousemove', draw);
+    canvas.addEventListener('mouseup', endDrawing);
+    canvas.addEventListener('mouseleave', endDrawing);
+    canvas.addEventListener('touchstart', startDrawing, { passive: false });
+    canvas.addEventListener('touchmove', draw, { passive: false });
+    canvas.addEventListener('touchend', endDrawing);
+    canvas.addEventListener('touchcancel', endDrawing);
+
+    clearButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      clearSignature();
+    });
+
+    form.addEventListener('submit', (event) => {
+      if (!hasSignature) {
+        event.preventDefault();
+        alert('Capture the customer signature before saving.');
+        return;
+      }
+      signatureInput.value = canvas.toDataURL('image/png');
+    });
+  });
+</script>
 {% endblock %}
