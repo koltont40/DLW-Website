@@ -2,7 +2,9 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import string
+import subprocess
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -28,7 +30,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from sqlalchemy import inspect, or_, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, NoSuchTableError
 
 load_dotenv()
 
@@ -86,6 +88,12 @@ def allowed_verification_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_VERIFICATION_EXTENSIONS
 
 
+def allowed_ticket_attachment(filename: str) -> bool:
+    if not filename:
+        return False
+    return Path(filename).suffix.lower() in ALLOWED_TICKET_ATTACHMENT_EXTENSIONS
+
+
 def delete_client_verification_photo(app: Flask, client: "Client") -> None:
     if not client.verification_photo_filename:
         return
@@ -115,6 +123,45 @@ def store_client_verification_photo(app: Flask, client: "Client", file) -> None:
 
     client.verification_photo_filename = str(relative_path)
     client.verification_photo_uploaded_at = utcnow()
+
+
+def store_ticket_attachment(app: Flask, ticket: "SupportTicket", file) -> "SupportTicketAttachment":
+    attachments_folder = (
+        Path(app.config["SUPPORT_TICKET_ATTACHMENT_FOLDER"]) / f"ticket_{ticket.id}"
+    )
+    attachments_folder.mkdir(parents=True, exist_ok=True)
+
+    timestamp = utcnow().strftime("%Y%m%d%H%M%S")
+    safe_name = secure_filename(file.filename)
+    stored_filename = f"{timestamp}_{safe_name}" if safe_name else f"{timestamp}.bin"
+    relative_path = Path(f"ticket_{ticket.id}") / stored_filename
+    file.save(attachments_folder / stored_filename)
+
+    attachment = SupportTicketAttachment(
+        ticket_id=ticket.id,
+        original_filename=file.filename or stored_filename,
+        stored_filename=str(relative_path),
+    )
+    db.session.add(attachment)
+    return attachment
+
+
+def delete_ticket_attachment_files(app: Flask, ticket: "SupportTicket") -> None:
+    base_folder = Path(app.config["SUPPORT_TICKET_ATTACHMENT_FOLDER"])
+    for attachment in ticket.attachments:
+        file_path = base_folder / attachment.stored_filename
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except OSError:
+            pass
+
+    ticket_folder = base_folder / f"ticket_{ticket.id}"
+    try:
+        if ticket_folder.exists() and not any(ticket_folder.iterdir()):
+            ticket_folder.rmdir()
+    except OSError:
+        pass
 
 
 class Client(db.Model):
@@ -332,6 +379,14 @@ INSTALL_PHOTO_CATEGORY_CHOICES = REQUIRED_INSTALL_PHOTO_CATEGORIES + [
 ]
 ALLOWED_INSTALL_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif"}
 ALLOWED_VERIFICATION_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".pdf"}
+ALLOWED_TICKET_ATTACHMENT_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".heic",
+    ".heif",
+}
 
 
 def get_default_navigation_items() -> list[tuple[str, str, bool]]:
@@ -382,6 +437,7 @@ ALLOWED_BRANDING_EXTENSIONS = {
 INVOICE_STATUS_OPTIONS = ["Pending", "Paid", "Overdue", "Cancelled"]
 
 TICKET_STATUS_OPTIONS = ["Open", "In Progress", "Resolved", "Closed"]
+TICKET_PRIORITY_OPTIONS = ["Low", "Normal", "High", "Urgent"]
 
 
 class Document(db.Model):
@@ -514,6 +570,7 @@ class SupportTicket(db.Model):
     subject = db.Column(db.String(255), nullable=False)
     message = db.Column(db.Text, nullable=False)
     status = db.Column(db.String(20), nullable=False, default="Open")
+    priority = db.Column(db.String(20), nullable=False, default="Normal")
     resolution_notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = db.Column(
@@ -521,9 +578,31 @@ class SupportTicket(db.Model):
     )
 
     client = db.relationship("Client", back_populates="tickets")
+    attachments = db.relationship(
+        "SupportTicketAttachment",
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<SupportTicket {self.id} for client {self.client_id}>"
+
+
+class SupportTicketAttachment(db.Model):
+    __tablename__ = "support_ticket_attachments"
+
+    id = db.Column(db.Integer, primary_key=True)
+    ticket_id = db.Column(
+        db.Integer, db.ForeignKey("support_tickets.id"), nullable=False, index=True
+    )
+    original_filename = db.Column(db.String(255), nullable=False)
+    stored_filename = db.Column(db.String(255), nullable=False)
+    uploaded_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+    ticket = db.relationship("SupportTicket", back_populates="attachments")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<SupportTicketAttachment {self.id} ticket={self.ticket_id}>"
 
 
 class Appointment(db.Model):
@@ -583,6 +662,34 @@ class DownDetectorConfig(db.Model):
         return f"<DownDetectorConfig target={self.target_url}>"
 
 
+class TLSConfig(db.Model):
+    __tablename__ = "tls_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    domain = db.Column(db.String(255))
+    contact_email = db.Column(db.String(255))
+    certificate_path = db.Column(db.String(500))
+    private_key_path = db.Column(db.String(500))
+    challenge_path = db.Column(db.String(500))
+    auto_renew = db.Column(db.Boolean, nullable=False, default=True)
+    use_staging = db.Column(db.Boolean, nullable=False, default=False)
+    status = db.Column(db.String(50), nullable=False, default="pending")
+    last_error = db.Column(db.Text)
+    last_provisioned_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def certificate_ready(self) -> bool:
+        return bool(
+            self.certificate_path
+            and self.private_key_path
+            and Path(self.certificate_path).exists()
+            and Path(self.private_key_path).exists()
+        )
+
+
 class BlogPost(db.Model):
     __tablename__ = "blog_posts"
 
@@ -629,6 +736,11 @@ def create_app(test_config: dict | None = None) -> Flask:
         "BRANDING_UPLOAD_FOLDER": str(instance_path / "branding"),
         "INSTALL_PHOTOS_FOLDER": str(instance_path / "install_photos"),
         "CLIENT_VERIFICATION_FOLDER": str(instance_path / "verification"),
+        "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(instance_path / "ticket_attachments"),
+        "TLS_CHALLENGE_FOLDER": str(instance_path / "acme-challenges"),
+        "TLS_CONFIG_FOLDER": str(instance_path / "letsencrypt"),
+        "TLS_WORK_FOLDER": str(instance_path / "letsencrypt-work"),
+        "TLS_LOG_FOLDER": str(instance_path / "letsencrypt-logs"),
         "CONTACT_EMAIL": os.environ.get("CONTACT_EMAIL", "hello@example.com"),
         "SNMP_TRAP_HOST": os.environ.get("SNMP_TRAP_HOST"),
         "SNMP_TRAP_PORT": snmp_port,
@@ -655,6 +767,11 @@ def create_app(test_config: dict | None = None) -> Flask:
             "BRANDING_UPLOAD_FOLDER",
             "INSTALL_PHOTOS_FOLDER",
             "CLIENT_VERIFICATION_FOLDER",
+            "SUPPORT_TICKET_ATTACHMENT_FOLDER",
+            "TLS_CHALLENGE_FOLDER",
+            "TLS_CONFIG_FOLDER",
+            "TLS_WORK_FOLDER",
+            "TLS_LOG_FOLDER",
         ]:
             folder_path = Path(app.config[folder_key])
             folder_path.mkdir(parents=True, exist_ok=True)
@@ -664,7 +781,9 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_service_plans_seeded()
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
+        ensure_support_ticket_priority_field()
         ensure_down_detector_configuration()
+        ensure_tls_configuration()
 
     return app
 
@@ -680,7 +799,67 @@ def init_db() -> None:
         ensure_service_plans_seeded()
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
+        ensure_support_ticket_priority_field()
         ensure_down_detector_configuration()
+        ensure_tls_configuration()
+
+
+def issue_lets_encrypt_certificate(
+    app: Flask, config: TLSConfig, *, staging: bool = False
+) -> tuple[bool, str | None, Path | None, Path | None]:
+    domain = (config.domain or "").strip()
+    contact_email = (config.contact_email or "").strip()
+    if not domain or not contact_email:
+        return False, "Domain and contact email are required before provisioning.", None, None
+
+    certbot_path = shutil.which("certbot")
+    if not certbot_path:
+        return False, "Certbot is not installed on this system.", None, None
+
+    challenge_folder = Path(app.config["TLS_CHALLENGE_FOLDER"])
+    config_folder = Path(app.config["TLS_CONFIG_FOLDER"])
+    work_folder = Path(app.config["TLS_WORK_FOLDER"])
+    log_folder = Path(app.config["TLS_LOG_FOLDER"])
+
+    for folder in (challenge_folder, config_folder, work_folder, log_folder):
+        folder.mkdir(parents=True, exist_ok=True)
+
+    command = [
+        certbot_path,
+        "certonly",
+        "--non-interactive",
+        "--agree-tos",
+        "--webroot",
+        "-w",
+        str(challenge_folder),
+        "-d",
+        domain,
+        "--email",
+        contact_email,
+        "--config-dir",
+        str(config_folder),
+        "--work-dir",
+        str(work_folder),
+        "--logs-dir",
+        str(log_folder),
+    ]
+
+    if staging:
+        command.append("--test-cert")
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        error_output = result.stderr.strip() or result.stdout.strip()
+        message = error_output or "Certbot failed without output."
+        return False, message, None, None
+
+    cert_dir = config_folder / "live" / domain
+    cert_path = cert_dir / "fullchain.pem"
+    key_path = cert_dir / "privkey.pem"
+    if not cert_path.exists() or not key_path.exists():
+        return False, "Certificate files were not found after provisioning.", None, None
+
+    return True, None, cert_path, key_path
 
 
 def send_email_via_snmp(app: Flask, recipient: str, subject: str, body: str) -> bool:
@@ -1001,6 +1180,33 @@ def ensure_appointment_technician_field() -> None:
                 text("ALTER TABLE appointments ADD COLUMN technician_id INTEGER")
             )
 
+
+def ensure_support_ticket_priority_field() -> None:
+    inspector = inspect(db.engine)
+    try:
+        columns = {
+            column["name"] for column in inspector.get_columns("support_tickets")
+        }
+    except NoSuchTableError:
+        return
+
+    if "priority" in columns:
+        return
+
+    with db.engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE support_tickets ADD COLUMN priority VARCHAR(20)"
+                " DEFAULT 'Normal' NOT NULL"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE support_tickets SET priority = 'Normal' WHERE priority IS NULL"
+            )
+        )
+
+
 def ensure_snmp_configuration() -> None:
     config = SNMPConfig.query.first()
     if config:
@@ -1031,6 +1237,18 @@ def ensure_down_detector_configuration() -> None:
     config = DownDetectorConfig(target_url=None)
     db.session.add(config)
     db.session.commit()
+
+
+def ensure_tls_configuration() -> None:
+    config = TLSConfig.query.first()
+    desired_path = current_app.config.get("TLS_CHALLENGE_FOLDER")
+    if config is None:
+        config = TLSConfig(challenge_path=desired_path)
+        db.session.add(config)
+        db.session.commit()
+    elif desired_path and config.challenge_path != desired_path:
+        config.challenge_path = desired_path
+        db.session.commit()
 
 
 def get_effective_snmp_settings(app: Flask) -> dict[str, str | int | None]:
@@ -1246,6 +1464,17 @@ def register_routes(app: Flask) -> None:
             "down_detector_config": down_detector_config,
             "plan_category_links": plan_category_links,
         }
+
+    @app.route("/.well-known/acme-challenge/<token>")
+    def acme_http_challenge(token: str):
+        if "/" in token or "\\" in token or token.startswith("."):
+            abort(404)
+
+        challenge_dir = Path(app.config["TLS_CHALLENGE_FOLDER"])
+        file_path = challenge_dir / token
+        if not file_path.exists():
+            abort(404)
+        return send_from_directory(challenge_dir, token)
 
     @app.route("/")
     def index():
@@ -1574,6 +1803,7 @@ def register_routes(app: Flask) -> None:
             upcoming_due_date=upcoming_due_date,
             open_ticket_count=open_ticket_count,
             selected_services=selected_services,
+            ticket_priority_options=TICKET_PRIORITY_OPTIONS,
         )
 
     @app.post("/portal/tickets")
@@ -1581,6 +1811,23 @@ def register_routes(app: Flask) -> None:
     def portal_create_ticket(client: Client):
         subject = request.form.get("subject", "").strip()
         message = request.form.get("message", "").strip()
+        priority_value = request.form.get("priority", "Normal").strip().title()
+        if priority_value not in TICKET_PRIORITY_OPTIONS:
+            priority_value = "Normal"
+
+        uploaded_files = [
+            file
+            for file in request.files.getlist("attachments")
+            if file and getattr(file, "filename", "")
+        ]
+
+        for file in uploaded_files:
+            if not allowed_ticket_attachment(file.filename):
+                flash(
+                    "Upload JPG, PNG, GIF, or HEIC images for ticket attachments.",
+                    "danger",
+                )
+                return redirect(url_for("portal_dashboard"))
 
         if not subject or not message:
             flash("Please provide both a subject and description for your ticket.", "danger")
@@ -1590,8 +1837,15 @@ def register_routes(app: Flask) -> None:
             client_id=client.id,
             subject=subject,
             message=message,
+            priority=priority_value,
         )
         db.session.add(ticket)
+        db.session.flush()
+
+        if uploaded_files:
+            for file in uploaded_files:
+                store_ticket_attachment(current_app, ticket, file)
+            ticket.updated_at = utcnow()
         db.session.commit()
 
         flash("Your support request has been submitted. We'll reach out shortly.", "success")
@@ -1902,6 +2156,34 @@ def register_routes(app: Flask) -> None:
         mimetype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
         return send_from_directory(directory, file_path.name, mimetype=mimetype)
 
+    @app.get("/support-ticket-attachments/<int:attachment_id>")
+    def serve_ticket_attachment(attachment_id: int):
+        attachment = SupportTicketAttachment.query.get_or_404(attachment_id)
+        ticket = attachment.ticket
+
+        authorized = False
+        if session.get("admin_authenticated"):
+            authorized = True
+        client_id = session.get(PORTAL_SESSION_KEY)
+        if client_id and ticket and client_id == ticket.client_id:
+            authorized = True
+        if not authorized:
+            abort(403)
+
+        base_folder = Path(app.config["SUPPORT_TICKET_ATTACHMENT_FOLDER"])
+        file_path = base_folder / attachment.stored_filename
+        if not file_path.exists():
+            abort(404)
+
+        directory = str(file_path.parent)
+        mimetype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        return send_from_directory(
+            directory,
+            file_path.name,
+            mimetype=mimetype,
+            download_name=attachment.original_filename,
+        )
+
     @app.get("/clients/<int:client_id>/verification-photo")
     def client_verification_photo(client_id: int):
         client_record = Client.query.get_or_404(client_id)
@@ -1968,7 +2250,6 @@ def register_routes(app: Flask) -> None:
         valid_sections = {
             "overview",
             "customers",
-            "portal",
             "billing",
             "network",
             "support",
@@ -1979,6 +2260,7 @@ def register_routes(app: Flask) -> None:
             "blog",
             "plans",
             "field",
+            "security",
         }
         if active_section not in valid_sections:
             active_section = "overview"
@@ -1999,9 +2281,11 @@ def register_routes(app: Flask) -> None:
         selected_client_missing_categories: list[str] = []
         selected_client_service_groups: list[tuple[str, str]] = []
         selected_client_portal_enabled = False
+        tls_config: TLSConfig | None = None
+        tls_certificate_ready = False
+        tls_challenge_folder = current_app.config.get("TLS_CHALLENGE_FOLDER")
         if active_section in {
             "customers",
-            "portal",
             "billing",
             "network",
             "support",
@@ -2211,6 +2495,10 @@ def register_routes(app: Flask) -> None:
                 ]
                 field_requirements[ap.id] = missing
 
+        tls_config = TLSConfig.query.first()
+        if tls_config:
+            tls_certificate_ready = tls_config.certificate_ready()
+
         operations_snapshot = [
             {
                 "key": "customers",
@@ -2317,6 +2605,7 @@ def register_routes(app: Flask) -> None:
             selected_client_invoices=selected_client_invoices,
             selected_client_equipment=selected_client_equipment,
             selected_client_tickets=selected_client_tickets,
+            ticket_priority_options=TICKET_PRIORITY_OPTIONS,
             selected_client_appointments=selected_client_appointments,
             selected_client_photo_map=selected_client_photo_map,
             selected_client_missing_categories=selected_client_missing_categories,
@@ -2345,6 +2634,152 @@ def register_routes(app: Flask) -> None:
             install_photo_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
             field_requirements=field_requirements,
             field_photo_map=field_photo_map,
+            tls_config=tls_config,
+            tls_certificate_ready=tls_certificate_ready,
+            tls_challenge_folder=tls_challenge_folder,
+        )
+
+    @app.get("/dashboard/customers/<int:client_id>")
+    @login_required
+    def admin_client_account(client_id: int):
+        client = Client.query.get_or_404(client_id)
+
+        invoices = (
+            Invoice.query.filter_by(client_id=client.id)
+            .order_by(Invoice.created_at.desc())
+            .all()
+        )
+        equipment_items = (
+            Equipment.query.filter_by(client_id=client.id)
+            .order_by(Equipment.created_at.desc())
+            .all()
+        )
+        tickets = (
+            SupportTicket.query.filter_by(client_id=client.id)
+            .order_by(SupportTicket.updated_at.desc())
+            .all()
+        )
+        appointments = (
+            Appointment.query.filter_by(client_id=client.id)
+            .order_by(Appointment.scheduled_for.desc())
+            .all()
+        )
+
+        current_time = utcnow()
+        upcoming_appointments = []
+        for appointment in appointments:
+            scheduled_for = appointment.scheduled_for
+            if scheduled_for.tzinfo is None:
+                scheduled_for = scheduled_for.replace(tzinfo=UTC)
+            if scheduled_for >= current_time:
+                upcoming_appointments.append(appointment)
+
+        photo_map: dict[str, list[InstallPhoto]] = {
+            category: [] for category in INSTALL_PHOTO_CATEGORY_CHOICES
+        }
+        client_photos = (
+            InstallPhoto.query.filter_by(client_id=client.id)
+            .order_by(InstallPhoto.uploaded_at.desc())
+            .all()
+        )
+        for photo in client_photos:
+            photo_map.setdefault(photo.category, []).append(photo)
+
+        missing_photo_categories = [
+            category
+            for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
+            if not photo_map.get(category)
+        ]
+
+        service_groups: list[tuple[str, str]] = []
+        if client.residential_plan:
+            service_groups.append(("Residential", client.residential_plan))
+        if client.business_plan:
+            service_groups.append(("Business", client.business_plan))
+        if client.phone_plan:
+            service_groups.append(("Phone Service", client.phone_plan))
+
+        categorized_plans = {
+            category: plans
+            for category, plans in get_ordered_service_plan_categories()
+        }
+        plan_field_config: list[dict[str, object]] = []
+        for category, field_name, label in PLAN_FIELD_DEFINITIONS:
+            plans = categorized_plans.get(category)
+            if not plans:
+                continue
+            plan_field_config.append(
+                {
+                    "category": category,
+                    "field": field_name,
+                    "label": label,
+                    "plans": plans,
+                    "selected": getattr(client, field_name) or "",
+                }
+            )
+
+        outstanding_invoices = [
+            invoice
+            for invoice in invoices
+            if invoice.status not in {"Paid", "Cancelled"}
+        ]
+        outstanding_balance_cents = sum(
+            invoice.amount_cents for invoice in outstanding_invoices
+        )
+
+        due_dates = [
+            invoice.due_date
+            for invoice in outstanding_invoices
+            if invoice.due_date is not None
+        ]
+        upcoming_due_date = min(due_dates) if due_dates else None
+
+        open_ticket_count = sum(
+            1 for ticket in tickets if ticket.status in {"Open", "In Progress"}
+        )
+
+        address = client.address or ""
+        encoded_address = quote_plus(address) if address else None
+        google_maps_url = (
+            f"https://www.google.com/maps/dir/?api=1&destination={encoded_address}"
+            if encoded_address
+            else None
+        )
+        apple_maps_url = (
+            f"https://maps.apple.com/?daddr={encoded_address}"
+            if encoded_address
+            else None
+        )
+
+        technicians = (
+            Technician.query.order_by(Technician.name.asc()).all()
+        )
+
+        return render_template(
+            "admin_client_account.html",
+            client=client,
+            invoices=invoices,
+            equipment_items=equipment_items,
+            tickets=tickets,
+            appointments=appointments,
+            photo_map=photo_map,
+            missing_photo_categories=missing_photo_categories,
+            service_groups=service_groups,
+            portal_enabled=bool(client.portal_password_hash),
+            outstanding_balance_cents=outstanding_balance_cents,
+            upcoming_due_date=upcoming_due_date,
+            open_ticket_count=open_ticket_count,
+            google_maps_url=google_maps_url,
+            apple_maps_url=apple_maps_url,
+            required_photo_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
+            install_photo_categories=INSTALL_PHOTO_CATEGORY_CHOICES,
+            ticket_priority_options=TICKET_PRIORITY_OPTIONS,
+            upcoming_appointments=upcoming_appointments,
+            plan_field_config=plan_field_config,
+            status_options=STATUS_OPTIONS,
+            invoice_status_options=INVOICE_STATUS_OPTIONS,
+            appointment_status_options=APPOINTMENT_STATUS_OPTIONS,
+            technicians=technicians,
         )
 
     @app.post("/documents/upload")
@@ -2462,7 +2897,7 @@ def register_routes(app: Flask) -> None:
             f"Temporary portal password for {client.email}: {temporary_password}",
             "info",
         )
-        return _redirect_back_to_dashboard("portal")
+        return _redirect_back_to_dashboard("customers", focus=client_id)
 
     @app.post("/clients/<int:client_id>/portal/set-password")
     @login_required
@@ -2473,24 +2908,30 @@ def register_routes(app: Flask) -> None:
 
         if not password:
             flash("Please provide a password for the client portal.", "danger")
-            return _redirect_back_to_dashboard("portal")
+            return _redirect_back_to_dashboard("customers", focus=client_id)
 
         if password != confirm:
             flash("Passwords do not match. Please try again.", "danger")
-            return _redirect_back_to_dashboard("portal")
+            return _redirect_back_to_dashboard("customers", focus=client_id)
 
         if len(password) < 8:
             flash("Portal passwords must be at least 8 characters long.", "danger")
-            return _redirect_back_to_dashboard("portal")
+            return _redirect_back_to_dashboard("customers", focus=client_id)
 
         client.portal_password_hash = generate_password_hash(password)
         client.portal_password_updated_at = utcnow()
         client.portal_access_code = secrets.token_hex(16)
         db.session.commit()
         flash(f"Portal password updated for {client.email}.", "success")
-        return _redirect_back_to_dashboard("portal")
+        return _redirect_back_to_dashboard("customers", focus=client_id)
 
-    def _redirect_back_to_dashboard(default_section: str = "overview"):
+    def _redirect_back_to_dashboard(
+        default_section: str = "overview", focus: int | None = None
+    ):
+        next_url = request.args.get("next") or request.form.get("next")
+        if next_url:
+            return redirect(next_url)
+
         params: dict[str, str] = {}
         status_value = request.args.get("status")
         if status_value:
@@ -2498,7 +2939,9 @@ def register_routes(app: Flask) -> None:
         section_value = request.args.get("section") or default_section
         if section_value:
             params["section"] = section_value
-        focus_value = request.args.get("focus")
+        focus_value: str | None = request.args.get("focus")
+        if focus is not None:
+            focus_value = str(focus)
         if focus_value:
             params["focus"] = focus_value
         return redirect(url_for("dashboard", **params))
@@ -2587,6 +3030,45 @@ def register_routes(app: Flask) -> None:
 
         flash(f"Customer {client.name} added.", "success")
         return _redirect_back_to_dashboard("customers")
+
+    @app.post("/clients/<int:client_id>/service-plans")
+    @login_required
+    def update_client_service_plans(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        residential_plan = request.form.get("residential_plan", "").strip()
+        phone_plan = request.form.get("phone_plan", "").strip()
+        business_plan = request.form.get("business_plan", "").strip()
+        status_value = request.form.get("status", client.status).strip() or client.status
+        wifi_router_flag = request.form.get("wifi_router_needed")
+
+        if status_value not in STATUS_OPTIONS:
+            status_value = client.status
+
+        client.residential_plan = residential_plan or None
+        client.phone_plan = phone_plan or None
+        client.business_plan = business_plan or None
+        client.status = status_value
+        client.wifi_router_needed = bool(wifi_router_flag)
+
+        selected_services = [
+            value
+            for value in (
+                client.residential_plan,
+                client.phone_plan,
+                client.business_plan,
+            )
+            if value
+        ]
+        client.project_type = ", ".join(selected_services) if selected_services else None
+
+        db.session.commit()
+
+        flash("Service plans updated.", "success")
+
+        next_url = request.form.get("next") or request.args.get("next")
+        if next_url:
+            return redirect(next_url)
+        return redirect(url_for("admin_client_account", client_id=client.id))
 
     @app.post("/clients/<int:client_id>/verification")
     @login_required
@@ -3071,6 +3553,23 @@ def register_routes(app: Flask) -> None:
         ticket = SupportTicket.query.get_or_404(ticket_id)
         status_value = request.form.get("status", ticket.status).strip() or ticket.status
         resolution_notes = request.form.get("resolution_notes", "").strip() or None
+        priority_value = request.form.get("priority", ticket.priority).strip().title()
+        if priority_value not in TICKET_PRIORITY_OPTIONS:
+            priority_value = ticket.priority
+
+        uploaded_files = [
+            file
+            for file in request.files.getlist("attachments")
+            if file and getattr(file, "filename", "")
+        ]
+
+        for file in uploaded_files:
+            if not allowed_ticket_attachment(file.filename):
+                flash(
+                    "Upload JPG, PNG, GIF, or HEIC images for ticket attachments.",
+                    "danger",
+                )
+                return _redirect_back_to_dashboard("support")
 
         if status_value not in TICKET_STATUS_OPTIONS:
             flash("Unknown ticket status.", "danger")
@@ -3078,6 +3577,10 @@ def register_routes(app: Flask) -> None:
 
         ticket.status = status_value
         ticket.resolution_notes = resolution_notes
+        ticket.priority = priority_value
+        if uploaded_files:
+            for file in uploaded_files:
+                store_ticket_attachment(current_app, ticket, file)
         ticket.updated_at = utcnow()
         db.session.commit()
 
@@ -3088,6 +3591,7 @@ def register_routes(app: Flask) -> None:
     @login_required
     def delete_ticket(ticket_id: int):
         ticket = SupportTicket.query.get_or_404(ticket_id)
+        delete_ticket_attachment_files(current_app, ticket)
         db.session.delete(ticket)
         db.session.commit()
         flash("Ticket removed.", "info")
@@ -3158,6 +3662,60 @@ def register_routes(app: Flask) -> None:
 
         flash("SNMP settings updated.", "success")
         return _redirect_back_to_dashboard("support")
+
+    @app.post("/dashboard/security/tls")
+    @login_required
+    def configure_tls():
+        tls_config = TLSConfig.query.first()
+        if tls_config is None:
+            tls_config = TLSConfig(
+                challenge_path=current_app.config.get("TLS_CHALLENGE_FOLDER")
+            )
+            db.session.add(tls_config)
+
+        domain = (request.form.get("domain", "").strip().lower() or None)
+        contact_email = request.form.get("contact_email", "").strip() or None
+        auto_renew = bool(request.form.get("auto_renew"))
+        staging = bool(request.form.get("use_staging"))
+        action = request.form.get("action", "save")
+
+        tls_config.domain = domain
+        tls_config.contact_email = contact_email
+        tls_config.auto_renew = auto_renew
+        tls_config.use_staging = staging
+        tls_config.challenge_path = current_app.config.get("TLS_CHALLENGE_FOLDER")
+
+        if action == "provision":
+            success, error_message, cert_path, key_path = issue_lets_encrypt_certificate(
+                current_app, tls_config, staging=staging
+            )
+            if success:
+                tls_config.certificate_path = str(cert_path) if cert_path else None
+                tls_config.private_key_path = str(key_path) if key_path else None
+                tls_config.status = "active"
+                tls_config.last_error = None
+                tls_config.last_provisioned_at = utcnow()
+                flash(
+                    "Certificate issued successfully. Restart the app to serve HTTPS.",
+                    "success",
+                )
+            else:
+                tls_config.status = "error"
+                tls_config.last_error = error_message
+                flash(
+                    f"Certificate request failed: {error_message}",
+                    "danger",
+                )
+        else:
+            tls_config.last_error = None if tls_config.certificate_ready() else tls_config.last_error
+            tls_config.status = (
+                "active" if tls_config.certificate_ready() else "pending"
+            )
+            flash("TLS settings saved.", "success")
+
+        db.session.commit()
+
+        return redirect(url_for("dashboard", section="security"))
 
     @app.post("/down-detector/config")
     @login_required
@@ -3608,4 +4166,21 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    default_port = 80
+    ssl_context: tuple[str, str] | None = None
+
+    with app.app_context():
+        tls_config = TLSConfig.query.first()
+        if tls_config and tls_config.certificate_ready():
+            ssl_context = (
+                str(Path(tls_config.certificate_path)),
+                str(Path(tls_config.private_key_path)),
+            )
+            default_port = 443
+
+    port_value = int(os.environ.get("PORT", default_port))
+    run_kwargs = {"host": "0.0.0.0", "port": port_value}
+    if ssl_context:
+        run_kwargs["ssl_context"] = ssl_context
+
+    app.run(**run_kwargs)

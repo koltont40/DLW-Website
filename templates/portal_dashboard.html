@@ -183,7 +183,12 @@
       </header>
       <div class="support-layout">
         <div class="support-form">
-          <form method="post" action="{{ url_for('portal_create_ticket') }}" class="stacked-form">
+          <form
+            method="post"
+            action="{{ url_for('portal_create_ticket') }}"
+            class="stacked-form"
+            enctype="multipart/form-data"
+          >
             <h3>Start a new ticket</h3>
             <label>
               Subject
@@ -192,6 +197,19 @@
             <label>
               Details
               <textarea name="message" rows="4" placeholder="Share as much detail as possible so we can help quickly." required></textarea>
+            </label>
+            <label>
+              Priority
+              <select name="priority">
+                {% for option in ticket_priority_options %}
+                <option value="{{ option }}" {% if option == 'Normal' %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Photos (optional)
+              <input type="file" name="attachments" accept="image/*" multiple />
+              <span class="subtle">Attach images that illustrate the issue.</span>
             </label>
             <button class="button primary" type="submit">Submit ticket</button>
           </form>
@@ -208,7 +226,24 @@
                 </div>
                 <span class="status-pill status-{{ ticket.status|lower|replace(' ', '-') }}">{{ ticket.status }}</span>
               </div>
+              <p class="subtle">Priority: {{ ticket.priority }}</p>
               <p>{{ ticket.message }}</p>
+              {% if ticket.attachments %}
+              <div class="ticket-attachments">
+                <p class="subtle">Attached photos:</p>
+                <div class="ticket-attachment-strip">
+                  {% for attachment in ticket.attachments %}
+                  <a href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
+                    <img
+                      src="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}"
+                      alt="Ticket attachment {{ loop.index }}"
+                      loading="lazy"
+                    />
+                  </a>
+                  {% endfor %}
+                </div>
+              </div>
+              {% endif %}
               {% if ticket.resolution_notes %}
               <div class="resolution">
                 <h4>Latest update</h4>
