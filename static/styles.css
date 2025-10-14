@@ -828,6 +828,40 @@ body {
   gap: 1.5rem;
 }
 
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.section-header > div:first-child {
+  flex: 1;
+}
+
+.section-header h2 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.section-header p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.section-actions .filter-form {
+  margin: 0;
+}
+
 .snapshot-grid {
   display: grid;
   gap: 1.5rem;
@@ -1070,6 +1104,37 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
+.management-card {
+  margin-top: 2rem;
+}
+
+.management-grid {
+  display: grid;
+  gap: 1.75rem;
+}
+
+@media (min-width: 900px) {
+  .management-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.management-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.management-column h4 {
+  margin: 0 0 0.5rem;
+}
+
+.management-column h5 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
 .detail-column h3 {
   margin: 0 0 0.9rem;
 }
@@ -1104,6 +1169,23 @@ body {
   gap: 0.6rem;
   flex-wrap: wrap;
   margin-top: 1rem;
+}
+
+.portal-management {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.portal-management h4 {
+  margin: 0;
+}
+
+.portal-management .stacked-form {
+  gap: 0.75rem;
 }
 
 .detail-note {
@@ -1471,6 +1553,86 @@ body {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.address-text {
+  display: inline-block;
+  white-space: pre-wrap;
+  color: var(--secondary);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(1.5rem, 4vw, 2.5rem);
+  z-index: 1000;
+  overflow-y: auto;
+  backdrop-filter: blur(6px);
+}
+
+.modal-backdrop[hidden] {
+  display: none;
+}
+
+.modal-panel {
+  width: min(720px, 100%);
+  background: var(--surface-elevated);
+  border-radius: 24px;
+  border: 1px solid var(--border);
+  box-shadow: 0 40px 90px -45px rgba(124, 58, 237, 0.85);
+  padding: clamp(1.5rem, 3vw, 2.25rem);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  position: relative;
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.modal-header h2 {
+  margin: 0;
+}
+
+.modal-header p {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+}
+
+.modal-close {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-size: 1.6rem;
+  line-height: 1;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.modal-close:hover,
+.modal-close:focus-visible {
+  color: var(--secondary);
+  background: rgba(167, 139, 250, 0.18);
+  border-color: rgba(167, 139, 250, 0.35);
+  outline: none;
+}
+
+.modal-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
 }
 
 .notes-cell textarea {

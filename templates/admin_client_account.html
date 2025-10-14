@@ -1,0 +1,657 @@
+{% extends "base.html" %}
+{% block title %}{{ client.name }} Account | Admin Dashboard{% endblock %}
+{% block content %}
+<div class="dashboard-layout admin-account-layout">
+  {% set account_url = url_for('admin_client_account', client_id=client.id) %}
+  <aside class="admin-sidebar">
+    <div class="sidebar-header">
+      <h1>Customer Account</h1>
+      <p class="subtle">Dive into {{ client.name }}'s subscription, billing, and field history.</p>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="sidebar-group">
+        <span class="sidebar-group-label">Navigation</span>
+        <a class="sidebar-link" href="{{ url_for('dashboard', section='customers') }}">Back to customers</a>
+        <a
+          class="sidebar-link"
+          href="{{ url_for('dashboard', section='customers', focus=client.id) }}#customer-detail"
+        >Open summary panel</a>
+      </div>
+      <div class="sidebar-group">
+        <span class="sidebar-group-label">Quick actions</span>
+        <a class="sidebar-link" href="mailto:{{ client.email }}">Email customer</a>
+        {% if client.phone %}
+        <a class="sidebar-link" href="tel:{{ client.phone }}">Call customer</a>
+        {% endif %}
+        {% if google_maps_url %}
+        <a class="sidebar-link" href="{{ google_maps_url }}" target="_blank" rel="noopener">Google Maps</a>
+        {% endif %}
+        {% if apple_maps_url %}
+        <a class="sidebar-link" href="{{ apple_maps_url }}" target="_blank" rel="noopener">Apple Maps</a>
+        {% endif %}
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <a class="button secondary" href="{{ url_for('logout') }}">Log out</a>
+    </div>
+  </aside>
+  <div class="dashboard-main">
+    <section class="card customer-detail-card">
+      <header class="section-header customer-detail-header">
+        <div>
+          <h2>{{ client.name }}</h2>
+          <p class="subtle">
+            Account <code>{{ client.account_reference }}</code>
+            {% if client.email %}
+            • <a class="inline-link" href="mailto:{{ client.email }}">{{ client.email }}</a>
+            {% endif %}
+          </p>
+        </div>
+        <div class="customer-detail-actions">
+          <span class="badge">{{ client.status }}</span>
+          {% if portal_enabled %}
+          <span class="badge success">Portal active</span>
+          {% else %}
+          <span class="badge warning">Portal pending</span>
+          {% endif %}
+          <span class="badge subtle">Joined {{ client.created_at.strftime('%b %d, %Y') }}</span>
+        </div>
+      </header>
+      <div class="snapshot-grid">
+        <article class="snapshot-tile">
+          <header>
+            <h3>Balance due</h3>
+            <p class="metric-value">{{ outstanding_balance_cents|currency }}</p>
+          </header>
+          <p class="subtle">Based on unpaid invoices.</p>
+        </article>
+        <article class="snapshot-tile">
+          <header>
+            <h3>Upcoming due date</h3>
+            <p class="metric-value">{{ upcoming_due_date|date_or_dash }}</p>
+          </header>
+          <p class="subtle">Soonest outstanding invoice.</p>
+        </article>
+        <article class="snapshot-tile">
+          <header>
+            <h3>Open tickets</h3>
+            <p class="metric-value">{{ open_ticket_count }}</p>
+          </header>
+          <p class="subtle">Tickets waiting for resolution.</p>
+        </article>
+        <article class="snapshot-tile">
+          <header>
+            <h3>Active services</h3>
+            <p class="metric-value">{{ service_groups|length }}</p>
+          </header>
+          <p class="subtle">Residential, business, or voice plans.</p>
+        </article>
+      </div>
+      <div class="customer-detail-grid">
+        <article class="detail-column">
+          <h3>Contact &amp; Identity</h3>
+          <dl class="detail-list">
+            <div>
+              <dt>Phone</dt>
+              <dd>{{ client.phone or 'Not provided' }}</dd>
+            </div>
+            <div>
+              <dt>Service address</dt>
+              <dd>{{ client.address or 'Not provided' }}</dd>
+            </div>
+            <div>
+              <dt>Driver license</dt>
+              <dd>{{ client.driver_license_number or 'Not captured' }}</dd>
+            </div>
+          </dl>
+          <div class="detail-actions">
+            {% if client.phone %}
+            <a class="button small ghost" href="tel:{{ client.phone }}">Call</a>
+            {% endif %}
+            <a class="button small ghost" href="mailto:{{ client.email }}">Email</a>
+            {% if google_maps_url %}
+            <a class="button small ghost" href="{{ google_maps_url }}" target="_blank" rel="noopener">Google Maps</a>
+            {% endif %}
+            {% if apple_maps_url %}
+            <a class="button small ghost" href="{{ apple_maps_url }}" target="_blank" rel="noopener">Apple Maps</a>
+            {% endif %}
+            {% if client.verification_photo_filename %}
+            <a
+              class="button small ghost"
+              href="{{ url_for('client_verification_photo', client_id=client.id) }}"
+              target="_blank"
+              rel="noopener"
+            >View verification</a>
+            {% endif %}
+          </div>
+          <div class="portal-management">
+            <h4>Portal access</h4>
+          {% if client.portal_password_updated_at %}
+            <p class="subtle">Password last updated {{ client.portal_password_updated_at.strftime('%b %d, %Y %I:%M %p') }}</p>
+          {% else %}
+            <p class="alert subtle">Password not issued yet.</p>
+          {% endif %}
+          <form
+            class="stacked-form"
+            method="post"
+            action="{{ url_for('set_portal_password', client_id=client.id, next=account_url) }}"
+            >
+              <label>
+                New password
+                <input type="password" name="password" minlength="8" placeholder="Create a secure password" required />
+              </label>
+              <label>
+                Confirm password
+                <input type="password" name="confirm_password" minlength="8" placeholder="Re-enter password" required />
+              </label>
+              <button class="button small primary" type="submit">Save password</button>
+            </form>
+            <form
+              class="stacked-form"
+              method="post"
+              action="{{ url_for('reset_portal_password', client_id=client.id, next=account_url) }}"
+            >
+              <button class="button small" type="submit">Generate temporary password</button>
+            </form>
+            <p class="subtle">
+              Share the login URL:
+              <a href="{{ url_for('portal_login', _external=True) }}" target="_blank" rel="noopener">Customer Portal</a>.
+            </p>
+          </div>
+          {% if client.notes %}
+          <div class="detail-note">
+            <h4>Account notes</h4>
+            <p>{{ client.notes }}</p>
+          </div>
+          {% endif %}
+        </article>
+        <article class="detail-column">
+          <h3>Service summary</h3>
+          {% if service_groups %}
+          <ul class="detail-pill-list">
+            {% for label, plan in service_groups %}
+            <li><span class="pill">{{ label }}</span> {{ plan }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="subtle">No service plans assigned yet.</p>
+          {% endif %}
+          <p class="subtle router-state">
+            Managed Wi-Fi router:
+            <strong>{% if client.wifi_router_needed %}Provided by DIXIELAND{% else %}Customer supplied{% endif %}</strong>
+          </p>
+          {% if equipment_items %}
+          <h4>Installed equipment</h4>
+          <ul class="detail-stack">
+            {% for item in equipment_items %}
+            <li>
+              <div class="detail-primary">{{ item.name }}</div>
+              <div class="detail-subtle">
+                {{ item.model or 'Model pending' }} • {{ item.serial_number or 'Serial pending' }}
+                {% if item.installed_on %} • Installed {{ item.installed_on.strftime('%b %d, %Y') }}{% endif %}
+              </div>
+              {% if item.notes %}
+              <div class="detail-note">{{ item.notes }}</div>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="subtle">No equipment on file.</p>
+          {% endif %}
+        </article>
+        <article class="detail-column">
+          <h3>Billing &amp; Support</h3>
+          {% if invoices %}
+          <h4>Invoices</h4>
+          <ul class="detail-stack">
+            {% for invoice in invoices %}
+            <li>
+              <div class="detail-primary">{{ invoice.description }}</div>
+              <div class="detail-subtle">
+                {{ invoice.status }} • {{ (invoice.amount_cents / 100) | currency }}
+                {% if invoice.due_date %} • Due {{ invoice.due_date.strftime('%b %d, %Y') }}{% endif %}
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="subtle">No invoices generated.</p>
+          {% endif %}
+          {% if tickets %}
+          <h4>Recent tickets</h4>
+          <ul class="detail-stack">
+            {% for ticket in tickets[:4] %}
+            <li>
+              <div class="detail-primary">{{ ticket.subject }}</div>
+              <div class="detail-subtle">{{ ticket.status }} • Priority {{ ticket.priority }} • {{ ticket.updated_at.strftime('%b %d, %Y %I:%M %p') }}</div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="subtle">No support tickets yet.</p>
+          {% endif %}
+          {% if upcoming_appointments %}
+          <h4>Upcoming appointments</h4>
+          <ul class="detail-stack">
+            {% for appointment in upcoming_appointments %}
+            <li>
+              <div class="detail-primary">{{ appointment.title }}</div>
+              <div class="detail-subtle">
+                {{ appointment.status }} • {{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </article>
+      </div>
+    </section>
+
+    <section class="card management-card" id="service-equipment">
+      <header class="section-header">
+        <div>
+          <h3>Service plans &amp; equipment</h3>
+          <p class="subtle">Assign subscription bundles and keep onsite hardware current.</p>
+        </div>
+      </header>
+      <div class="management-grid">
+        <article class="management-column">
+          <h4>Service configuration</h4>
+          {% if plan_field_config %}
+          <form class="stacked-form" method="post" action="{{ url_for('update_client_service_plans', client_id=client.id) }}">
+            <input type="hidden" name="next" value="{{ account_url }}" />
+            {% for field in plan_field_config %}
+            <label>
+              {{ field.label }}
+              <select name="{{ field.field }}">
+                <option value="">No {{ field.label|lower }}</option>
+                {% for plan in field.plans %}
+                <option value="{{ plan.name }}" {% if field.selected == plan.name %}selected{% endif %}>
+                  {{ plan.name }}{% if plan.speed %} • {{ plan.speed }}{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </label>
+            {% endfor %}
+            <label>
+              Account status
+              <select name="status">
+                {% for option in status_options %}
+                <option value="{{ option }}" {% if client.status == option %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" name="wifi_router_needed" value="yes" {% if client.wifi_router_needed %}checked{% endif %} />
+              <span>Managed Wi-Fi router provided by DIXIELAND</span>
+            </label>
+            <button class="button small primary" type="submit">Save service setup</button>
+          </form>
+          {% else %}
+          <p class="subtle">
+            No service plans are published yet. Create plans from the Service Plans section of the dashboard to assign them here.
+          </p>
+          {% endif %}
+        </article>
+        <article class="management-column">
+          <h4>Installed equipment</h4>
+          <div class="record-list">
+            {% if equipment_items %}
+            {% for item in equipment_items %}
+            <form class="record-row" method="post" action="{{ url_for('update_equipment', equipment_id=item.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+              <label>
+                Name
+                <input type="text" name="name" value="{{ item.name }}" required />
+              </label>
+              <label>
+                Model
+                <input type="text" name="model" value="{{ item.model or '' }}" />
+              </label>
+              <label>
+                Serial number
+                <input type="text" name="serial_number" value="{{ item.serial_number or '' }}" />
+              </label>
+              <label>
+                Installed
+                <input type="date" name="installed_on" value="{{ item.installed_on.isoformat() if item.installed_on }}" />
+              </label>
+              <label>
+                Notes
+                <textarea name="notes" rows="2" placeholder="Mounting notes or install details">{{ item.notes or '' }}</textarea>
+              </label>
+              <div class="record-actions">
+                <button class="button small primary" type="submit">Update</button>
+                <button class="button small danger" type="submit" form="delete-equipment-{{ item.id }}" onclick="return confirm('Remove this equipment item?');">Delete</button>
+              </div>
+            </form>
+            <form id="delete-equipment-{{ item.id }}" class="inline-form" method="post" action="{{ url_for('delete_equipment', equipment_id=item.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+            </form>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">No equipment has been recorded for this account.</p>
+            {% endif %}
+          </div>
+          <form class="stacked-form" method="post" action="{{ url_for('create_equipment', client_id=client.id) }}">
+            <input type="hidden" name="next" value="{{ account_url }}" />
+            <h5>Add equipment</h5>
+            <label>
+              Name
+              <input type="text" name="name" placeholder="Subscriber Gateway" required />
+            </label>
+            <label>
+              Model
+              <input type="text" name="model" placeholder="UISP Wave AP" />
+            </label>
+            <label>
+              Serial number
+              <input type="text" name="serial_number" placeholder="SN123456" />
+            </label>
+            <label>
+              Installed
+              <input type="date" name="installed_on" />
+            </label>
+            <label>
+              Notes
+              <textarea name="notes" rows="2" placeholder="Mounting location, cabling notes, etc."></textarea>
+            </label>
+            <button class="button small primary" type="submit">Add equipment</button>
+          </form>
+        </article>
+      </div>
+    </section>
+
+    <section class="card management-card" id="billing-management">
+      <header class="section-header">
+        <div>
+          <h3>Billing management</h3>
+          <p class="subtle">Issue invoices and keep balances in sync.</p>
+        </div>
+      </header>
+      <div class="management-grid">
+        <article class="management-column">
+          <h4>Invoices</h4>
+          <div class="record-list">
+            {% if invoices %}
+            {% for invoice in invoices %}
+            <form class="record-row" method="post" action="{{ url_for('update_invoice', invoice_id=invoice.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+              <label>
+                Description
+                <input type="text" name="description" value="{{ invoice.description }}" required />
+              </label>
+              <label>
+                Amount ($)
+                <input type="number" name="amount" step="0.01" min="0" value="{{ '%.2f'|format(invoice.amount_cents / 100) }}" required />
+              </label>
+              <label>
+                Due date
+                <input type="date" name="due_date" value="{{ invoice.due_date.isoformat() if invoice.due_date }}" />
+              </label>
+              <label>
+                Status
+                <select name="status">
+                  {% for option in invoice_status_options %}
+                  <option value="{{ option }}" {% if invoice.status == option %}selected{% endif %}>{{ option }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <div class="record-actions">
+                <button class="button small primary" type="submit">Update</button>
+                <button class="button small danger" type="submit" form="delete-invoice-{{ invoice.id }}" onclick="return confirm('Delete this invoice?');">Delete</button>
+              </div>
+            </form>
+            <form id="delete-invoice-{{ invoice.id }}" class="inline-form" method="post" action="{{ url_for('delete_invoice', invoice_id=invoice.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+            </form>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">No invoices generated yet.</p>
+            {% endif %}
+          </div>
+        </article>
+        <article class="management-column">
+          <h4>Create invoice</h4>
+          <form class="stacked-form" method="post" action="{{ url_for('create_invoice', client_id=client.id) }}">
+            <input type="hidden" name="next" value="{{ account_url }}" />
+            <label>
+              Description
+              <input type="text" name="description" placeholder="Monthly service" required />
+            </label>
+            <label>
+              Amount ($)
+              <input type="number" name="amount" step="0.01" min="0" placeholder="79.99" required />
+            </label>
+            <label>
+              Due date
+              <input type="date" name="due_date" />
+            </label>
+            <label>
+              Status
+              <select name="status">
+                {% for option in invoice_status_options %}
+                <option value="{{ option }}" {% if option == 'Pending' %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="button small primary" type="submit">Add invoice</button>
+          </form>
+        </article>
+      </div>
+    </section>
+
+    <section class="card management-card" id="appointment-management">
+      <header class="section-header">
+        <div>
+          <h3>Appointments &amp; schedule</h3>
+          <p class="subtle">Coordinate visits and respond to customer requests.</p>
+        </div>
+      </header>
+      <div class="management-grid">
+        <article class="management-column">
+          <h4>Schedule visit</h4>
+          <form class="stacked-form" method="post" action="{{ url_for('create_appointment_admin') }}">
+            <input type="hidden" name="next" value="{{ account_url }}" />
+            <input type="hidden" name="client_id" value="{{ client.id }}" />
+            <label>
+              Title
+              <input type="text" name="title" placeholder="Installation visit" required />
+            </label>
+            <label>
+              Scheduled for
+              <input type="datetime-local" name="scheduled_for" required />
+            </label>
+            <label>
+              Assign technician
+              <select name="technician_id">
+                <option value="">Unassigned</option>
+                {% for tech in technicians %}
+                <option value="{{ tech.id }}">{{ tech.name }}{% if not tech.is_active %} (inactive){% endif %}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Internal notes
+              <textarea name="notes" rows="3" placeholder="Prep steps, tools, or context."></textarea>
+            </label>
+            <button class="button small primary" type="submit">Schedule appointment</button>
+          </form>
+        </article>
+        <article class="management-column">
+          <h4>Manage appointments</h4>
+          <div class="record-list">
+            {% if appointments %}
+            {% for appointment in appointments %}
+            <form class="record-row" method="post" action="{{ url_for('update_appointment_admin', appointment_id=appointment.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+              <div>
+                <strong>{{ appointment.title }}</strong>
+                <p class="subtle">Status: {{ appointment.status }}{% if appointment.technician %} • {{ appointment.technician.name }}{% endif %}</p>
+                <p class="subtle">Scheduled {{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}</p>
+                {% if appointment.client_message %}
+                <p class="subtle">Customer message: {{ appointment.client_message }}</p>
+                {% endif %}
+              </div>
+              <label>
+                Scheduled for
+                <input type="datetime-local" name="scheduled_for" value="{{ appointment.scheduled_for.strftime('%Y-%m-%dT%H:%M') }}" />
+              </label>
+              {% if appointment.proposed_time %}
+              <div class="inline-note">
+                Proposed: {{ appointment.proposed_time.strftime('%b %d, %Y %I:%M %p') }}
+                <label class="checkbox">
+                  <input type="checkbox" name="use_proposed" />
+                  <span>Use proposed time</span>
+                </label>
+              </div>
+              {% endif %}
+              <label>
+                Status
+                <select name="status">
+                  {% for option in appointment_status_options %}
+                  <option value="{{ option }}" {% if appointment.status == option %}selected{% endif %}>{{ option }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>
+                Technician
+                <select name="technician_id">
+                  <option value="">Unassigned</option>
+                  {% for tech in technicians %}
+                  <option value="{{ tech.id }}" {% if appointment.technician_id == tech.id %}selected{% endif %}>{{ tech.name }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>
+                Internal notes
+                <textarea name="notes" rows="3">{{ appointment.notes or '' }}</textarea>
+              </label>
+              <div class="record-actions">
+                <button class="button small primary" type="submit">Update</button>
+                <button class="button small danger" type="submit" form="delete-appointment-{{ appointment.id }}" onclick="return confirm('Remove this appointment?');">Delete</button>
+              </div>
+            </form>
+            <form id="delete-appointment-{{ appointment.id }}" class="inline-form" method="post" action="{{ url_for('delete_appointment_admin', appointment_id=appointment.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+            </form>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">No appointments scheduled for this account.</p>
+            {% endif %}
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="card">
+      <header class="section-header">
+        <div>
+          <h3>Support ticket history</h3>
+          <p class="subtle">Full timeline with attachments and priority.</p>
+        </div>
+      </header>
+      {% if tickets %}
+      <ul class="detail-stack">
+        {% for ticket in tickets %}
+        <li>
+          <div class="detail-primary">{{ ticket.subject }}</div>
+          <div class="detail-subtle">
+            {{ ticket.status }} • Priority {{ ticket.priority }} • Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }}
+          </div>
+          <p>{{ ticket.message }}</p>
+          {% if ticket.attachments %}
+          <div class="photo-chip-group">
+            {% for attachment in ticket.attachments %}
+            <a
+              href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}"
+              target="_blank"
+              rel="noopener"
+            >{{ attachment.original_filename }}</a>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if ticket.resolution_notes %}
+          <p class="subtle">Resolution notes: {{ ticket.resolution_notes }}</p>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="subtle">No support interaction history for this account.</p>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <header class="section-header">
+        <div>
+          <h3>Appointment timeline</h3>
+          <p class="subtle">Track field visits and confirmations.</p>
+        </div>
+      </header>
+      {% if appointments %}
+      <ul class="detail-stack">
+        {% for appointment in appointments %}
+        <li>
+          <div class="detail-primary">{{ appointment.title }}</div>
+          <div class="detail-subtle">
+            {{ appointment.status }} • {{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}
+            {% if appointment.technician %} • {{ appointment.technician.name }}{% endif %}
+          </div>
+          {% if appointment.notes %}
+          <p class="subtle">Tech notes: {{ appointment.notes }}</p>
+          {% endif %}
+          {% if appointment.client_message %}
+          <p class="subtle">Customer message: {{ appointment.client_message }}</p>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="subtle">No appointments recorded.</p>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <header class="section-header">
+        <div>
+          <h3>Install documentation</h3>
+          {% if missing_photo_categories %}
+          <p class="alert subtle">Missing categories: {{ missing_photo_categories | join(', ') }}</p>
+          {% else %}
+          <p class="subtle">All required photo categories are on file.</p>
+          {% endif %}
+        </div>
+      </header>
+      <div class="detail-photo-grid">
+        {% for category in install_photo_categories %}
+        {% set photos = photo_map.get(category) %}
+        <article class="detail-photo-item {% if photos %}complete{% else %}missing{% endif %}">
+          <h4>{{ category }}</h4>
+          {% if photos %}
+          <div class="photo-chip-group">
+            {% for photo in photos %}
+            <a href="{{ url_for('serve_install_photo', photo_id=photo.id) }}" target="_blank" rel="noopener">View</a>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="subtle">Upload needed</p>
+          {% endif %}
+        </article>
+        {% endfor %}
+        {% for category, photos in photo_map.items() if category not in install_photo_categories and photos %}
+        <article class="detail-photo-item optional">
+          <h4>{{ category }}</h4>
+          <div class="photo-chip-group">
+            {% for photo in photos %}
+            <a href="{{ url_for('serve_install_photo', photo_id=photo.id) }}" target="_blank" rel="noopener">View</a>
+            {% endfor %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}
