@@ -22,12 +22,12 @@ This project provides a self-hosted client onboarding, billing, and support port
 - **Phone Service Landing** – Share hosted voice benefits and plan details on a dedicated page that links straight into signup and the customer portal.
 - **Configurable Contact Details** – Set a single contact email that powers navigation links, portal reminders, and signup confirmations.
 - **Blog Publishing** – Draft, publish, and manage updates from the admin dashboard that surface on the public blog.
-- **One-Command Install** – Run `./install.sh` on Ubuntu 24.04 to provision dependencies, initialize the SQLite database, and start the development server.
+- **One-Command Install** – Run `./install.sh` on Ubuntu 24.04 to provision dependencies, initialize the SQLite database, and start the development server (use `sudo` if you need permission to bind to ports 80/443).
 
 ## Quick Start (Ubuntu 24.04)
 
 ```bash
-sudo apt update && sudo apt install -y python3 python3-venv python3-pip
+sudo apt update && sudo apt install -y python3 python3-venv python3-pip certbot
 ./install.sh
 ```
 
@@ -51,6 +51,8 @@ The helper script verifies you have `git` available, fetches the latest commits 
 Change these by setting the `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment variables before launching the app.
 
 Each client can be issued a customer-portal password from the admin dashboard. Generate a temporary password or set a custom credential, then share it securely with the subscriber.
+
+After signing in with the default credentials you can add additional administrators from **Dashboard → Security** so multiple staff members can manage the portal.
 
 ## Project Structure
 
@@ -84,8 +86,10 @@ Each client can be issued a customer-portal password from the admin dashboard. G
 | `SECRET_KEY` | Flask session secret | Randomly generated if unset |
 | `ADMIN_USERNAME` | Dashboard login username | `admin` |
 | `ADMIN_PASSWORD` | Dashboard login password | `admin123` |
-| `PORT` | Server port | `8000` |
-| `CONTACT_EMAIL` | Primary support/contact email surfaced throughout the site | `hello@example.com` |
+| `PORT` | Optional secondary HTTP port (in addition to port 80) | unset |
+| `HTTPS_PORT` | Optional secondary HTTPS port (in addition to port 443) | unset |
+| `CONTACT_EMAIL` | Primary support/contact email surfaced throughout the site | `info@dixielandwireless.com` |
+| `CONTACT_PHONE` | Support phone number shown on public pages and navigation | `2053343969` |
 | `SNMP_TRAP_HOST` | Hostname/IP for SNMP trap delivery | unset (disabled) |
 | `SNMP_TRAP_PORT` | UDP port for SNMP trap delivery | `162` |
 | `SNMP_COMMUNITY` | SNMP community string | `public` |
