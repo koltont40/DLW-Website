@@ -28,7 +28,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from sqlalchemy import inspect, or_, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, NoSuchTableError
 
 load_dotenv()
 
@@ -86,6 +86,12 @@ def allowed_verification_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_VERIFICATION_EXTENSIONS
 
 
+def allowed_ticket_attachment(filename: str) -> bool:
+    if not filename:
+        return False
+    return Path(filename).suffix.lower() in ALLOWED_TICKET_ATTACHMENT_EXTENSIONS
+
+
 def delete_client_verification_photo(app: Flask, client: "Client") -> None:
     if not client.verification_photo_filename:
         return
@@ -115,6 +121,45 @@ def store_client_verification_photo(app: Flask, client: "Client", file) -> None:
 
     client.verification_photo_filename = str(relative_path)
     client.verification_photo_uploaded_at = utcnow()
+
+
+def store_ticket_attachment(app: Flask, ticket: "SupportTicket", file) -> "SupportTicketAttachment":
+    attachments_folder = (
+        Path(app.config["SUPPORT_TICKET_ATTACHMENT_FOLDER"]) / f"ticket_{ticket.id}"
+    )
+    attachments_folder.mkdir(parents=True, exist_ok=True)
+
+    timestamp = utcnow().strftime("%Y%m%d%H%M%S")
+    safe_name = secure_filename(file.filename)
+    stored_filename = f"{timestamp}_{safe_name}" if safe_name else f"{timestamp}.bin"
+    relative_path = Path(f"ticket_{ticket.id}") / stored_filename
+    file.save(attachments_folder / stored_filename)
+
+    attachment = SupportTicketAttachment(
+        ticket_id=ticket.id,
+        original_filename=file.filename or stored_filename,
+        stored_filename=str(relative_path),
+    )
+    db.session.add(attachment)
+    return attachment
+
+
+def delete_ticket_attachment_files(app: Flask, ticket: "SupportTicket") -> None:
+    base_folder = Path(app.config["SUPPORT_TICKET_ATTACHMENT_FOLDER"])
+    for attachment in ticket.attachments:
+        file_path = base_folder / attachment.stored_filename
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except OSError:
+            pass
+
+    ticket_folder = base_folder / f"ticket_{ticket.id}"
+    try:
+        if ticket_folder.exists() and not any(ticket_folder.iterdir()):
+            ticket_folder.rmdir()
+    except OSError:
+        pass
 
 
 class Client(db.Model):
@@ -332,6 +377,14 @@ INSTALL_PHOTO_CATEGORY_CHOICES = REQUIRED_INSTALL_PHOTO_CATEGORIES + [
 ]
 ALLOWED_INSTALL_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif"}
 ALLOWED_VERIFICATION_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".pdf"}
+ALLOWED_TICKET_ATTACHMENT_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".heic",
+    ".heif",
+}
 
 
 def get_default_navigation_items() -> list[tuple[str, str, bool]]:
@@ -382,6 +435,7 @@ ALLOWED_BRANDING_EXTENSIONS = {
 INVOICE_STATUS_OPTIONS = ["Pending", "Paid", "Overdue", "Cancelled"]
 
 TICKET_STATUS_OPTIONS = ["Open", "In Progress", "Resolved", "Closed"]
+TICKET_PRIORITY_OPTIONS = ["Low", "Normal", "High", "Urgent"]
 
 
 class Document(db.Model):
@@ -514,6 +568,7 @@ class SupportTicket(db.Model):
     subject = db.Column(db.String(255), nullable=False)
     message = db.Column(db.Text, nullable=False)
     status = db.Column(db.String(20), nullable=False, default="Open")
+    priority = db.Column(db.String(20), nullable=False, default="Normal")
     resolution_notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = db.Column(
@@ -521,9 +576,31 @@ class SupportTicket(db.Model):
     )
 
     client = db.relationship("Client", back_populates="tickets")
+    attachments = db.relationship(
+        "SupportTicketAttachment",
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<SupportTicket {self.id} for client {self.client_id}>"
+
+
+class SupportTicketAttachment(db.Model):
+    __tablename__ = "support_ticket_attachments"
+
+    id = db.Column(db.Integer, primary_key=True)
+    ticket_id = db.Column(
+        db.Integer, db.ForeignKey("support_tickets.id"), nullable=False, index=True
+    )
+    original_filename = db.Column(db.String(255), nullable=False)
+    stored_filename = db.Column(db.String(255), nullable=False)
+    uploaded_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+    ticket = db.relationship("SupportTicket", back_populates="attachments")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<SupportTicketAttachment {self.id} ticket={self.ticket_id}>"
 
 
 class Appointment(db.Model):
@@ -629,6 +706,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         "BRANDING_UPLOAD_FOLDER": str(instance_path / "branding"),
         "INSTALL_PHOTOS_FOLDER": str(instance_path / "install_photos"),
         "CLIENT_VERIFICATION_FOLDER": str(instance_path / "verification"),
+        "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(instance_path / "ticket_attachments"),
         "CONTACT_EMAIL": os.environ.get("CONTACT_EMAIL", "hello@example.com"),
         "SNMP_TRAP_HOST": os.environ.get("SNMP_TRAP_HOST"),
         "SNMP_TRAP_PORT": snmp_port,
@@ -655,6 +733,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "BRANDING_UPLOAD_FOLDER",
             "INSTALL_PHOTOS_FOLDER",
             "CLIENT_VERIFICATION_FOLDER",
+            "SUPPORT_TICKET_ATTACHMENT_FOLDER",
         ]:
             folder_path = Path(app.config[folder_key])
             folder_path.mkdir(parents=True, exist_ok=True)
@@ -664,6 +743,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_service_plans_seeded()
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
+        ensure_support_ticket_priority_field()
         ensure_down_detector_configuration()
 
     return app
@@ -680,6 +760,7 @@ def init_db() -> None:
         ensure_service_plans_seeded()
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
+        ensure_support_ticket_priority_field()
         ensure_down_detector_configuration()
 
 
@@ -1000,6 +1081,33 @@ def ensure_appointment_technician_field() -> None:
             connection.execute(
                 text("ALTER TABLE appointments ADD COLUMN technician_id INTEGER")
             )
+
+
+def ensure_support_ticket_priority_field() -> None:
+    inspector = inspect(db.engine)
+    try:
+        columns = {
+            column["name"] for column in inspector.get_columns("support_tickets")
+        }
+    except NoSuchTableError:
+        return
+
+    if "priority" in columns:
+        return
+
+    with db.engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE support_tickets ADD COLUMN priority VARCHAR(20)"
+                " DEFAULT 'Normal' NOT NULL"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE support_tickets SET priority = 'Normal' WHERE priority IS NULL"
+            )
+        )
+
 
 def ensure_snmp_configuration() -> None:
     config = SNMPConfig.query.first()
@@ -1574,6 +1682,7 @@ def register_routes(app: Flask) -> None:
             upcoming_due_date=upcoming_due_date,
             open_ticket_count=open_ticket_count,
             selected_services=selected_services,
+            ticket_priority_options=TICKET_PRIORITY_OPTIONS,
         )
 
     @app.post("/portal/tickets")
@@ -1581,6 +1690,23 @@ def register_routes(app: Flask) -> None:
     def portal_create_ticket(client: Client):
         subject = request.form.get("subject", "").strip()
         message = request.form.get("message", "").strip()
+        priority_value = request.form.get("priority", "Normal").strip().title()
+        if priority_value not in TICKET_PRIORITY_OPTIONS:
+            priority_value = "Normal"
+
+        uploaded_files = [
+            file
+            for file in request.files.getlist("attachments")
+            if file and getattr(file, "filename", "")
+        ]
+
+        for file in uploaded_files:
+            if not allowed_ticket_attachment(file.filename):
+                flash(
+                    "Upload JPG, PNG, GIF, or HEIC images for ticket attachments.",
+                    "danger",
+                )
+                return redirect(url_for("portal_dashboard"))
 
         if not subject or not message:
             flash("Please provide both a subject and description for your ticket.", "danger")
@@ -1590,8 +1716,15 @@ def register_routes(app: Flask) -> None:
             client_id=client.id,
             subject=subject,
             message=message,
+            priority=priority_value,
         )
         db.session.add(ticket)
+        db.session.flush()
+
+        if uploaded_files:
+            for file in uploaded_files:
+                store_ticket_attachment(current_app, ticket, file)
+            ticket.updated_at = utcnow()
         db.session.commit()
 
         flash("Your support request has been submitted. We'll reach out shortly.", "success")
@@ -1901,6 +2034,34 @@ def register_routes(app: Flask) -> None:
         directory = str(file_path.parent)
         mimetype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
         return send_from_directory(directory, file_path.name, mimetype=mimetype)
+
+    @app.get("/support-ticket-attachments/<int:attachment_id>")
+    def serve_ticket_attachment(attachment_id: int):
+        attachment = SupportTicketAttachment.query.get_or_404(attachment_id)
+        ticket = attachment.ticket
+
+        authorized = False
+        if session.get("admin_authenticated"):
+            authorized = True
+        client_id = session.get(PORTAL_SESSION_KEY)
+        if client_id and ticket and client_id == ticket.client_id:
+            authorized = True
+        if not authorized:
+            abort(403)
+
+        base_folder = Path(app.config["SUPPORT_TICKET_ATTACHMENT_FOLDER"])
+        file_path = base_folder / attachment.stored_filename
+        if not file_path.exists():
+            abort(404)
+
+        directory = str(file_path.parent)
+        mimetype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        return send_from_directory(
+            directory,
+            file_path.name,
+            mimetype=mimetype,
+            download_name=attachment.original_filename,
+        )
 
     @app.get("/clients/<int:client_id>/verification-photo")
     def client_verification_photo(client_id: int):
@@ -2317,6 +2478,7 @@ def register_routes(app: Flask) -> None:
             selected_client_invoices=selected_client_invoices,
             selected_client_equipment=selected_client_equipment,
             selected_client_tickets=selected_client_tickets,
+            ticket_priority_options=TICKET_PRIORITY_OPTIONS,
             selected_client_appointments=selected_client_appointments,
             selected_client_photo_map=selected_client_photo_map,
             selected_client_missing_categories=selected_client_missing_categories,
@@ -3071,6 +3233,23 @@ def register_routes(app: Flask) -> None:
         ticket = SupportTicket.query.get_or_404(ticket_id)
         status_value = request.form.get("status", ticket.status).strip() or ticket.status
         resolution_notes = request.form.get("resolution_notes", "").strip() or None
+        priority_value = request.form.get("priority", ticket.priority).strip().title()
+        if priority_value not in TICKET_PRIORITY_OPTIONS:
+            priority_value = ticket.priority
+
+        uploaded_files = [
+            file
+            for file in request.files.getlist("attachments")
+            if file and getattr(file, "filename", "")
+        ]
+
+        for file in uploaded_files:
+            if not allowed_ticket_attachment(file.filename):
+                flash(
+                    "Upload JPG, PNG, GIF, or HEIC images for ticket attachments.",
+                    "danger",
+                )
+                return _redirect_back_to_dashboard("support")
 
         if status_value not in TICKET_STATUS_OPTIONS:
             flash("Unknown ticket status.", "danger")
@@ -3078,6 +3257,10 @@ def register_routes(app: Flask) -> None:
 
         ticket.status = status_value
         ticket.resolution_notes = resolution_notes
+        ticket.priority = priority_value
+        if uploaded_files:
+            for file in uploaded_files:
+                store_ticket_attachment(current_app, ticket, file)
         ticket.updated_at = utcnow()
         db.session.commit()
 
@@ -3088,6 +3271,7 @@ def register_routes(app: Flask) -> None:
     @login_required
     def delete_ticket(ticket_id: int):
         ticket = SupportTicket.query.get_or_404(ticket_id)
+        delete_ticket_attachment_files(current_app, ticket)
         db.session.delete(ticket)
         db.session.commit()
         flash("Ticket removed.", "info")

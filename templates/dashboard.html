@@ -312,7 +312,7 @@
             {% for ticket in selected_client_tickets %}
             <li>
               <div class="detail-primary">{{ ticket.subject }}</div>
-              <div class="detail-subtle">{{ ticket.status }} • {{ ticket.created_at.strftime('%b %d, %Y') }}</div>
+              <div class="detail-subtle">{{ ticket.status }} • Priority {{ ticket.priority }} • {{ ticket.created_at.strftime('%b %d, %Y') }}</div>
             </li>
             {% endfor %}
           </ul>
@@ -1386,12 +1386,33 @@
             <div class="record-list">
               {% if client.tickets %}
               {% for ticket in client.tickets | sort(attribute='created_at', reverse=True) %}
-              <form class="record-row ticket-row" method="post" action="{{ url_for('update_ticket', ticket_id=ticket.id, section='support', status=request.args.get('status')) }}">
+              <form
+                class="record-row ticket-row"
+                method="post"
+                action="{{ url_for('update_ticket', ticket_id=ticket.id, section='support', status=request.args.get('status')) }}"
+                enctype="multipart/form-data"
+              >
                 <div class="ticket-meta">
                   <strong>{{ ticket.subject }}</strong>
-                  <span class="subtle">Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+                  <span class="subtle">Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }} · Priority {{ ticket.priority }}</span>
                 </div>
                 <p class="ticket-message">{{ ticket.message }}</p>
+                {% if ticket.attachments %}
+                <div class="ticket-attachments">
+                  <p class="subtle">Photos provided:</p>
+                  <div class="ticket-attachment-strip">
+                    {% for attachment in ticket.attachments %}
+                    <a href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
+                      <img
+                        src="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}"
+                        alt="Ticket attachment {{ loop.index }}"
+                        loading="lazy"
+                      />
+                    </a>
+                    {% endfor %}
+                  </div>
+                </div>
+                {% endif %}
                 <label>
                   Status
                   <select name="status">
@@ -1401,8 +1422,21 @@
                   </select>
                 </label>
                 <label>
+                  Priority
+                  <select name="priority">
+                    {% for option in ticket_priority_options %}
+                    <option value="{{ option }}" {% if ticket.priority == option %}selected{% endif %}>{{ option }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label>
                   Resolution notes
                   <textarea name="resolution_notes" rows="3" placeholder="Document updates shared with the client.">{{ ticket.resolution_notes or '' }}</textarea>
+                </label>
+                <label>
+                  Add photos
+                  <input type="file" name="attachments" accept="image/*" multiple />
+                  <span class="subtle">Optional: include additional documentation.</span>
                 </label>
                 <div class="record-actions">
                   <button class="button small primary" type="submit">Update</button>

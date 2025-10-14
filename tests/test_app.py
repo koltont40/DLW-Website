@@ -21,6 +21,7 @@ from app import (
     NavigationItem,
     BlogPost,
     SupportTicket,
+    SupportTicketAttachment,
     REQUIRED_INSTALL_PHOTO_CATEGORIES,
     create_app,
     db,
@@ -36,6 +37,7 @@ def app(tmp_path):
     branding_folder = tmp_path / "branding"
     install_folder = tmp_path / "install_photos"
     verification_folder = tmp_path / "verification"
+    ticket_attachment_folder = tmp_path / "ticket_attachments"
 
     app = create_app(
         {
@@ -46,6 +48,7 @@ def app(tmp_path):
             "BRANDING_UPLOAD_FOLDER": str(branding_folder),
             "INSTALL_PHOTOS_FOLDER": str(install_folder),
             "CLIENT_VERIFICATION_FOLDER": str(verification_folder),
+            "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(ticket_attachment_folder),
         }
     )
 
@@ -856,8 +859,14 @@ def test_client_portal_login_and_ticket_creation(app, client):
 
     ticket_response = client.post(
         "/portal/tickets",
-        data={"subject": "Need help", "message": "Please check signal."},
+        data={
+            "subject": "Need help",
+            "message": "Please check signal.",
+            "priority": "High",
+            "attachments": (BytesIO(b"image-bytes"), "outage.jpg"),
+        },
         follow_redirects=True,
+        content_type="multipart/form-data",
     )
 
     assert ticket_response.status_code == 200
@@ -866,11 +875,17 @@ def test_client_portal_login_and_ticket_creation(app, client):
     portal_view = client.get("/portal")
     assert portal_view.status_code == 200
     assert b"Need help" in portal_view.data
+    assert b"Priority: High" in portal_view.data
 
     with app.app_context():
         tickets = SupportTicket.query.filter_by(client_id=portal_client_id).all()
         assert len(tickets) == 1
         assert tickets[0].subject == "Need help"
+        assert tickets[0].priority == "High"
+        attachments = SupportTicketAttachment.query.filter_by(ticket_id=tickets[0].id).all()
+        assert len(attachments) == 1
+        stored_path = Path(app.config["SUPPORT_TICKET_ATTACHMENT_FOLDER"]) / attachments[0].stored_filename
+        assert stored_path.exists()
 
 
 def test_portal_highlights_missing_service_plan(app, client):
