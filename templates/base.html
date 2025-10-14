@@ -9,6 +9,17 @@
     {% if branding_assets.get('favicon') %}
     <link rel="icon" href="{{ url_for('branding_file', asset_type='favicon') }}" />
     {% endif %}
+    {% if site_theme %}
+    <style>
+      :root {
+        --bg: {{ site_theme.background_color }};
+        --secondary: {{ site_theme.text_color }};
+        --text: {{ site_theme.text_color }};
+        --muted: {{ site_theme.muted_color }};
+        --bg-image: {% if site_theme.background_image_filename %}url('{{ url_for('theme_background') }}'){% else %}none{% endif %};
+      }
+    </style>
+    {% endif %}
   </head>
   <body>
     <header class="site-header">
@@ -20,7 +31,11 @@
           DIXIELAND WIRELESS LLC
           {% endif %}
         </a>
-        <nav class="nav-sections">
+        <button class="mobile-menu-button" type="button" aria-expanded="false" aria-controls="site-navigation">
+          <span class="mobile-menu-icon" aria-hidden="true"></span>
+          <span class="sr-only">Toggle navigation</span>
+        </button>
+        <nav id="site-navigation" class="nav-sections" data-state="closed">
           {% set current_path = request.path %}
           <div class="nav-primary">
             <a
@@ -107,5 +122,52 @@
         </div>
       </div>
     </footer>
+    <script>
+      (function () {
+        const toggle = document.querySelector(".mobile-menu-button");
+        const nav = document.getElementById("site-navigation");
+        if (!toggle || !nav) {
+          return;
+        }
+
+        const mediaQuery = window.matchMedia("(min-width: 769px)");
+
+        const closeNav = () => {
+          toggle.setAttribute("aria-expanded", "false");
+          nav.dataset.state = "closed";
+        };
+
+        const ensureStateForViewport = () => {
+          if (mediaQuery.matches) {
+            nav.dataset.state = "open";
+            toggle.setAttribute("aria-expanded", "false");
+          } else if (toggle.getAttribute("aria-expanded") !== "true") {
+            nav.dataset.state = "closed";
+          }
+        };
+
+        toggle.addEventListener("click", () => {
+          const expanded = toggle.getAttribute("aria-expanded") === "true";
+          const next = !expanded;
+          toggle.setAttribute("aria-expanded", String(next));
+          nav.dataset.state = next ? "open" : "closed";
+        });
+
+        nav.querySelectorAll("a").forEach((link) => {
+          link.addEventListener("click", () => {
+            if (!mediaQuery.matches) {
+              closeNav();
+            }
+          });
+        });
+
+        ensureStateForViewport();
+        if (typeof mediaQuery.addEventListener === "function") {
+          mediaQuery.addEventListener("change", ensureStateForViewport);
+        } else if (typeof mediaQuery.addListener === "function") {
+          mediaQuery.addListener(ensureStateForViewport);
+        }
+      })();
+    </script>
   </body>
 </html>
