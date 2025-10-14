@@ -1,0 +1,1194 @@
+import io
+from pathlib import Path
+from datetime import date, timedelta
+from html import escape
+from io import BytesIO
+
+import pytest
+
+from app import (
+    BrandingAsset,
+    Client,
+    Document,
+    Equipment,
+    Invoice,
+    Appointment,
+    InstallPhoto,
+    ServicePlan,
+    SNMPConfig,
+    Technician,
+    DownDetectorConfig,
+    NavigationItem,
+    BlogPost,
+    SupportTicket,
+    REQUIRED_INSTALL_PHOTO_CATEGORIES,
+    create_app,
+    db,
+    utcnow,
+)
+from werkzeug.security import generate_password_hash
+
+
+@pytest.fixture
+def app(tmp_path):
+    test_db_path = tmp_path / "test.db"
+    legal_folder = tmp_path / "legal"
+    branding_folder = tmp_path / "branding"
+    install_folder = tmp_path / "install_photos"
+    verification_folder = tmp_path / "verification"
+
+    app = create_app(
+        {
+            "TESTING": True,
+            "SECRET_KEY": "test-secret",
+            "SQLALCHEMY_DATABASE_URI": f"sqlite:///{test_db_path}",
+            "LEGAL_UPLOAD_FOLDER": str(legal_folder),
+            "BRANDING_UPLOAD_FOLDER": str(branding_folder),
+            "INSTALL_PHOTOS_FOLDER": str(install_folder),
+            "CLIENT_VERIFICATION_FOLDER": str(verification_folder),
+        }
+    )
+
+    yield app
+
+    with app.app_context():
+        db.session.remove()
+
+
+@pytest.fixture
+def client(app):
+    return app.test_client()
+
+
+def test_index_page_renders(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert b"Wireless Internet" in response.data
+    assert b"/services#plans-phone-service" in response.data
+
+
+def test_service_plans_page_lists_offerings(client):
+    response = client.get("/services")
+    assert response.status_code == 200
+    assert b"Residential Plans" in response.data
+    assert b"Phone Service Plans" in response.data
+    assert b'id="plans-phone-service"' in response.data
+    assert b"Wireless Internet (WISP)" in response.data
+    assert b"Internet + Phone Bundle" in response.data
+    assert b"Business Wireless Pro" in response.data
+    assert b"Business Voice Essentials" in response.data
+
+
+def test_phone_service_page_lists_offerings(client):
+    response = client.get("/phone-service")
+    assert response.status_code == 200
+    assert b"Phone Service Plans" in response.data
+    assert b"Phone Service" in response.data
+    assert b"Business Voice Essentials" in response.data
+
+
+def test_about_page_highlights_mission(client):
+    response = client.get("/about")
+    assert response.status_code == 200
+    assert b"Our Mission" in response.data
+    assert b"local experts" in response.data
+
+
+def test_support_page_offers_resources(client):
+    response = client.get("/support")
+    assert response.status_code == 200
+    assert b"Support center" in response.data
+    assert b"Email support" in response.data
+
+
+def test_uptime_page_displays_metrics(client):
+    response = client.get("/uptime")
+    assert response.status_code == 200
+    assert b"Network uptime" in response.data
+    assert b"30-day uptime" in response.data
+
+
+def test_service_cancellation_page_outlines_steps(client):
+    response = client.get("/cancellation")
+    assert response.status_code == 200
+    assert b"Service cancellation" in response.data
+    assert b"Submit your request" in response.data
+
+
+def test_down_detector_placeholder_when_missing(client):
+    response = client.get("/status/down-detector")
+    assert response.status_code == 200
+    assert b"live outage feed" in response.data
+
+
+def test_down_detector_redirects_when_configured(app, client):
+    with app.app_context():
+        config = DownDetectorConfig.query.first()
+        config.target_url = "https://status.example.com"
+        db.session.commit()
+
+    response = client.get("/status/down-detector")
+    assert response.status_code == 302
+    assert response.headers["Location"] == "https://status.example.com"
+
+
+def test_legal_page_lists_documents(client):
+    response = client.get("/legal")
+    assert response.status_code == 200
+    assert b"Legal Policies" in response.data
+    assert b"Acceptable Use Policy" in response.data
+
+
+def test_signup_creates_client_record(app, client):
+    form_data = {
+        "name": "Alice Smith",
+        "email": "alice@example.com",
+        "company": "Acme",
+        "phone": "334-555-1212",
+        "address": "123 Main Street, Tallassee, AL 36078",
+        "wants_residential": "yes",
+        "wants_phone": "yes",
+        "residential_plan": "Wireless Internet (WISP)",
+        "phone_plan": "Phone Service",
+        "business_plan": "",
+        "notes": "Interested in onboarding next month.",
+        "driver_license_number": "AL-1234567",
+        "password": "SecurePass123",
+        "confirm_password": "SecurePass123",
+        "wifi_router_needed": "yes",
+        "verification_photo": (BytesIO(b"fake-id-data"), "id-card.jpg"),
+    }
+
+    response = client.post(
+        "/signup",
+        data=form_data,
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Account created!" in response.data
+    assert b"Billing History" in response.data
+
+    with app.app_context():
+        client_record = Client.query.filter_by(email="alice@example.com").first()
+        assert client_record is not None
+        assert client_record.name == "Alice Smith"
+        assert client_record.project_type == "Wireless Internet (WISP), Phone Service"
+        assert client_record.residential_plan == "Wireless Internet (WISP)"
+        assert client_record.phone_plan == "Phone Service"
+        assert client_record.business_plan is None
+        assert client_record.service_summary == "Wireless Internet (WISP), Phone Service"
+        assert client_record.portal_password_hash is not None
+        assert client_record.phone == "334-555-1212"
+        assert client_record.address == "123 Main Street, Tallassee, AL 36078"
+        assert client_record.driver_license_number == "AL-1234567"
+        assert client_record.verification_photo_filename is not None
+        assert client_record.verification_photo_uploaded_at is not None
+        assert client_record.wifi_router_needed is True
+
+    photo_response = client.get(
+        f"/clients/{client_record.id}/verification-photo"
+    )
+    assert photo_response.status_code == 200
+    assert photo_response.data == b"fake-id-data"
+
+
+def test_dashboard_requires_login(client):
+    response = client.get("/dashboard", follow_redirects=True)
+    assert response.status_code == 200
+    assert b"Please log in to access the dashboard." in response.data
+
+
+def test_admin_can_login_and_view_dashboard(client):
+    login_response = client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    assert login_response.status_code == 200
+    assert b"Welcome back!" in login_response.data
+    assert b"Admin Control Center" in login_response.data
+    assert b"Operations Snapshot" in login_response.data
+
+    navigation_response = client.get("/dashboard?section=navigation", follow_redirects=True)
+    assert navigation_response.status_code == 200
+    assert b"Header Navigation" in navigation_response.data
+
+    branding_response = client.get("/dashboard?section=branding", follow_redirects=True)
+    assert branding_response.status_code == 200
+    assert b"Branding Assets" in branding_response.data
+
+
+def test_admin_can_add_customer_via_dashboard(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/clients",
+        query_string={"section": "customers"},
+        data={
+            "name": "Portal Admin",
+            "email": "portaladmin@example.com",
+            "company": "Portal Test Co",
+            "phone": "205-555-8899",
+            "address": "500 Service Lane, Montgomery, AL",
+            "residential_plan": "",
+            "phone_plan": "Phone Service",
+            "business_plan": "Business Wireless Pro",
+            "status": "Active",
+            "notes": "Added from admin dashboard.",
+            "driver_license_number": "AL-7654321",
+            "password": "AdminPass123",
+            "confirm_password": "AdminPass123",
+            "wifi_router_needed": "yes",
+            "verification_photo": (BytesIO(b"admin-id"), "admin-id.png"),
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Customer Portal Admin added." in response.data
+
+    with app.app_context():
+        admin_client = Client.query.filter_by(email="portaladmin@example.com").one()
+        assert admin_client.status == "Active"
+        assert admin_client.project_type == "Phone Service, Business Wireless Pro"
+        assert admin_client.phone_plan == "Phone Service"
+        assert admin_client.business_plan == "Business Wireless Pro"
+        assert admin_client.residential_plan is None
+        assert admin_client.portal_password_hash is not None
+        assert admin_client.phone == "205-555-8899"
+        assert admin_client.address == "500 Service Lane, Montgomery, AL"
+        assert admin_client.driver_license_number == "AL-7654321"
+        assert admin_client.verification_photo_filename is not None
+        assert admin_client.wifi_router_needed is True
+
+    admin_photo_response = client.get(
+        f"/clients/{admin_client.id}/verification-photo"
+    )
+    assert admin_photo_response.status_code == 200
+    assert admin_photo_response.data == b"admin-id"
+
+
+def test_customer_focus_view_surfaces_account_summary(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        technician = Technician(
+            name="Field Lead",
+            email="lead@example.com",
+            phone="205-555-0000",
+            password_hash=generate_password_hash("LeadPass123!"),
+            is_active=True,
+        )
+        db.session.add(technician)
+        db.session.commit()
+
+        customer = Client(
+            name="Focus Customer",
+            email="focus@example.com",
+            phone="205-555-0101",
+            address="100 Install Way, Prattville, AL",
+            status="Active",
+            residential_plan="Wireless Internet (WISP)",
+            business_plan="Business Wireless Pro",
+            wifi_router_needed=True,
+            driver_license_number="AL-0000001",
+            notes="Requires attic run for drop.",
+        )
+        db.session.add(customer)
+        db.session.commit()
+
+        invoice = Invoice(
+            client_id=customer.id,
+            description="Monthly Service",
+            amount_cents=6999,
+            status="Pending",
+        )
+        equipment = Equipment(
+            client_id=customer.id,
+            name="Subscriber Antenna",
+            model="LTU-Rocket",
+            serial_number="SN123456",
+        )
+        ticket = SupportTicket(
+            client_id=customer.id,
+            subject="Initial Setup",
+            message="Confirm install documentation.",
+            status="Open",
+        )
+        appointment = Appointment(
+            client_id=customer.id,
+            technician_id=technician.id,
+            title="On-site Activation",
+            scheduled_for=(utcnow() + timedelta(days=2)).replace(microsecond=0),
+            status="Confirmed",
+        )
+
+        install_folder = Path(app.config["INSTALL_PHOTOS_FOLDER"])
+        install_folder.mkdir(parents=True, exist_ok=True)
+        stored_filename = f"client_{customer.id}_detail.jpg"
+        (install_folder / stored_filename).write_bytes(b"photo-bytes")
+
+        photo = InstallPhoto(
+            client_id=customer.id,
+            technician_id=technician.id,
+            category=REQUIRED_INSTALL_PHOTO_CATEGORIES[0],
+            original_filename="detail.jpg",
+            stored_filename=stored_filename,
+        )
+
+        db.session.add_all([invoice, equipment, ticket, appointment, photo])
+        db.session.commit()
+        focus_id = customer.id
+
+    response = client.get(
+        "/dashboard",
+        query_string={"section": "customers", "focus": focus_id},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Focus Customer" in response.data
+    assert b"Install documentation" in response.data
+    assert b"Monthly Service" in response.data
+    assert b"Subscriber Antenna" in response.data
+    assert b"Initial Setup" in response.data
+    assert b"On-site Activation" in response.data
+    assert escape(REQUIRED_INSTALL_PHOTO_CATEGORIES[0]).encode() in response.data
+    assert escape(REQUIRED_INSTALL_PHOTO_CATEGORIES[1]).encode() in response.data
+
+
+def test_admin_can_manage_service_plans(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    create_response = client.post(
+        "/service-plans",
+        data={
+            "name": "Business Fiber Elite",
+            "category": "Business",
+            "price": "209.99",
+            "speed": "Up to 1 Gbps",
+            "description": "Symmetric fiber-backed wireless for enterprises.",
+            "features": "24/7 monitoring\nStatic IPs\nPriority install",
+        },
+        follow_redirects=True,
+        query_string={"section": "plans"},
+    )
+
+    assert create_response.status_code == 200
+    assert b"Service plan created." in create_response.data
+
+    with app.app_context():
+        plan = ServicePlan.query.filter_by(name="Business Fiber Elite").one()
+        assert plan.category == "Business"
+        assert plan.price_cents == 20999
+        assert "Static IPs" in plan.feature_list
+
+    update_response = client.post(
+        f"/service-plans/{plan.id}/update",
+        data={
+            "name": "Business Fiber Elite",
+            "category": "Business",
+            "price": "219.99",
+            "speed": "Up to 1 Gbps",
+            "description": "Updated description",
+            "features": "24/7 monitoring\nStatic IPs\nDedicated account team",
+        },
+        follow_redirects=True,
+        query_string={"section": "plans"},
+    )
+
+    assert update_response.status_code == 200
+    assert b"Service plan updated." in update_response.data
+
+    delete_response = client.post(
+        f"/service-plans/{plan.id}/delete",
+        follow_redirects=True,
+        query_string={"section": "plans"},
+    )
+
+    assert delete_response.status_code == 200
+    assert b"Service plan removed." in delete_response.data
+
+    with app.app_context():
+        assert ServicePlan.query.filter_by(name="Business Fiber Elite").first() is None
+
+
+def test_admin_can_upload_and_download_documents(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    upload_response = client.post(
+        "/documents/upload",
+        data={
+            "doc_type": "aup",
+            "document": (io.BytesIO(b"policy"), "aup.pdf"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert upload_response.status_code == 200
+    assert b"Acceptable Use Policy uploaded successfully" in upload_response.data
+
+    with app.app_context():
+        document = Document.query.filter_by(doc_type="aup").first()
+        assert document is not None
+        assert document.original_filename == "aup.pdf"
+
+    download_response = client.get("/documents/aup")
+    assert download_response.status_code == 200
+    assert download_response.data == b"policy"
+
+    inline_response = client.get("/documents/aup/file")
+    assert inline_response.status_code == 200
+    content_disposition = inline_response.headers.get("Content-Disposition", "")
+    assert "attachment" not in content_disposition.lower()
+
+
+def test_admin_can_add_navigation_item(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/navigation/add",
+        data={
+            "label": "Support",
+            "url": "https://support.example.com",
+            "open_in_new_tab": "on",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Navigation link added." in response.data
+
+    with app.app_context():
+        item = NavigationItem.query.filter_by(label="Support").first()
+        assert item is not None
+        assert item.open_in_new_tab is True
+
+
+def test_admin_can_upload_branding_asset(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/branding/upload",
+        data={
+            "asset_type": "logo",
+            "asset": (io.BytesIO(b"logo-bytes"), "logo.png"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Primary Logo updated." in response.data
+
+    with app.app_context():
+        asset = BrandingAsset.query.filter_by(asset_type="logo").first()
+        assert asset is not None
+        assert asset.original_filename == "logo.png"
+
+
+def test_default_navigation_excludes_support_dropdown_links(app):
+    with app.app_context():
+        navigation_items = NavigationItem.query.order_by(
+            NavigationItem.position.asc()
+        ).all()
+        urls = {item.url for item in navigation_items}
+
+        assert "/support" not in urls
+        assert "/uptime" not in urls
+        assert "/cancellation" not in urls
+        assert "/status/down-detector" not in urls
+        assert "/phone-service" not in urls
+
+        labels = {item.label for item in navigation_items}
+        assert "Sign Up" in labels
+        assert "Service Plans" in labels
+        assert "Phone Service" not in labels
+
+
+def test_admin_can_create_blog_post_and_publish(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/blog/posts",
+        data={
+            "title": "Tower Expansion",
+            "summary": "We are lighting up new coverage north of town.",
+            "content": "Crews completed a new sector to boost speeds across the county.",
+            "publish": "on",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Blog post created." in response.data
+
+    with app.app_context():
+        post = BlogPost.query.filter_by(title="Tower Expansion").one()
+        assert post.is_published is True
+        assert post.slug
+        slug = post.slug
+
+    list_response = client.get("/blog")
+    assert list_response.status_code == 200
+    assert b"Tower Expansion" in list_response.data
+
+    detail_response = client.get(f"/blog/{slug}")
+    assert detail_response.status_code == 200
+    assert b"Crews completed a new sector" in detail_response.data
+
+
+def test_blog_draft_hidden_from_public(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    client.post(
+        "/blog/posts",
+        data={
+            "title": "Draft Update",
+            "summary": "Behind-the-scenes prep.",
+            "content": "Technicians are preparing for the next deployment.",
+        },
+        follow_redirects=True,
+    )
+
+    client.get("/logout", follow_redirects=True)
+
+    with app.app_context():
+        draft = BlogPost.query.filter_by(title="Draft Update").one()
+        slug = draft.slug
+        assert draft.is_published is False
+
+    list_response = client.get("/blog")
+    assert list_response.status_code == 200
+    assert b"Draft Update" not in list_response.data
+
+    detail_response = client.get(f"/blog/{slug}")
+    assert detail_response.status_code == 404
+
+
+def test_admin_can_update_blog_post_status(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    client.post(
+        "/blog/posts",
+        data={
+            "title": "Status Check",
+            "summary": "Initial summary",
+            "content": "Initial content",
+            "publish": "on",
+        },
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        post = BlogPost.query.filter_by(title="Status Check").one()
+        post_id = post.id
+        original_slug = post.slug
+
+    update_response = client.post(
+        f"/blog/posts/{post_id}",
+        data={
+            "title": "Status Check Updated",
+            "summary": "Revised summary",
+            "content": "Revised content",
+        },
+        follow_redirects=True,
+    )
+
+    assert update_response.status_code == 200
+    assert b"Blog post updated." in update_response.data
+
+    with app.app_context():
+        updated = BlogPost.query.get(post_id)
+        assert updated.title == "Status Check Updated"
+        assert updated.is_published is False
+        assert updated.published_at is None
+        assert updated.slug != original_slug
+
+    client.get("/logout", follow_redirects=True)
+
+    detail_response = client.get(f"/blog/{updated.slug}")
+    assert detail_response.status_code == 404
+
+
+def test_document_viewer_renders_pdf_inline(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    client.post(
+        "/documents/upload",
+        data={
+            "doc_type": "privacy",
+            "document": (io.BytesIO(b"pdf-bytes"), "privacy.pdf"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    response = client.get("/documents/privacy/view")
+    assert response.status_code == 200
+    assert b"iframe" in response.data
+    assert b"privacy.pdf" in response.data or b"Privacy Policy" in response.data
+
+
+def test_document_viewer_uses_office_embed_for_word(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    client.post(
+        "/documents/upload",
+        data={
+            "doc_type": "tos",
+            "document": (io.BytesIO(b"word-bytes"), "terms.docx"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    response = client.get("/documents/tos/view")
+    assert response.status_code == 200
+    assert b"view.officeapps.live.com" in response.data
+
+
+def test_admin_can_manage_billing_equipment_and_tickets(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    signup_response = client.post(
+        "/signup",
+        data={
+            "name": "Billing Tester",
+            "email": "billing@example.com",
+            "company": "Example Co",
+            "phone": "205-555-0100",
+            "address": "900 Commerce Rd, Tallassee, AL",
+            "service_plan": "Internet + Phone Bundle",
+            "driver_license_number": "AL-4455667",
+            "password": "BundlePass123",
+            "confirm_password": "BundlePass123",
+            "verification_photo": (io.BytesIO(b"billing-id"), "billing-id.jpg"),
+        },
+        follow_redirects=True,
+    )
+
+    assert signup_response.status_code == 200
+
+    with app.app_context():
+        customer = Client.query.filter_by(email="billing@example.com").one()
+        assert customer.portal_password_hash is not None
+        customer_id = customer.id
+
+    invoice_create = client.post(
+        f"/clients/{customer_id}/invoices",
+        data={
+            "description": "Wireless service",
+            "amount": "129.99",
+            "due_date": "2024-09-01",
+            "status": "Pending",
+        },
+        follow_redirects=True,
+    )
+
+    assert invoice_create.status_code == 200
+
+    with app.app_context():
+        invoice = Invoice.query.filter_by(client_id=customer_id).one()
+        assert invoice.amount_cents == 12999
+
+    invoice_update = client.post(
+        f"/invoices/{invoice.id}/update",
+        data={
+            "description": "Wireless service",
+            "amount": "129.99",
+            "due_date": "2024-09-01",
+            "status": "Paid",
+        },
+        follow_redirects=True,
+    )
+
+    assert invoice_update.status_code == 200
+
+    with app.app_context():
+        refreshed_invoice = Invoice.query.get(invoice.id)
+        assert refreshed_invoice.status == "Paid"
+
+    equipment_create = client.post(
+        f"/clients/{customer_id}/equipment",
+        data={
+            "name": "Subscriber Gateway",
+            "model": "UISP Wave",
+            "serial_number": "SN-123",
+            "installed_on": "2024-08-01",
+            "notes": "Mounted on roof",
+        },
+        follow_redirects=True,
+    )
+
+    assert equipment_create.status_code == 200
+
+    with app.app_context():
+        equipment = Equipment.query.filter_by(client_id=customer_id).one()
+
+    equipment_update = client.post(
+        f"/equipment/{equipment.id}/update",
+        data={
+            "name": "Subscriber Gateway",
+            "model": "UISP Wave Pro",
+            "serial_number": "SN-123",
+            "installed_on": "2024-08-01",
+            "notes": "Firmware updated",
+        },
+        follow_redirects=True,
+    )
+
+    assert equipment_update.status_code == 200
+
+    with app.app_context():
+        updated_equipment = Equipment.query.get(equipment.id)
+        assert updated_equipment.model == "UISP Wave Pro"
+
+    with app.app_context():
+        ticket = SupportTicket(
+            client_id=customer_id,
+            subject="Slow speeds",
+            message="Evenings are slow.",
+        )
+        db.session.add(ticket)
+        db.session.commit()
+        ticket_id = ticket.id
+
+    ticket_update = client.post(
+        f"/tickets/{ticket_id}/update",
+        data={"status": "In Progress", "resolution_notes": "Technician scheduled."},
+        follow_redirects=True,
+    )
+
+def test_client_portal_login_and_ticket_creation(app, client):
+    with app.app_context():
+        portal_client = Client(
+            name="Daisy Duke",
+            email="daisy@example.com",
+            status="Active",
+        )
+        db.session.add(portal_client)
+        db.session.commit()
+        password = "TempPass123"
+        portal_client.portal_password_hash = generate_password_hash(password)
+        portal_client.portal_password_updated_at = utcnow()
+        db.session.commit()
+        portal_client_id = portal_client.id
+
+        invoice = Invoice(
+            client_id=portal_client_id,
+            description="Wireless Internet",
+            amount_cents=8500,
+            due_date=date(2024, 9, 1),
+            status="Pending",
+        )
+        equipment = Equipment(
+            client_id=portal_client_id,
+            name="Roof Antenna",
+            model="UISP AirFiber",
+            serial_number="ANT-001",
+            installed_on=date(2024, 8, 15),
+            notes="Mounted on chimney",
+        )
+        db.session.add_all([invoice, equipment])
+        db.session.commit()
+
+    login_response = client.post(
+        "/portal/login",
+        data={"email": "daisy@example.com", "password": password},
+        follow_redirects=True,
+    )
+
+    assert login_response.status_code == 200
+    assert b"Billing History" in login_response.data
+    assert b"Wireless Internet" in login_response.data
+
+    ticket_response = client.post(
+        "/portal/tickets",
+        data={"subject": "Need help", "message": "Please check signal."},
+        follow_redirects=True,
+    )
+
+    assert ticket_response.status_code == 200
+    assert b"support request has been submitted" in ticket_response.data
+
+    portal_view = client.get("/portal")
+    assert portal_view.status_code == 200
+    assert b"Need help" in portal_view.data
+
+    with app.app_context():
+        tickets = SupportTicket.query.filter_by(client_id=portal_client_id).all()
+        assert len(tickets) == 1
+        assert tickets[0].subject == "Need help"
+
+
+def test_portal_highlights_missing_service_plan(app, client):
+    app.config["CONTACT_EMAIL"] = "activate@example.com"
+    with app.app_context():
+        portal_client = Client(
+            name="No Plan Customer",
+            email="noplan@example.com",
+            status="Active",
+        )
+        portal_client.portal_password_hash = generate_password_hash("PortalPass123")
+        db.session.add(portal_client)
+        db.session.commit()
+
+    login_response = client.post(
+        "/portal/login",
+        data={"email": "noplan@example.com", "password": "PortalPass123"},
+        follow_redirects=True,
+    )
+
+    assert login_response.status_code == 200
+    assert b"No service plan on file" in login_response.data
+    assert b"Contact us to set up your service" in login_response.data
+    assert b"mailto:activate@example.com" in login_response.data
+
+
+def test_client_can_request_reschedule_and_notify_admin(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_ADMIN_EMAIL"] = "ops@example.com"
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    with app.app_context():
+        portal_client = Client(
+            name="Schedule Tester",
+            email="schedule@example.com",
+            status="Active",
+            project_type="Wireless Internet (WISP)",
+        )
+        portal_client.portal_password_hash = generate_password_hash("PortalPass123")
+        db.session.add(portal_client)
+        db.session.flush()
+
+        appointment = Appointment(
+            client_id=portal_client.id,
+            title="Initial Install",
+            scheduled_for=utcnow(),
+            notes="Bring ladder",
+        )
+        db.session.add(appointment)
+        db.session.commit()
+        appointment_id = appointment.id
+
+    client.post(
+        "/portal/login",
+        data={"email": "schedule@example.com", "password": "PortalPass123"},
+        follow_redirects=True,
+    )
+
+    new_time = (utcnow() + timedelta(days=2)).replace(microsecond=0)
+
+    reschedule_response = client.post(
+        f"/portal/appointments/{appointment_id}/action",
+        data={
+            "action": "reschedule",
+            "scheduled_for": new_time.strftime("%Y-%m-%dT%H:%M"),
+            "message": "Need afternoon slot",
+        },
+        follow_redirects=True,
+    )
+
+    assert reschedule_response.status_code == 200
+    assert b"Reschedule request submitted" in reschedule_response.data
+
+    with app.app_context():
+        updated = Appointment.query.get(appointment_id)
+        assert updated.status == "Reschedule Requested"
+        assert updated.proposed_time is not None
+        assert updated.client_message == "Need afternoon slot"
+
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "ops@example.com"
+    assert "requested a new appointment" in subject
+    assert "Need afternoon slot" in body
+
+    notifications.clear()
+
+    approve_response = client.post(
+        f"/portal/appointments/{appointment_id}/action",
+        data={"action": "approve"},
+        follow_redirects=True,
+    )
+
+    assert approve_response.status_code == 200
+    assert b"Appointment confirmed" in approve_response.data
+
+    with app.app_context():
+        approved = Appointment.query.get(appointment_id)
+        assert approved.status == "Confirmed"
+        assert approved.proposed_time is None
+
+    assert notifications
+    approve_recipient, approve_subject, approve_body = notifications[-1]
+    assert approve_recipient == "ops@example.com"
+    assert "Appointment confirmed" in approve_subject
+    assert "Status: Confirmed" in approve_body
+
+
+def test_admin_can_schedule_appointment(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    with app.app_context():
+        customer = Client(
+            name="Field Visit Client",
+            email="field@example.com",
+            status="Active",
+            project_type="Phone Service",
+        )
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    scheduled_for = (utcnow() + timedelta(days=1)).replace(microsecond=0)
+
+    response = client.post(
+        "/appointments",
+        query_string={"section": "appointments"},
+        data={
+            "client_id": str(customer_id),
+            "title": "Roof install",
+            "scheduled_for": scheduled_for.strftime("%Y-%m-%dT%H:%M"),
+            "notes": "Coordinate with tower crew",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Appointment scheduled" in response.data
+
+    with app.app_context():
+        appointment = Appointment.query.filter_by(client_id=customer_id).one()
+        assert appointment.title == "Roof install"
+        assert appointment.status == "Pending"
+
+    assert notifications
+    notify_recipient, notify_subject, notify_body = notifications[-1]
+    assert notify_recipient == "field@example.com"
+    assert "Roof install" in notify_subject
+    assert "appointment" in notify_body.lower()
+
+
+def test_admin_can_send_manual_snmp_email(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/notifications/snmp-email",
+        data={
+            "recipient": "alert@example.com",
+            "subject": "Maintenance window",
+            "body": "Expect brief downtime at midnight.",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"SNMP email notification queued" in response.data
+    assert notifications == [
+        ("alert@example.com", "Maintenance window", "Expect brief downtime at midnight."),
+    ]
+
+
+def test_admin_can_update_snmp_settings(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/snmp-settings",
+        data={
+            "host": "trap.dixie.local",
+            "port": "1162",
+            "community": "dlw-community",
+            "enterprise_oid": "1.3.6.1.4.1.9999",
+            "admin_email": "noc@dixielandwireless.com",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"SNMP settings updated" in response.data
+
+    with app.app_context():
+        config = SNMPConfig.query.first()
+        assert config is not None
+        assert config.host == "trap.dixie.local"
+        assert config.port == 1162
+        assert config.community == "dlw-community"
+        assert config.enterprise_oid == "1.3.6.1.4.1.9999"
+        assert config.admin_email == "noc@dixielandwireless.com"
+        assert app.config["SNMP_TRAP_HOST"] == "trap.dixie.local"
+        assert app.config["SNMP_TRAP_PORT"] == 1162
+        assert app.config["SNMP_COMMUNITY"] == "dlw-community"
+        assert app.config["SNMP_ADMIN_EMAIL"] == "noc@dixielandwireless.com"
+
+
+def test_technician_portal_login_and_dashboard(app, client):
+    with app.app_context():
+        technician = Technician(
+            name="Taylor Reed",
+            email="tech@example.com",
+            password_hash=generate_password_hash("Install123"),
+            is_active=True,
+        )
+        customer = Client(
+            name="Dakota Lane",
+            email="dakota@example.com",
+            project_type="Wireless Internet (WISP)",
+            status="Active",
+        )
+        appointment = Appointment(
+            client=customer,
+            technician=technician,
+            title="Tower install",
+            scheduled_for=utcnow() + timedelta(hours=2),
+            status="Pending",
+        )
+        db.session.add_all([technician, customer, appointment])
+        db.session.commit()
+
+    response = client.post(
+        "/tech/login",
+        data={"email": "tech@example.com", "password": "Install123"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Welcome, Taylor Reed" in response.data
+    assert b"Upcoming visits" in response.data
+
+
+def test_technician_uploads_install_photo(app, client):
+    with app.app_context():
+        technician = Technician(
+            name="Sky Nguyen",
+            email="field@example.com",
+            password_hash=generate_password_hash("StrongPass!"),
+            is_active=True,
+        )
+        customer = Client(
+            name="Jordan Fields",
+            email="jordan@example.com",
+            project_type="Phone Service",
+            status="Active",
+        )
+        appointment = Appointment(
+            client=customer,
+            technician=technician,
+            title="Phone ATA install",
+            scheduled_for=utcnow() + timedelta(hours=1),
+            status="Pending",
+        )
+        db.session.add_all([technician, customer, appointment])
+        db.session.commit()
+        appointment_id = appointment.id
+        client_id = customer.id
+
+    login_response = client.post(
+        "/tech/login",
+        data={"email": "field@example.com", "password": "StrongPass!"},
+        follow_redirects=True,
+    )
+    assert login_response.status_code == 200
+
+    detail_response = client.get(f"/tech/appointments/{appointment_id}")
+    assert detail_response.status_code == 200
+
+    upload_data = {
+        "appointment_id": str(appointment_id),
+        "category": REQUIRED_INSTALL_PHOTO_CATEGORIES[0],
+        "notes": "Mounted to west gable.",
+        "next": f"/tech/appointments/{appointment_id}",
+        "photo": (io.BytesIO(b"fake image bytes"), "install.jpg"),
+    }
+
+    response = client.post(
+        f"/tech/clients/{client_id}/photos",
+        data=upload_data,
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Photo uploaded" in response.data
+
+    with app.app_context():
+        photos = InstallPhoto.query.filter_by(client_id=client_id).all()
+        assert len(photos) == 1
+        stored_path = Path(app.config["INSTALL_PHOTOS_FOLDER"]) / photos[0].stored_filename
+        assert stored_path.exists()

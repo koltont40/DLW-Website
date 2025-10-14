@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -n "${DEBUG_INSTALL:-}" ]; then
+  set -x
+fi
+
+missing_packages=()
+
+add_missing() {
+  local pkg="$1"
+  for existing in "${missing_packages[@]:-}"; do
+    if [[ "$existing" == "$pkg" ]]; then
+      return
+    fi
+  done
+  missing_packages+=("$pkg")
+}
+
+require_command() {
+  local cmd="$1"
+  local pkg="$2"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    add_missing "$pkg"
+  fi
+}
+
+require_python_module() {
+  local module="$1"
+  local pkg="$2"
+  if ! python3 -c "import ${module}" >/dev/null 2>&1; then
+    add_missing "$pkg"
+  fi
+}
+
+require_command python3 python3
+require_command pip3 python3-pip
+
+if command -v python3 >/dev/null 2>&1; then
+  if ! python3 -m venv --help >/dev/null 2>&1; then
+    add_missing "python3-venv"
+  fi
+else
+  add_missing "python3"
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+  require_python_module sqlite3 libsqlite3-dev
+fi
+
+if ((${#missing_packages[@]})); then
+  echo "The following system packages are required before installation can continue:" >&2
+  printf '  - %s\n' "${missing_packages[@]}" >&2
+  if command -v apt-get >/dev/null 2>&1; then
+    echo >&2
+    echo "Install them with:" >&2
+    echo "  sudo apt-get update && sudo apt-get install -y ${missing_packages[*]}" >&2
+  fi
+  exit 1
+fi
+
+if [ ! -d .venv ]; then
+  python3 -m venv .venv
+fi
+
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+python -c "from app import init_db; init_db()"
+
+export FLASK_APP=app
+export FLASK_RUN_HOST=0.0.0.0
+export FLASK_RUN_PORT=${PORT:-8000}
+
+echo
+echo "Launching the development server on http://$FLASK_RUN_HOST:$FLASK_RUN_PORT"
+echo "Admin login -> Username: ${ADMIN_USERNAME:-admin} | Password: ${ADMIN_PASSWORD:-admin123}"
+echo "Press CTRL+C to stop the server."
+
+exec flask run

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}ADMIN LOGIN | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="form-section narrow">
+  <h1>ADMIN LOGIN</h1>
+  <p class="lead">Access the client roster, update statuses, manage the header, and refresh branding assets.</p>
+  <form class="card form-card" method="post" action="{{ url_for('login', next=request.args.get('next')) }}">
+    <label>
+      Username
+      <input type="text" name="username" required autocomplete="username" />
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" required autocomplete="current-password" />
+    </label>
+    <button class="button primary" type="submit">Sign In</button>
+    <p class="helper-text">Default credentials: admin / admin123</p>
+  </form>
+</section>
+{% endblock %}
