@@ -9,6 +9,16 @@
     {% if branding_assets.get('favicon') %}
     <link rel="icon" href="{{ url_for('branding_file', asset_type='favicon') }}" />
     {% endif %}
+    {% if site_theme %}
+    <style>
+      :root {
+        --bg: {{ site_theme.background_color }};
+        --secondary: {{ site_theme.text_color }};
+        --text: {{ site_theme.text_color }};
+        --muted: {{ site_theme.muted_color }};
+      }
+    </style>
+    {% endif %}
   </head>
   <body>
     <header class="site-header">
