@@ -2129,7 +2129,6 @@ def register_routes(app: Flask) -> None:
         valid_sections = {
             "overview",
             "customers",
-            "portal",
             "billing",
             "network",
             "support",
@@ -2162,7 +2161,6 @@ def register_routes(app: Flask) -> None:
         selected_client_portal_enabled = False
         if active_section in {
             "customers",
-            "portal",
             "billing",
             "network",
             "support",
@@ -2569,6 +2567,25 @@ def register_routes(app: Flask) -> None:
         if client.phone_plan:
             service_groups.append(("Phone Service", client.phone_plan))
 
+        categorized_plans = {
+            category: plans
+            for category, plans in get_ordered_service_plan_categories()
+        }
+        plan_field_config: list[dict[str, object]] = []
+        for category, field_name, label in PLAN_FIELD_DEFINITIONS:
+            plans = categorized_plans.get(category)
+            if not plans:
+                continue
+            plan_field_config.append(
+                {
+                    "category": category,
+                    "field": field_name,
+                    "label": label,
+                    "plans": plans,
+                    "selected": getattr(client, field_name) or "",
+                }
+            )
+
         outstanding_invoices = [
             invoice
             for invoice in invoices
@@ -2602,6 +2619,10 @@ def register_routes(app: Flask) -> None:
             else None
         )
 
+        technicians = (
+            Technician.query.order_by(Technician.name.asc()).all()
+        )
+
         return render_template(
             "admin_client_account.html",
             client=client,
@@ -2622,6 +2643,11 @@ def register_routes(app: Flask) -> None:
             install_photo_categories=INSTALL_PHOTO_CATEGORY_CHOICES,
             ticket_priority_options=TICKET_PRIORITY_OPTIONS,
             upcoming_appointments=upcoming_appointments,
+            plan_field_config=plan_field_config,
+            status_options=STATUS_OPTIONS,
+            invoice_status_options=INVOICE_STATUS_OPTIONS,
+            appointment_status_options=APPOINTMENT_STATUS_OPTIONS,
+            technicians=technicians,
         )
 
     @app.post("/documents/upload")
@@ -2739,7 +2765,7 @@ def register_routes(app: Flask) -> None:
             f"Temporary portal password for {client.email}: {temporary_password}",
             "info",
         )
-        return _redirect_back_to_dashboard("portal")
+        return _redirect_back_to_dashboard("customers", focus=client_id)
 
     @app.post("/clients/<int:client_id>/portal/set-password")
     @login_required
@@ -2750,24 +2776,30 @@ def register_routes(app: Flask) -> None:
 
         if not password:
             flash("Please provide a password for the client portal.", "danger")
-            return _redirect_back_to_dashboard("portal")
+            return _redirect_back_to_dashboard("customers", focus=client_id)
 
         if password != confirm:
             flash("Passwords do not match. Please try again.", "danger")
-            return _redirect_back_to_dashboard("portal")
+            return _redirect_back_to_dashboard("customers", focus=client_id)
 
         if len(password) < 8:
             flash("Portal passwords must be at least 8 characters long.", "danger")
-            return _redirect_back_to_dashboard("portal")
+            return _redirect_back_to_dashboard("customers", focus=client_id)
 
         client.portal_password_hash = generate_password_hash(password)
         client.portal_password_updated_at = utcnow()
         client.portal_access_code = secrets.token_hex(16)
         db.session.commit()
         flash(f"Portal password updated for {client.email}.", "success")
-        return _redirect_back_to_dashboard("portal")
+        return _redirect_back_to_dashboard("customers", focus=client_id)
 
-    def _redirect_back_to_dashboard(default_section: str = "overview"):
+    def _redirect_back_to_dashboard(
+        default_section: str = "overview", focus: int | None = None
+    ):
+        next_url = request.args.get("next") or request.form.get("next")
+        if next_url:
+            return redirect(next_url)
+
         params: dict[str, str] = {}
         status_value = request.args.get("status")
         if status_value:
@@ -2775,7 +2807,9 @@ def register_routes(app: Flask) -> None:
         section_value = request.args.get("section") or default_section
         if section_value:
             params["section"] = section_value
-        focus_value = request.args.get("focus")
+        focus_value: str | None = request.args.get("focus")
+        if focus is not None:
+            focus_value = str(focus)
         if focus_value:
             params["focus"] = focus_value
         return redirect(url_for("dashboard", **params))
@@ -2864,6 +2898,45 @@ def register_routes(app: Flask) -> None:
 
         flash(f"Customer {client.name} added.", "success")
         return _redirect_back_to_dashboard("customers")
+
+    @app.post("/clients/<int:client_id>/service-plans")
+    @login_required
+    def update_client_service_plans(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        residential_plan = request.form.get("residential_plan", "").strip()
+        phone_plan = request.form.get("phone_plan", "").strip()
+        business_plan = request.form.get("business_plan", "").strip()
+        status_value = request.form.get("status", client.status).strip() or client.status
+        wifi_router_flag = request.form.get("wifi_router_needed")
+
+        if status_value not in STATUS_OPTIONS:
+            status_value = client.status
+
+        client.residential_plan = residential_plan or None
+        client.phone_plan = phone_plan or None
+        client.business_plan = business_plan or None
+        client.status = status_value
+        client.wifi_router_needed = bool(wifi_router_flag)
+
+        selected_services = [
+            value
+            for value in (
+                client.residential_plan,
+                client.phone_plan,
+                client.business_plan,
+            )
+            if value
+        ]
+        client.project_type = ", ".join(selected_services) if selected_services else None
+
+        db.session.commit()
+
+        flash("Service plans updated.", "success")
+
+        next_url = request.form.get("next") or request.args.get("next")
+        if next_url:
+            return redirect(next_url)
+        return redirect(url_for("admin_client_account", client_id=client.id))
 
     @app.post("/clients/<int:client_id>/verification")
     @login_required

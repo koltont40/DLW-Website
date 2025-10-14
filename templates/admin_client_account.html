@@ -2,6 +2,7 @@
 {% block title %}{{ client.name }} Account | Admin Dashboard{% endblock %}
 {% block content %}
 <div class="dashboard-layout admin-account-layout">
+  {% set account_url = url_for('admin_client_account', client_id=client.id) %}
   <aside class="admin-sidebar">
     <div class="sidebar-header">
       <h1>Customer Account</h1>
@@ -123,6 +124,40 @@
             >View verification</a>
             {% endif %}
           </div>
+          <div class="portal-management">
+            <h4>Portal access</h4>
+          {% if client.portal_password_updated_at %}
+            <p class="subtle">Password last updated {{ client.portal_password_updated_at.strftime('%b %d, %Y %I:%M %p') }}</p>
+          {% else %}
+            <p class="alert subtle">Password not issued yet.</p>
+          {% endif %}
+          <form
+            class="stacked-form"
+            method="post"
+            action="{{ url_for('set_portal_password', client_id=client.id, next=account_url) }}"
+            >
+              <label>
+                New password
+                <input type="password" name="password" minlength="8" placeholder="Create a secure password" required />
+              </label>
+              <label>
+                Confirm password
+                <input type="password" name="confirm_password" minlength="8" placeholder="Re-enter password" required />
+              </label>
+              <button class="button small primary" type="submit">Save password</button>
+            </form>
+            <form
+              class="stacked-form"
+              method="post"
+              action="{{ url_for('reset_portal_password', client_id=client.id, next=account_url) }}"
+            >
+              <button class="button small" type="submit">Generate temporary password</button>
+            </form>
+            <p class="subtle">
+              Share the login URL:
+              <a href="{{ url_for('portal_login', _external=True) }}" target="_blank" rel="noopener">Customer Portal</a>.
+            </p>
+          </div>
           {% if client.notes %}
           <div class="detail-note">
             <h4>Account notes</h4>
@@ -209,6 +244,303 @@
             {% endfor %}
           </ul>
           {% endif %}
+        </article>
+      </div>
+    </section>
+
+    <section class="card management-card" id="service-equipment">
+      <header class="section-header">
+        <div>
+          <h3>Service plans &amp; equipment</h3>
+          <p class="subtle">Assign subscription bundles and keep onsite hardware current.</p>
+        </div>
+      </header>
+      <div class="management-grid">
+        <article class="management-column">
+          <h4>Service configuration</h4>
+          {% if plan_field_config %}
+          <form class="stacked-form" method="post" action="{{ url_for('update_client_service_plans', client_id=client.id) }}">
+            <input type="hidden" name="next" value="{{ account_url }}" />
+            {% for field in plan_field_config %}
+            <label>
+              {{ field.label }}
+              <select name="{{ field.field }}">
+                <option value="">No {{ field.label|lower }}</option>
+                {% for plan in field.plans %}
+                <option value="{{ plan.name }}" {% if field.selected == plan.name %}selected{% endif %}>
+                  {{ plan.name }}{% if plan.speed %} • {{ plan.speed }}{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </label>
+            {% endfor %}
+            <label>
+              Account status
+              <select name="status">
+                {% for option in status_options %}
+                <option value="{{ option }}" {% if client.status == option %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" name="wifi_router_needed" value="yes" {% if client.wifi_router_needed %}checked{% endif %} />
+              <span>Managed Wi-Fi router provided by DIXIELAND</span>
+            </label>
+            <button class="button small primary" type="submit">Save service setup</button>
+          </form>
+          {% else %}
+          <p class="subtle">
+            No service plans are published yet. Create plans from the Service Plans section of the dashboard to assign them here.
+          </p>
+          {% endif %}
+        </article>
+        <article class="management-column">
+          <h4>Installed equipment</h4>
+          <div class="record-list">
+            {% if equipment_items %}
+            {% for item in equipment_items %}
+            <form class="record-row" method="post" action="{{ url_for('update_equipment', equipment_id=item.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+              <label>
+                Name
+                <input type="text" name="name" value="{{ item.name }}" required />
+              </label>
+              <label>
+                Model
+                <input type="text" name="model" value="{{ item.model or '' }}" />
+              </label>
+              <label>
+                Serial number
+                <input type="text" name="serial_number" value="{{ item.serial_number or '' }}" />
+              </label>
+              <label>
+                Installed
+                <input type="date" name="installed_on" value="{{ item.installed_on.isoformat() if item.installed_on }}" />
+              </label>
+              <label>
+                Notes
+                <textarea name="notes" rows="2" placeholder="Mounting notes or install details">{{ item.notes or '' }}</textarea>
+              </label>
+              <div class="record-actions">
+                <button class="button small primary" type="submit">Update</button>
+                <button class="button small danger" type="submit" form="delete-equipment-{{ item.id }}" onclick="return confirm('Remove this equipment item?');">Delete</button>
+              </div>
+            </form>
+            <form id="delete-equipment-{{ item.id }}" class="inline-form" method="post" action="{{ url_for('delete_equipment', equipment_id=item.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+            </form>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">No equipment has been recorded for this account.</p>
+            {% endif %}
+          </div>
+          <form class="stacked-form" method="post" action="{{ url_for('create_equipment', client_id=client.id) }}">
+            <input type="hidden" name="next" value="{{ account_url }}" />
+            <h5>Add equipment</h5>
+            <label>
+              Name
+              <input type="text" name="name" placeholder="Subscriber Gateway" required />
+            </label>
+            <label>
+              Model
+              <input type="text" name="model" placeholder="UISP Wave AP" />
+            </label>
+            <label>
+              Serial number
+              <input type="text" name="serial_number" placeholder="SN123456" />
+            </label>
+            <label>
+              Installed
+              <input type="date" name="installed_on" />
+            </label>
+            <label>
+              Notes
+              <textarea name="notes" rows="2" placeholder="Mounting location, cabling notes, etc."></textarea>
+            </label>
+            <button class="button small primary" type="submit">Add equipment</button>
+          </form>
+        </article>
+      </div>
+    </section>
+
+    <section class="card management-card" id="billing-management">
+      <header class="section-header">
+        <div>
+          <h3>Billing management</h3>
+          <p class="subtle">Issue invoices and keep balances in sync.</p>
+        </div>
+      </header>
+      <div class="management-grid">
+        <article class="management-column">
+          <h4>Invoices</h4>
+          <div class="record-list">
+            {% if invoices %}
+            {% for invoice in invoices %}
+            <form class="record-row" method="post" action="{{ url_for('update_invoice', invoice_id=invoice.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+              <label>
+                Description
+                <input type="text" name="description" value="{{ invoice.description }}" required />
+              </label>
+              <label>
+                Amount ($)
+                <input type="number" name="amount" step="0.01" min="0" value="{{ '%.2f'|format(invoice.amount_cents / 100) }}" required />
+              </label>
+              <label>
+                Due date
+                <input type="date" name="due_date" value="{{ invoice.due_date.isoformat() if invoice.due_date }}" />
+              </label>
+              <label>
+                Status
+                <select name="status">
+                  {% for option in invoice_status_options %}
+                  <option value="{{ option }}" {% if invoice.status == option %}selected{% endif %}>{{ option }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <div class="record-actions">
+                <button class="button small primary" type="submit">Update</button>
+                <button class="button small danger" type="submit" form="delete-invoice-{{ invoice.id }}" onclick="return confirm('Delete this invoice?');">Delete</button>
+              </div>
+            </form>
+            <form id="delete-invoice-{{ invoice.id }}" class="inline-form" method="post" action="{{ url_for('delete_invoice', invoice_id=invoice.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+            </form>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">No invoices generated yet.</p>
+            {% endif %}
+          </div>
+        </article>
+        <article class="management-column">
+          <h4>Create invoice</h4>
+          <form class="stacked-form" method="post" action="{{ url_for('create_invoice', client_id=client.id) }}">
+            <input type="hidden" name="next" value="{{ account_url }}" />
+            <label>
+              Description
+              <input type="text" name="description" placeholder="Monthly service" required />
+            </label>
+            <label>
+              Amount ($)
+              <input type="number" name="amount" step="0.01" min="0" placeholder="79.99" required />
+            </label>
+            <label>
+              Due date
+              <input type="date" name="due_date" />
+            </label>
+            <label>
+              Status
+              <select name="status">
+                {% for option in invoice_status_options %}
+                <option value="{{ option }}" {% if option == 'Pending' %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="button small primary" type="submit">Add invoice</button>
+          </form>
+        </article>
+      </div>
+    </section>
+
+    <section class="card management-card" id="appointment-management">
+      <header class="section-header">
+        <div>
+          <h3>Appointments &amp; schedule</h3>
+          <p class="subtle">Coordinate visits and respond to customer requests.</p>
+        </div>
+      </header>
+      <div class="management-grid">
+        <article class="management-column">
+          <h4>Schedule visit</h4>
+          <form class="stacked-form" method="post" action="{{ url_for('create_appointment_admin') }}">
+            <input type="hidden" name="next" value="{{ account_url }}" />
+            <input type="hidden" name="client_id" value="{{ client.id }}" />
+            <label>
+              Title
+              <input type="text" name="title" placeholder="Installation visit" required />
+            </label>
+            <label>
+              Scheduled for
+              <input type="datetime-local" name="scheduled_for" required />
+            </label>
+            <label>
+              Assign technician
+              <select name="technician_id">
+                <option value="">Unassigned</option>
+                {% for tech in technicians %}
+                <option value="{{ tech.id }}">{{ tech.name }}{% if not tech.is_active %} (inactive){% endif %}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Internal notes
+              <textarea name="notes" rows="3" placeholder="Prep steps, tools, or context."></textarea>
+            </label>
+            <button class="button small primary" type="submit">Schedule appointment</button>
+          </form>
+        </article>
+        <article class="management-column">
+          <h4>Manage appointments</h4>
+          <div class="record-list">
+            {% if appointments %}
+            {% for appointment in appointments %}
+            <form class="record-row" method="post" action="{{ url_for('update_appointment_admin', appointment_id=appointment.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+              <div>
+                <strong>{{ appointment.title }}</strong>
+                <p class="subtle">Status: {{ appointment.status }}{% if appointment.technician %} • {{ appointment.technician.name }}{% endif %}</p>
+                <p class="subtle">Scheduled {{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}</p>
+                {% if appointment.client_message %}
+                <p class="subtle">Customer message: {{ appointment.client_message }}</p>
+                {% endif %}
+              </div>
+              <label>
+                Scheduled for
+                <input type="datetime-local" name="scheduled_for" value="{{ appointment.scheduled_for.strftime('%Y-%m-%dT%H:%M') }}" />
+              </label>
+              {% if appointment.proposed_time %}
+              <div class="inline-note">
+                Proposed: {{ appointment.proposed_time.strftime('%b %d, %Y %I:%M %p') }}
+                <label class="checkbox">
+                  <input type="checkbox" name="use_proposed" />
+                  <span>Use proposed time</span>
+                </label>
+              </div>
+              {% endif %}
+              <label>
+                Status
+                <select name="status">
+                  {% for option in appointment_status_options %}
+                  <option value="{{ option }}" {% if appointment.status == option %}selected{% endif %}>{{ option }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>
+                Technician
+                <select name="technician_id">
+                  <option value="">Unassigned</option>
+                  {% for tech in technicians %}
+                  <option value="{{ tech.id }}" {% if appointment.technician_id == tech.id %}selected{% endif %}>{{ tech.name }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>
+                Internal notes
+                <textarea name="notes" rows="3">{{ appointment.notes or '' }}</textarea>
+              </label>
+              <div class="record-actions">
+                <button class="button small primary" type="submit">Update</button>
+                <button class="button small danger" type="submit" form="delete-appointment-{{ appointment.id }}" onclick="return confirm('Remove this appointment?');">Delete</button>
+              </div>
+            </form>
+            <form id="delete-appointment-{{ appointment.id }}" class="inline-form" method="post" action="{{ url_for('delete_appointment_admin', appointment_id=appointment.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+            </form>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">No appointments scheduled for this account.</p>
+            {% endif %}
+          </div>
         </article>
       </div>
     </section>

@@ -15,10 +15,6 @@
       <div class="sidebar-group">
         <span class="sidebar-group-label">Customer Ops</span>
         <a class="sidebar-link {% if active_section == 'customers' %}active{% endif %}" href="{{ url_for('dashboard', section='customers') }}">Customers</a>
-        <a class="sidebar-link {% if active_section == 'portal' %}active{% endif %}" href="{{ url_for('dashboard', section='portal') }}">Portal Access</a>
-        <a class="sidebar-link {% if active_section == 'billing' %}active{% endif %}" href="{{ url_for('dashboard', section='billing') }}">Billing</a>
-        <a class="sidebar-link {% if active_section == 'network' %}active{% endif %}" href="{{ url_for('dashboard', section='network') }}">Network</a>
-        <a class="sidebar-link {% if active_section == 'appointments' %}active{% endif %}" href="{{ url_for('dashboard', section='appointments') }}">Appointments</a>
         <a class="sidebar-link {% if active_section == 'support' %}active{% endif %}" href="{{ url_for('dashboard', section='support') }}">Support</a>
         <a class="sidebar-link {% if active_section == 'field' %}active{% endif %}" href="{{ url_for('dashboard', section='field') }}">Field Ops</a>
       </div>
@@ -250,6 +246,40 @@
               >View verification</a
             >
             {% endif %}
+          </div>
+          <div class="portal-management">
+            <h4>Portal access</h4>
+            {% if selected_client.portal_password_updated_at %}
+            <p class="subtle">Password last updated {{ selected_client.portal_password_updated_at.strftime('%b %d, %Y %I:%M %p') }}</p>
+            {% else %}
+            <p class="alert subtle">Password not issued yet.</p>
+            {% endif %}
+            <form
+              class="stacked-form"
+              method="post"
+              action="{{ url_for('set_portal_password', client_id=selected_client.id, section='customers', status=request.args.get('status'), focus=selected_client.id) }}"
+            >
+              <label>
+                New password
+                <input type="password" name="password" minlength="8" placeholder="Create a secure password" required />
+              </label>
+              <label>
+                Confirm password
+                <input type="password" name="confirm_password" minlength="8" placeholder="Re-enter password" required />
+              </label>
+              <button class="button small primary" type="submit">Save password</button>
+            </form>
+            <form
+              class="stacked-form"
+              method="post"
+              action="{{ url_for('reset_portal_password', client_id=selected_client.id, section='customers', status=request.args.get('status'), focus=selected_client.id) }}"
+            >
+              <button class="button small" type="submit">Generate temporary password</button>
+            </form>
+            <p class="subtle">
+              Share the login URL:
+              <a href="{{ url_for('portal_login', _external=True) }}" target="_blank" rel="noopener">Customer Portal</a>.
+            </p>
           </div>
           {% if selected_client.notes %}
           <div class="detail-note">
@@ -599,58 +629,6 @@
         });
       });
     </script>
-    {% elif active_section == 'portal' %}
-    <section class="card" id="portal">
-      <header class="section-header">
-        <div>
-          <h2>Portal Credentials</h2>
-          <p class="subtle">Issue and reset passwords for the customer portal.</p>
-        </div>
-      </header>
-      {% if clients %}
-      <div class="client-stack">
-        {% for client in clients %}
-        <article class="client-card">
-          <header>
-            <div>
-              <h3>
-                <a class="customer-name-link" href="{{ url_for('admin_client_account', client_id=client.id) }}">
-                  {{ client.name }}
-                </a>
-              </h3>
-              <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
-            </div>
-            <span class="badge subtle">{{ client.status }}</span>
-          </header>
-          <div class="client-card-body">
-            {% if client.portal_password_updated_at %}
-            <p class="subtle">Password last updated {{ client.portal_password_updated_at.strftime('%b %d, %Y %I:%M %p') }}</p>
-            {% else %}
-            <p class="alert subtle">Password not issued yet.</p>
-            {% endif %}
-            <form class="stacked-form" method="post" action="{{ url_for('set_portal_password', client_id=client.id, section='portal', status=request.args.get('status')) }}">
-              <label>
-                New password
-                <input type="password" name="password" minlength="8" placeholder="Create a secure password" required />
-              </label>
-              <label>
-                Confirm password
-                <input type="password" name="confirm_password" minlength="8" placeholder="Re-enter password" required />
-              </label>
-              <button class="button small primary" type="submit">Save password</button>
-            </form>
-            <form class="stacked-form" method="post" action="{{ url_for('reset_portal_password', client_id=client.id, section='portal', status=request.args.get('status')) }}">
-              <button class="button small" type="submit">Generate temporary password</button>
-            </form>
-            <p class="subtle">Share the login URL: <a href="{{ url_for('portal_login', _external=True) }}" target="_blank" rel="noopener">Customer Portal</a>.</p>
-          </div>
-        </article>
-        {% endfor %}
-      </div>
-      {% else %}
-      <p class="subtle">Add customers first to enable portal management.</p>
-      {% endif %}
-    </section>
     {% elif active_section == 'billing' %}
     <section class="card" id="billing">
       <header class="section-header">

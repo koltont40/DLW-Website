@@ -1,6 +1,6 @@
 import io
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 from io import BytesIO
 
@@ -436,6 +436,198 @@ def test_admin_customer_account_view_shows_details(app, client):
     assert b"diagnostic.log" in response.data
     assert b"On-site Activation" in response.data
     assert b"Install documentation" in response.data
+
+
+def test_admin_updates_service_plans_from_account_view(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        customer = Client(
+            name="Plan Update",
+            email="planupdate@example.com",
+            status="New",
+        )
+        db.session.add(customer)
+        db.session.flush()
+
+        plans = [
+            ServicePlan(
+                name="Fiber Home 100",
+                category="Residential",
+                price_cents=10999,
+            ),
+            ServicePlan(
+                name="VoIP Essential",
+                category="Phone Service",
+                price_cents=3999,
+            ),
+            ServicePlan(
+                name="Business Wave",
+                category="Business",
+                price_cents=18999,
+            ),
+        ]
+        db.session.add_all(plans)
+        db.session.commit()
+        customer_id = customer.id
+
+    next_url = f"/dashboard/customers/{customer_id}"
+    response = client.post(
+        f"/clients/{customer_id}/service-plans",
+        data={
+            "residential_plan": "Fiber Home 100",
+            "phone_plan": "VoIP Essential",
+            "business_plan": "",
+            "status": "Active",
+            "wifi_router_needed": "yes",
+            "next": next_url,
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(next_url)
+
+    with app.app_context():
+        updated = Client.query.get(customer_id)
+        assert updated.status == "Active"
+        assert updated.residential_plan == "Fiber Home 100"
+        assert updated.phone_plan == "VoIP Essential"
+        assert updated.business_plan is None
+        assert updated.wifi_router_needed is True
+        assert updated.project_type == "Fiber Home 100, VoIP Essential"
+
+
+def test_admin_adds_invoice_from_account_view(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        customer = Client(
+            name="Billing Target",
+            email="billing@example.com",
+            status="Active",
+        )
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    next_url = f"/dashboard/customers/{customer_id}"
+    response = client.post(
+        f"/clients/{customer_id}/invoices",
+        data={
+            "description": "Monthly service",
+            "amount": "79.99",
+            "due_date": "2024-12-01",
+            "status": "Pending",
+            "next": next_url,
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(next_url)
+
+    with app.app_context():
+        invoices = Invoice.query.filter_by(client_id=customer_id).all()
+        assert len(invoices) == 1
+        assert invoices[0].description == "Monthly service"
+        assert invoices[0].amount_cents == 7999
+
+
+def test_admin_adds_equipment_from_account_view(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        customer = Client(
+            name="Equipment Owner",
+            email="equip@example.com",
+            status="Active",
+        )
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    next_url = f"/dashboard/customers/{customer_id}"
+    response = client.post(
+        f"/clients/{customer_id}/equipment",
+        data={
+            "name": "Subscriber Router",
+            "model": "UISP Express",
+            "serial_number": "SR-001",
+            "installed_on": "2024-08-01",
+            "notes": "Mounted in living room closet",
+            "next": next_url,
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(next_url)
+
+    with app.app_context():
+        devices = Equipment.query.filter_by(client_id=customer_id).all()
+        assert len(devices) == 1
+        assert devices[0].name == "Subscriber Router"
+        assert str(devices[0].installed_on) == "2024-08-01"
+
+
+def test_admin_schedules_appointment_from_account_view(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        technician = Technician(
+            name="Account Tech",
+            email="account-tech@example.com",
+            password_hash=generate_password_hash("TechPass123"),
+            is_active=True,
+        )
+        customer = Client(
+            name="Schedule Customer",
+            email="schedule-admin@example.com",
+            status="Active",
+        )
+        db.session.add_all([technician, customer])
+        db.session.commit()
+        technician_id = technician.id
+        customer_id = customer.id
+
+    scheduled_for = (datetime.now(timezone.utc) + timedelta(days=1)).replace(microsecond=0)
+    next_url = f"/dashboard/customers/{customer_id}"
+    app.config["SNMP_EMAIL_SENDER"] = lambda *args, **kwargs: True
+
+    response = client.post(
+        "/appointments",
+        data={
+            "client_id": customer_id,
+            "title": "Service visit",
+            "scheduled_for": scheduled_for.isoformat(timespec="minutes"),
+            "technician_id": technician_id,
+            "notes": "Bring replacement router",
+            "next": next_url,
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(next_url)
+
+    with app.app_context():
+        appointments = Appointment.query.filter_by(client_id=customer_id).all()
+        assert len(appointments) == 1
+        assert appointments[0].title == "Service visit"
+        assert appointments[0].technician_id == technician_id
 
 
 def test_admin_customer_account_view_requires_login(client):
