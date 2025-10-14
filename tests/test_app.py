@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 from datetime import date, timedelta
 
 import pytest
@@ -10,8 +11,10 @@ from app import (
     Equipment,
     Invoice,
     Appointment,
+    InstallPhoto,
     ServicePlan,
     SNMPConfig,
+    Technician,
     DownDetectorConfig,
     NavigationItem,
     BlogPost,
@@ -28,6 +31,7 @@ def app(tmp_path):
     test_db_path = tmp_path / "test.db"
     legal_folder = tmp_path / "legal"
     branding_folder = tmp_path / "branding"
+    install_folder = tmp_path / "install_photos"
 
     app = create_app(
         {
@@ -36,6 +40,7 @@ def app(tmp_path):
             "SQLALCHEMY_DATABASE_URI": f"sqlite:///{test_db_path}",
             "LEGAL_UPLOAD_FOLDER": str(legal_folder),
             "BRANDING_UPLOAD_FOLDER": str(branding_folder),
+            "INSTALL_PHOTOS_FOLDER": str(install_folder),
         }
     )
 
@@ -939,3 +944,99 @@ def test_admin_can_update_snmp_settings(app, client):
         assert app.config["SNMP_TRAP_PORT"] == 1162
         assert app.config["SNMP_COMMUNITY"] == "dlw-community"
         assert app.config["SNMP_ADMIN_EMAIL"] == "noc@dixielandwireless.com"
+
+
+def test_technician_portal_login_and_dashboard(app, client):
+    with app.app_context():
+        technician = Technician(
+            name="Taylor Reed",
+            email="tech@example.com",
+            password_hash=generate_password_hash("Install123"),
+            is_active=True,
+        )
+        customer = Client(
+            name="Dakota Lane",
+            email="dakota@example.com",
+            project_type="Wireless Internet (WISP)",
+            status="Active",
+        )
+        appointment = Appointment(
+            client=customer,
+            technician=technician,
+            title="Tower install",
+            scheduled_for=utcnow() + timedelta(hours=2),
+            status="Pending",
+        )
+        db.session.add_all([technician, customer, appointment])
+        db.session.commit()
+
+    response = client.post(
+        "/tech/login",
+        data={"email": "tech@example.com", "password": "Install123"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Welcome, Taylor Reed" in response.data
+    assert b"Upcoming visits" in response.data
+
+
+def test_technician_uploads_install_photo(app, client):
+    with app.app_context():
+        technician = Technician(
+            name="Sky Nguyen",
+            email="field@example.com",
+            password_hash=generate_password_hash("StrongPass!"),
+            is_active=True,
+        )
+        customer = Client(
+            name="Jordan Fields",
+            email="jordan@example.com",
+            project_type="Phone Service",
+            status="Active",
+        )
+        appointment = Appointment(
+            client=customer,
+            technician=technician,
+            title="Phone ATA install",
+            scheduled_for=utcnow() + timedelta(hours=1),
+            status="Pending",
+        )
+        db.session.add_all([technician, customer, appointment])
+        db.session.commit()
+        appointment_id = appointment.id
+        client_id = customer.id
+
+    login_response = client.post(
+        "/tech/login",
+        data={"email": "field@example.com", "password": "StrongPass!"},
+        follow_redirects=True,
+    )
+    assert login_response.status_code == 200
+
+    detail_response = client.get(f"/tech/appointments/{appointment_id}")
+    assert detail_response.status_code == 200
+
+    upload_data = {
+        "appointment_id": str(appointment_id),
+        "category": "Site Overview",
+        "notes": "Mounted to west gable.",
+        "next": f"/tech/appointments/{appointment_id}",
+        "photo": (io.BytesIO(b"fake image bytes"), "install.jpg"),
+    }
+
+    response = client.post(
+        f"/tech/clients/{client_id}/photos",
+        data=upload_data,
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Photo uploaded" in response.data
+
+    with app.app_context():
+        photos = InstallPhoto.query.filter_by(client_id=client_id).all()
+        assert len(photos) == 1
+        stored_path = Path(app.config["INSTALL_PHOTOS_FOLDER"]) / photos[0].stored_filename
+        assert stored_path.exists()

@@ -1,3 +1,4 @@
+import mimetypes
 import os
 import re
 import secrets
@@ -73,6 +74,12 @@ def generate_unique_slug(title: str, existing_id: int | None = None) -> str:
         suffix += 1
 
 
+def allowed_install_file(filename: str) -> bool:
+    if not filename:
+        return False
+    return Path(filename).suffix.lower() in ALLOWED_INSTALL_EXTENSIONS
+
+
 class Client(db.Model):
     __tablename__ = "clients"
 
@@ -103,6 +110,9 @@ class Client(db.Model):
     )
     appointments = db.relationship(
         "Appointment", back_populates="client", cascade="all, delete-orphan"
+    )
+    install_photos = db.relationship(
+        "InstallPhoto", back_populates="client", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:
@@ -229,6 +239,17 @@ DOCUMENT_MIME_TYPES = {
 }
 
 PORTAL_SESSION_KEY = "client_portal_id"
+TECH_SESSION_KEY = "technician_portal_id"
+REQUIRED_INSTALL_PHOTO_CATEGORIES = [
+    "Site Overview",
+    "Equipment Placement",
+    "Mounting & Cabling",
+    "Speed Test",
+]
+INSTALL_PHOTO_CATEGORY_CHOICES = REQUIRED_INSTALL_PHOTO_CATEGORIES + [
+    "Additional Detail"
+]
+ALLOWED_INSTALL_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif"}
 
 
 def get_default_navigation_items() -> list[tuple[str, str, bool]]:
@@ -359,6 +380,50 @@ class Equipment(db.Model):
         return f"<Equipment {self.name} for client {self.client_id}>"
 
 
+class Technician(db.Model):
+    __tablename__ = "technicians"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    email = db.Column(db.String(255), nullable=False, unique=True)
+    phone = db.Column(db.String(50))
+    password_hash = db.Column(db.String(255), nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    appointments = db.relationship("Appointment", back_populates="technician")
+    install_photos = db.relationship(
+        "InstallPhoto", back_populates="technician", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<Technician {self.email}>"
+
+
+class InstallPhoto(db.Model):
+    __tablename__ = "install_photos"
+
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
+    technician_id = db.Column(
+        db.Integer, db.ForeignKey("technicians.id"), nullable=False
+    )
+    category = db.Column(db.String(80), nullable=False)
+    original_filename = db.Column(db.String(255), nullable=False)
+    stored_filename = db.Column(db.String(255), nullable=False)
+    notes = db.Column(db.Text)
+    uploaded_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+
+    client = db.relationship("Client", back_populates="install_photos")
+    technician = db.relationship("Technician", back_populates="install_photos")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<InstallPhoto {self.stored_filename} for client {self.client_id}>"
+
+
 class SupportTicket(db.Model):
     __tablename__ = "support_tickets"
 
@@ -384,6 +449,7 @@ class Appointment(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     client_id = db.Column(db.Integer, db.ForeignKey("clients.id"), nullable=False)
+    technician_id = db.Column(db.Integer, db.ForeignKey("technicians.id"))
     title = db.Column(db.String(120), nullable=False)
     scheduled_for = db.Column(db.DateTime(timezone=True), nullable=False)
     status = db.Column(db.String(40), nullable=False, default="Pending")
@@ -396,6 +462,7 @@ class Appointment(db.Model):
     )
 
     client = db.relationship("Client", back_populates="appointments")
+    technician = db.relationship("Technician", back_populates="appointments")
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Appointment {self.title} for client {self.client_id}>"
@@ -478,6 +545,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         "ADMIN_PASSWORD": os.environ.get("ADMIN_PASSWORD", "admin123"),
         "LEGAL_UPLOAD_FOLDER": str(instance_path / "legal"),
         "BRANDING_UPLOAD_FOLDER": str(instance_path / "branding"),
+        "INSTALL_PHOTOS_FOLDER": str(instance_path / "install_photos"),
         "CONTACT_EMAIL": os.environ.get("CONTACT_EMAIL", "hello@example.com"),
         "SNMP_TRAP_HOST": os.environ.get("SNMP_TRAP_HOST"),
         "SNMP_TRAP_PORT": snmp_port,
@@ -499,11 +567,19 @@ def create_app(test_config: dict | None = None) -> Flask:
     register_routes(app)
 
     with app.app_context():
+        for folder_key in [
+            "LEGAL_UPLOAD_FOLDER",
+            "BRANDING_UPLOAD_FOLDER",
+            "INSTALL_PHOTOS_FOLDER",
+        ]:
+            folder_path = Path(app.config[folder_key])
+            folder_path.mkdir(parents=True, exist_ok=True)
         db.create_all()
         ensure_client_portal_fields()
         ensure_default_navigation()
         ensure_service_plans_seeded()
         ensure_snmp_configuration()
+        ensure_appointment_technician_field()
         ensure_down_detector_configuration()
 
     return app
@@ -519,6 +595,7 @@ def init_db() -> None:
         ensure_default_navigation()
         ensure_service_plans_seeded()
         ensure_snmp_configuration()
+        ensure_appointment_technician_field()
         ensure_down_detector_configuration()
 
 
@@ -744,6 +821,16 @@ def ensure_client_portal_fields() -> None:
         db.session.commit()
 
 
+def ensure_appointment_technician_field() -> None:
+    inspector = inspect(db.engine)
+    columns = {column["name"] for column in inspector.get_columns("appointments")}
+
+    if "technician_id" not in columns:
+        with db.engine.begin() as connection:
+            connection.execute(
+                text("ALTER TABLE appointments ADD COLUMN technician_id INTEGER")
+            )
+
 def ensure_snmp_configuration() -> None:
     config = SNMPConfig.query.first()
     if config:
@@ -832,6 +919,28 @@ def client_login_required(func):
 
         g.portal_client = client
         return func(client, *args, **kwargs)
+
+    return wrapper
+
+
+def technician_login_required(func):
+    from functools import wraps
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        technician_id = session.get(TECH_SESSION_KEY)
+        if not technician_id:
+            flash("Log in to access the technician portal.", "warning")
+            return redirect(url_for("tech_login", next=request.path))
+
+        technician = Technician.query.get(technician_id)
+        if not technician or not technician.is_active:
+            session.pop(TECH_SESSION_KEY, None)
+            flash("Your technician account is unavailable. Please contact dispatch.", "danger")
+            return redirect(url_for("tech_login"))
+
+        g.technician = technician
+        return func(technician, *args, **kwargs)
 
     return wrapper
 
@@ -1314,6 +1423,237 @@ def register_routes(app: Flask) -> None:
         flash(confirmation_text, "success")
         return redirect(url_for("portal_dashboard"))
 
+    @app.route("/tech/login", methods=["GET", "POST"])
+    def tech_login():
+        existing_id = session.get(TECH_SESSION_KEY)
+        if existing_id:
+            existing = Technician.query.get(existing_id)
+            if existing and existing.is_active:
+                return redirect(url_for("tech_dashboard"))
+            session.pop(TECH_SESSION_KEY, None)
+
+        if request.method == "POST":
+            email = request.form.get("email", "").strip().lower()
+            password = request.form.get("password", "").strip()
+
+            technician = Technician.query.filter_by(email=email).first()
+            if (
+                technician
+                and technician.is_active
+                and password
+                and check_password_hash(technician.password_hash, password)
+            ):
+                session[TECH_SESSION_KEY] = technician.id
+                session["technician_authenticated_at"] = utcnow().isoformat()
+                flash("Welcome to the field operations portal.", "success")
+                next_url = request.args.get("next") or url_for("tech_dashboard")
+                return redirect(next_url)
+
+            flash("Invalid technician credentials or inactive account.", "danger")
+
+        return render_template("tech_login.html")
+
+    @app.get("/tech/logout")
+    def tech_logout():
+        session.pop(TECH_SESSION_KEY, None)
+        session.pop("technician_authenticated_at", None)
+        flash("You have been logged out of the technician portal.", "info")
+        return redirect(url_for("tech_login"))
+
+    @app.route("/tech")
+    @technician_login_required
+    def tech_dashboard(technician: Technician):
+        now = utcnow()
+        appointments = (
+            Appointment.query.filter_by(technician_id=technician.id)
+            .order_by(Appointment.scheduled_for.asc())
+            .all()
+        )
+
+        def _scheduled_for(visit: Appointment) -> datetime:
+            scheduled = visit.scheduled_for
+            if scheduled.tzinfo is None:
+                scheduled = scheduled.replace(tzinfo=UTC)
+            return scheduled
+
+        upcoming = [
+            ap for ap in appointments if _scheduled_for(ap) >= now - timedelta(hours=12)
+        ]
+        recent = [
+            ap for ap in appointments if _scheduled_for(ap) < now
+        ]
+        recent = sorted(recent, key=lambda ap: _scheduled_for(ap), reverse=True)[:5]
+
+        client_ids = {ap.client_id for ap in appointments}
+        raw_photo_map: dict[int, dict[str, list[InstallPhoto]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
+        if client_ids:
+            photos = (
+                InstallPhoto.query.filter(InstallPhoto.client_id.in_(client_ids))
+                .order_by(InstallPhoto.uploaded_at.desc())
+                .all()
+            )
+            for photo in photos:
+                raw_photo_map[photo.client_id][photo.category].append(photo)
+
+        photo_map = {cid: dict(category_map) for cid, category_map in raw_photo_map.items()}
+        missing_requirements: dict[int, list[str]] = {}
+        for ap in appointments:
+            missing = [
+                category
+                for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
+                if not raw_photo_map[ap.client_id].get(category)
+            ]
+            missing_requirements[ap.client_id] = missing
+
+        recent_uploads = (
+            InstallPhoto.query.filter_by(technician_id=technician.id)
+            .order_by(InstallPhoto.uploaded_at.desc())
+            .limit(8)
+            .all()
+        )
+
+        return render_template(
+            "tech_dashboard.html",
+            technician=technician,
+            upcoming_appointments=upcoming,
+            recent_appointments=recent,
+            missing_requirements=missing_requirements,
+            photo_map=photo_map,
+            photo_categories=INSTALL_PHOTO_CATEGORY_CHOICES,
+            required_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
+            recent_uploads=recent_uploads,
+        )
+
+    @app.route("/tech/appointments/<int:appointment_id>")
+    @technician_login_required
+    def tech_appointment_detail(technician: Technician, appointment_id: int):
+        appointment = (
+            Appointment.query.filter_by(id=appointment_id, technician_id=technician.id)
+            .first_or_404()
+        )
+        photos = (
+            InstallPhoto.query.filter_by(client_id=appointment.client_id)
+            .order_by(InstallPhoto.uploaded_at.desc())
+            .all()
+        )
+        photos_by_category: dict[str, list[InstallPhoto]] = defaultdict(list)
+        for photo in photos:
+            photos_by_category[photo.category].append(photo)
+
+        missing_categories = [
+            category
+            for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
+            if not photos_by_category.get(category)
+        ]
+
+        return render_template(
+            "tech_appointment.html",
+            technician=technician,
+            appointment=appointment,
+            client=appointment.client,
+            photos_by_category=dict(photos_by_category),
+            missing_categories=missing_categories,
+            photo_categories=INSTALL_PHOTO_CATEGORY_CHOICES,
+            required_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
+        )
+
+    @app.post("/tech/clients/<int:client_id>/photos")
+    @technician_login_required
+    def upload_install_photo_technician(technician: Technician, client_id: int):
+        client = Client.query.get_or_404(client_id)
+        appointment_id_raw = request.form.get("appointment_id", "").strip()
+        appointment: Appointment | None = None
+        if appointment_id_raw:
+            try:
+                appointment_id = int(appointment_id_raw)
+            except (TypeError, ValueError):
+                appointment_id = None
+            else:
+                appointment = (
+                    Appointment.query.filter_by(
+                        id=appointment_id, technician_id=technician.id
+                    )
+                    .order_by(Appointment.scheduled_for.desc())
+                    .first()
+                )
+        if appointment is None:
+            appointment = (
+                Appointment.query.filter_by(client_id=client.id, technician_id=technician.id)
+                .order_by(Appointment.scheduled_for.desc())
+                .first()
+            )
+        if appointment is None:
+            flash("You do not have access to that customer record.", "danger")
+            return redirect(url_for("tech_dashboard"))
+
+        category = request.form.get("category", "").strip() or REQUIRED_INSTALL_PHOTO_CATEGORIES[0]
+        if category not in INSTALL_PHOTO_CATEGORY_CHOICES:
+            flash("Choose a supported photo category.", "danger")
+            return redirect(url_for("tech_appointment_detail", appointment_id=appointment.id))
+
+        file = request.files.get("photo")
+        if not file or not file.filename:
+            flash("Choose a photo to upload.", "danger")
+            return redirect(url_for("tech_appointment_detail", appointment_id=appointment.id))
+
+        if not allowed_install_file(file.filename):
+            flash("Upload JPG, PNG, or HEIC images for installation records.", "danger")
+            return redirect(url_for("tech_appointment_detail", appointment_id=appointment.id))
+
+        notes = request.form.get("notes", "").strip() or None
+
+        install_folder = Path(app.config["INSTALL_PHOTOS_FOLDER"]) / f"client_{client.id}"
+        install_folder.mkdir(parents=True, exist_ok=True)
+
+        timestamp = utcnow().strftime("%Y%m%d%H%M%S")
+        safe_name = secure_filename(file.filename)
+        stored_filename = f"{timestamp}_{safe_name}" if safe_name else f"{timestamp}.jpg"
+        relative_path = Path(f"client_{client.id}") / stored_filename
+        file.save(install_folder / stored_filename)
+
+        photo = InstallPhoto(
+            client_id=client.id,
+            technician_id=technician.id,
+            category=category,
+            original_filename=file.filename,
+            stored_filename=str(relative_path),
+            notes=notes,
+        )
+        db.session.add(photo)
+        db.session.commit()
+
+        flash("Photo uploaded to the customer record.", "success")
+        redirect_target = request.form.get("next") or url_for(
+            "tech_appointment_detail", appointment_id=appointment.id
+        )
+        return redirect(redirect_target)
+
+    @app.get("/install-photos/<int:photo_id>")
+    def serve_install_photo(photo_id: int):
+        photo = InstallPhoto.query.get_or_404(photo_id)
+        authorized = False
+        if session.get("admin_authenticated"):
+            authorized = True
+        technician_id = session.get(TECH_SESSION_KEY)
+        if technician_id and technician_id == photo.technician_id:
+            authorized = True
+        client_id = session.get(PORTAL_SESSION_KEY)
+        if client_id and client_id == photo.client_id:
+            authorized = True
+        if not authorized:
+            abort(403)
+
+        base_folder = Path(app.config["INSTALL_PHOTOS_FOLDER"])
+        file_path = base_folder / photo.stored_filename
+        if not file_path.exists():
+            abort(404)
+
+        directory = str(file_path.parent)
+        mimetype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        return send_from_directory(directory, file_path.name, mimetype=mimetype)
+
     @app.route("/legal")
     def legal():
         documents = {key: None for key in LEGAL_DOCUMENT_TYPES}
@@ -1365,6 +1705,7 @@ def register_routes(app: Flask) -> None:
             "legal",
             "blog",
             "plans",
+            "field",
         }
         if active_section not in valid_sections:
             active_section = "overview"
@@ -1374,6 +1715,7 @@ def register_routes(app: Flask) -> None:
             status_filter = None
 
         clients: list[Client] = []
+        technicians: list[Technician] = []
         if active_section in {
             "customers",
             "portal",
@@ -1387,11 +1729,30 @@ def register_routes(app: Flask) -> None:
                 query = query.filter_by(status=status_filter)
             clients = query.all()
 
+        if active_section in {"appointments", "field"}:
+            technicians = (
+                Technician.query.filter_by(is_active=True)
+                .order_by(Technician.name.asc())
+                .all()
+            )
+
         appointments: list[Appointment] = []
         if active_section == "appointments":
             appointments = (
                 Appointment.query.order_by(Appointment.scheduled_for.asc()).all()
             )
+        elif active_section == "field":
+            field_records = (
+                Appointment.query.order_by(Appointment.scheduled_for.asc()).all()
+            )
+            cutoff = utcnow() - timedelta(days=2)
+            appointments = []
+            for record in field_records:
+                scheduled_for = record.scheduled_for
+                if scheduled_for.tzinfo is None:
+                    scheduled_for = scheduled_for.replace(tzinfo=UTC)
+                if scheduled_for >= cutoff:
+                    appointments.append(record)
 
         total_clients = Client.query.count()
         start_of_week = utcnow() - timedelta(days=7)
@@ -1482,6 +1843,34 @@ def register_routes(app: Flask) -> None:
         recent_tickets = (
             SupportTicket.query.order_by(SupportTicket.created_at.desc()).limit(5).all()
         )
+        recent_install_photos: list[InstallPhoto] = []
+        field_requirements: dict[int, list[str]] = {}
+        field_photo_map: dict[int, dict[str, list[InstallPhoto]]] = {}
+        if active_section == "field":
+            recent_install_photos = (
+                InstallPhoto.query.order_by(InstallPhoto.uploaded_at.desc())
+                .limit(12)
+                .all()
+            )
+            appointment_client_ids = {ap.client_id for ap in appointments}
+            photo_lookup: dict[int, dict[str, list[InstallPhoto]]] = defaultdict(lambda: defaultdict(list))
+            if appointment_client_ids:
+                photos = (
+                    InstallPhoto.query.filter(InstallPhoto.client_id.in_(appointment_client_ids))
+                    .order_by(InstallPhoto.uploaded_at.desc())
+                    .all()
+                )
+                for photo in photos:
+                    photo_lookup[photo.client_id][photo.category].append(photo)
+            field_photo_map = {cid: dict(categories) for cid, categories in photo_lookup.items()}
+            for ap in appointments:
+                category_map = photo_lookup.get(ap.client_id, {})
+                missing = [
+                    category
+                    for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
+                    if not category_map.get(category)
+                ]
+                field_requirements[ap.id] = missing
 
         operations_snapshot = [
             {
@@ -1597,6 +1986,7 @@ def register_routes(app: Flask) -> None:
             navigation_items=navigation_items,
             branding_assets=branding_records,
             appointments=appointments,
+            technicians=technicians,
             appointments_total=appointments_total,
             pending_appointments=pending_appointments,
             upcoming_appointments=upcoming_appointments_list,
@@ -1608,6 +1998,10 @@ def register_routes(app: Flask) -> None:
             down_detector_config=down_detector_config,
             service_plans=service_plans,
             service_plans_by_category=ordered_plan_categories,
+            recent_install_photos=recent_install_photos,
+            install_photo_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
+            field_requirements=field_requirements,
+            field_photo_map=field_photo_map,
         )
 
     @app.post("/documents/upload")
@@ -2001,6 +2395,8 @@ def register_routes(app: Flask) -> None:
         title = request.form.get("title", "").strip()
         scheduled_for_raw = request.form.get("scheduled_for", "").strip()
         notes = request.form.get("notes", "").strip() or None
+        technician_id_raw = request.form.get("technician_id", "").strip()
+        technician: Technician | None = None
 
         try:
             client_id = int(client_id_raw)
@@ -2030,12 +2426,28 @@ def register_routes(app: Flask) -> None:
         if scheduled_for_value.tzinfo is None:
             scheduled_for_value = scheduled_for_value.replace(tzinfo=UTC)
 
+        if technician_id_raw:
+            try:
+                technician_id = int(technician_id_raw)
+            except (TypeError, ValueError):
+                flash("Choose a valid technician for the visit.", "danger")
+                return _redirect_back_to_dashboard("appointments")
+
+            technician = Technician.query.get(technician_id)
+            if not technician:
+                flash("Selected technician was not found.", "danger")
+                return _redirect_back_to_dashboard("appointments")
+            if not technician.is_active:
+                flash("The selected technician is inactive.", "danger")
+                return _redirect_back_to_dashboard("appointments")
+
         appointment = Appointment(
             client_id=client.id,
             title=title,
             scheduled_for=scheduled_for_value,
             status="Pending",
             notes=notes,
+            technician_id=technician.id if technician else None,
         )
 
         db.session.add(appointment)
@@ -2053,6 +2465,17 @@ def register_routes(app: Flask) -> None:
             ),
         )
 
+        if technician:
+            notify_via_snmp(
+                technician.email,
+                f"New field visit assigned: {title}",
+                (
+                    f"Client: {client.name}\n"
+                    f"Scheduled for: {appointment.scheduled_for.strftime('%Y-%m-%d %H:%M %Z')}\n"
+                    + (f"Notes: {appointment.notes}\n" if appointment.notes else "")
+                ),
+            )
+
         flash("Appointment scheduled.", "success")
         return _redirect_back_to_dashboard("appointments")
 
@@ -2060,12 +2483,15 @@ def register_routes(app: Flask) -> None:
     @login_required
     def update_appointment_admin(appointment_id: int):
         appointment = Appointment.query.get_or_404(appointment_id)
+        previous_technician_id = appointment.technician_id
         status_value = (
             request.form.get("status", appointment.status).strip() or appointment.status
         )
         scheduled_for_raw = request.form.get("scheduled_for", "").strip()
         use_proposed = request.form.get("use_proposed") == "on"
         notes = request.form.get("notes", "").strip() or None
+        technician_id_raw = request.form.get("technician_id")
+        new_technician: Technician | None = None
 
         if status_value not in APPOINTMENT_STATUS_OPTIONS:
             flash("Unknown appointment status.", "danger")
@@ -2085,6 +2511,27 @@ def register_routes(app: Flask) -> None:
             if new_time.tzinfo is None:
                 new_time = new_time.replace(tzinfo=UTC)
             appointment.scheduled_for = new_time
+
+        if technician_id_raw is not None:
+            technician_id_raw = technician_id_raw.strip()
+            if technician_id_raw:
+                try:
+                    technician_id = int(technician_id_raw)
+                except (TypeError, ValueError):
+                    flash("Choose a valid technician for the visit.", "danger")
+                    return _redirect_back_to_dashboard("appointments")
+
+                new_technician = Technician.query.get(technician_id)
+                if not new_technician:
+                    flash("Selected technician was not found.", "danger")
+                    return _redirect_back_to_dashboard("appointments")
+                if not new_technician.is_active:
+                    flash("The selected technician is inactive.", "danger")
+                    return _redirect_back_to_dashboard("appointments")
+                appointment.technician_id = new_technician.id
+            else:
+                appointment.technician_id = None
+                new_technician = None
 
         appointment.status = status_value
         appointment.notes = notes
@@ -2106,6 +2553,17 @@ def register_routes(app: Flask) -> None:
             ),
         )
 
+        if new_technician and new_technician.id != previous_technician_id:
+            notify_via_snmp(
+                new_technician.email,
+                f"Updated field visit: {appointment.title}",
+                (
+                    f"Client: {appointment.client.name}\n"
+                    f"Scheduled for: {appointment.scheduled_for.strftime('%Y-%m-%d %H:%M %Z')}\n"
+                    + (f"Notes: {appointment.notes}\n" if appointment.notes else "")
+                ),
+            )
+
         flash("Appointment updated.", "success")
         return _redirect_back_to_dashboard("appointments")
 
@@ -2117,6 +2575,86 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
         flash("Appointment removed.", "info")
         return _redirect_back_to_dashboard("appointments")
+
+    @app.post("/technicians")
+    @login_required
+    def create_technician_admin():
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        phone = request.form.get("phone", "").strip() or None
+        password = request.form.get("password", "").strip()
+
+        if not name or not email:
+            flash("Name and email are required for technician accounts.", "danger")
+            return _redirect_back_to_dashboard("field")
+
+        if len(password) < 8:
+            flash("Technician passwords must be at least 8 characters long.", "danger")
+            return _redirect_back_to_dashboard("field")
+
+        technician = Technician(
+            name=name,
+            email=email,
+            phone=phone,
+            password_hash=generate_password_hash(password),
+        )
+
+        db.session.add(technician)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash("A technician with that email already exists.", "danger")
+            return _redirect_back_to_dashboard("field")
+
+        flash("Technician account created.", "success")
+        return _redirect_back_to_dashboard("field")
+
+    @app.post("/technicians/<int:technician_id>/update")
+    @login_required
+    def update_technician_admin(technician_id: int):
+        technician = Technician.query.get_or_404(technician_id)
+
+        technician.name = request.form.get("name", technician.name).strip() or technician.name
+        technician.email = request.form.get("email", technician.email).strip().lower()
+        technician.phone = request.form.get("phone", "").strip() or None
+        technician.is_active = request.form.get("is_active") == "on"
+
+        new_password = request.form.get("new_password", "").strip()
+        confirm_password = request.form.get("confirm_password", "").strip()
+
+        if new_password or confirm_password:
+            if new_password != confirm_password:
+                flash("New technician passwords must match.", "danger")
+                return _redirect_back_to_dashboard("field")
+            if len(new_password) < 8:
+                flash("New technician passwords must be at least 8 characters.", "danger")
+                return _redirect_back_to_dashboard("field")
+            technician.password_hash = generate_password_hash(new_password)
+
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash("Another technician already uses that email address.", "danger")
+            return _redirect_back_to_dashboard("field")
+
+        flash("Technician updated.", "success")
+        return _redirect_back_to_dashboard("field")
+
+    @app.post("/technicians/<int:technician_id>/reset-password")
+    @login_required
+    def reset_technician_password(technician_id: int):
+        technician = Technician.query.get_or_404(technician_id)
+        temporary_password = generate_portal_password()
+        technician.password_hash = generate_password_hash(temporary_password)
+        technician.updated_at = utcnow()
+        db.session.commit()
+        flash(
+            f"Temporary password for {technician.email}: {temporary_password}",
+            "info",
+        )
+        return _redirect_back_to_dashboard("field")
 
     @app.post("/tickets/<int:ticket_id>/update")
     @login_required

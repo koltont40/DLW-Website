@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ appointment.title }} | Field Portal{% endblock %}
+{% block content %}
+<div class="tech-appointment">
+  <header class="tech-section-header">
+    <div>
+      <a class="inline-link" href="{{ url_for('tech_dashboard') }}">← Back to dashboard</a>
+      <h1>{{ appointment.client.name }}</h1>
+      <p class="subtle">{{ appointment.title }} • {{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }} • {{ appointment.status }}</p>
+    </div>
+    <div class="tech-header-actions">
+      <a class="button secondary" href="{{ url_for('tech_logout') }}">Sign out</a>
+    </div>
+  </header>
+  <section class="tech-section">
+    <header class="tech-section-header">
+      <div>
+        <h2>Upload documentation</h2>
+        <p class="subtle">Capture clear photos for each required category before closing the job.</p>
+      </div>
+    </header>
+    <form
+      class="stacked-form tech-upload-form"
+      method="post"
+      action="{{ url_for('upload_install_photo_technician', client_id=client.id) }}"
+      enctype="multipart/form-data"
+    >
+      <input type="hidden" name="appointment_id" value="{{ appointment.id }}" />
+      <input type="hidden" name="next" value="{{ request.path }}" />
+      <label>
+        Photo category
+        <select name="category">
+          {% for category in photo_categories %}
+          <option value="{{ category }}" {% if missing_categories and category == missing_categories[0] %}selected{% endif %}>{{ category }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Photo file
+        <input type="file" name="photo" accept="image/*" required />
+      </label>
+      <label>
+        Notes
+        <textarea name="notes" rows="2" placeholder="Location, orientation, or install details"></textarea>
+      </label>
+      <button class="button primary" type="submit">Upload photo</button>
+    </form>
+  </section>
+  <section class="tech-section">
+    <header class="tech-section-header">
+      <div>
+        <h2>Progress checklist</h2>
+        <p class="subtle">All categories must be captured to complete the visit.</p>
+      </div>
+    </header>
+    <div class="tech-checklist">
+      {% for category in required_categories %}
+      <article class="tech-checklist-item {% if photos_by_category.get(category) %}complete{% endif %}">
+        <h3>{{ category }}</h3>
+        {% if photos_by_category.get(category) %}
+        <div class="tech-photo-strip">
+          {% for photo in photos_by_category.get(category) %}
+          <a href="{{ url_for('serve_install_photo', photo_id=photo.id) }}" target="_blank">
+            <img src="{{ url_for('serve_install_photo', photo_id=photo.id) }}" alt="{{ category }} photo" />
+          </a>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="subtle">No photo uploaded yet.</p>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Field Portal | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<div class="tech-portal">
+  <header class="tech-header">
+    <div>
+      <h1>Welcome, {{ technician.name }}</h1>
+      <p class="subtle">Review your installs, capture required photos, and keep DixieLand Wireless customers online.</p>
+    </div>
+    <div class="tech-header-actions">
+      <a class="button secondary" href="{{ url_for('tech_logout') }}">Sign out</a>
+    </div>
+  </header>
+  <section class="tech-summary">
+    <div class="summary-tile">
+      <span class="summary-label">Upcoming visits</span>
+      <span class="summary-value">{{ upcoming_appointments|length }}</span>
+    </div>
+    <div class="summary-tile">
+      <span class="summary-label">Open photo tasks</span>
+      <span class="summary-value">{{ missing_requirements.values() | map('length') | sum }}</span>
+    </div>
+    <div class="summary-tile">
+      <span class="summary-label">Recent uploads</span>
+      <span class="summary-value">{{ recent_uploads|length }}</span>
+    </div>
+  </section>
+  <section class="tech-section">
+    <header class="tech-section-header">
+      <div>
+        <h2>Today's and upcoming work</h2>
+        <p class="subtle">Tap a visit to upload photos or review install requirements.</p>
+      </div>
+    </header>
+    {% if upcoming_appointments %}
+    <div class="tech-visit-grid">
+      {% for appointment in upcoming_appointments %}
+      {% set missing = missing_requirements.get(appointment.client_id) or [] %}
+      <article class="tech-visit-card {% if missing %}visit-open{% else %}visit-complete{% endif %}">
+        <div class="visit-time">{{ appointment.scheduled_for.strftime('%b %d, %I:%M %p') }}</div>
+        <h3>{{ appointment.client.name }}</h3>
+        <p class="subtle">{{ appointment.title }}</p>
+        {% if missing %}
+        <ul class="visit-checklist">
+          {% for category in missing %}
+          <li>{{ category }}</li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="subtle">All required photos complete.</p>
+        {% endif %}
+        <a class="button primary" href="{{ url_for('tech_appointment_detail', appointment_id=appointment.id) }}">Open visit</a>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="subtle">No upcoming assignments. Check back soon or contact dispatch for new work.</p>
+    {% endif %}
+  </section>
+  <section class="tech-section">
+    <header class="tech-section-header">
+      <div>
+        <h2>Recent activity</h2>
+        <p class="subtle">A timeline of your most recent visits and uploads.</p>
+      </div>
+    </header>
+    <div class="tech-activity">
+      <div class="tech-activity-column">
+        <h3>Latest visits</h3>
+        {% if recent_appointments %}
+        <ul class="activity-list">
+          {% for appointment in recent_appointments %}
+          <li>
+            <strong>{{ appointment.client.name }}</strong>
+            <span>{{ appointment.title }}</span>
+            <span class="subtle">{{ appointment.scheduled_for.strftime('%b %d, %I:%M %p') }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="subtle">Complete a visit to start building your history.</p>
+        {% endif %}
+      </div>
+      <div class="tech-activity-column">
+        <h3>Recent uploads</h3>
+        {% if recent_uploads %}
+        <ul class="activity-list">
+          {% for photo in recent_uploads %}
+          <li>
+            <strong>{{ photo.category }}</strong>
+            <span>{{ photo.client.name if photo.client else 'Client' }}</span>
+            <a class="inline-link" href="{{ url_for('serve_install_photo', photo_id=photo.id) }}" target="_blank">View</a>
+            <span class="subtle">{{ photo.uploaded_at.strftime('%b %d, %I:%M %p') }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="subtle">Upload install photos to build your recent work log.</p>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

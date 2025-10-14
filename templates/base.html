@@ -60,7 +60,7 @@
             {% endfor %}
             <div class="nav-menu">
               <button class="nav-pill nav-menu-toggle" type="button" aria-haspopup="true" aria-expanded="false">
-                Contact/Support
+                Contact &amp; Support
                 <span class="nav-menu-icon" aria-hidden="true">▾</span>
               </button>
               <div class="nav-dropdown">
@@ -102,6 +102,7 @@
       <div class="container footer-content">
         <p>&copy; {{ current_year | default(2024) }} DIXIELAND WIRELESS LLC. All rights reserved.</p>
         <div class="footer-links">
+          <a class="admin-login" href="{{ url_for('tech_login') }}">Tech Portal</a>
           <a class="admin-login" href="{{ url_for('login') }}">Admin</a>
         </div>
       </div>

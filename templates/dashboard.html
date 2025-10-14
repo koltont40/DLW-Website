@@ -20,6 +20,7 @@
         <a class="sidebar-link {% if active_section == 'network' %}active{% endif %}" href="{{ url_for('dashboard', section='network') }}">Network</a>
         <a class="sidebar-link {% if active_section == 'appointments' %}active{% endif %}" href="{{ url_for('dashboard', section='appointments') }}">Appointments</a>
         <a class="sidebar-link {% if active_section == 'support' %}active{% endif %}" href="{{ url_for('dashboard', section='support') }}">Support</a>
+        <a class="sidebar-link {% if active_section == 'field' %}active{% endif %}" href="{{ url_for('dashboard', section='field') }}">Field Ops</a>
       </div>
       <div class="sidebar-group">
         <span class="sidebar-group-label">Site Experience</span>
@@ -584,6 +585,15 @@
           <input type="datetime-local" name="scheduled_for" required />
         </label>
         <label>
+          Assign technician
+          <select name="technician_id">
+            <option value="">Unassigned</option>
+            {% for tech in technicians %}
+            <option value="{{ tech.id }}">{{ tech.name }}{% if not tech.is_active %} (inactive){% endif %}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
           Internal notes
           <textarea name="notes" rows="3" placeholder="Technician name, prep steps, or gear required."></textarea>
         </label>
@@ -614,6 +624,9 @@
               <td>
                 <strong>{{ appointment.title }}</strong>
                 <div class="subtle">{{ appointment.client.name if appointment.client else 'Unassigned' }}</div>
+                {% if appointment.technician %}
+                <p class="subtle">Assigned to {{ appointment.technician.name }}</p>
+                {% endif %}
                 {% if appointment.notes %}
                 <p class="subtle">{{ appointment.notes }}</p>
                 {% endif %}
@@ -643,6 +656,15 @@
                     <select name="status">
                       {% for option in appointment_status_options %}
                       <option value="{{ option }}" {% if appointment.status == option %}selected{% endif %}>{{ option }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <label>
+                    Technician
+                    <select name="technician_id">
+                      <option value="">Unassigned</option>
+                      {% for tech in technicians %}
+                      <option value="{{ tech.id }}" {% if appointment.technician_id == tech.id %}selected{% endif %}>{{ tech.name }}</option>
                       {% endfor %}
                     </select>
                   </label>
@@ -679,6 +701,194 @@
       </div>
       {% else %}
       <p class="subtle">No appointments scheduled. Use the form above to add your first visit.</p>
+      {% endif %}
+    </section>
+    {% elif active_section == 'field' %}
+    <section class="card" id="field-ops">
+      <header class="section-header">
+        <div>
+          <h2>Field Operations</h2>
+          <p class="subtle">Coordinate technicians, installs, and required documentation.</p>
+        </div>
+        <div class="section-stats">
+          <span class="metric-pill">Technicians {{ technicians|length }}</span>
+          <span class="metric-pill warning">Visits {{ appointments|length }}</span>
+          <span class="metric-pill">Photo uploads {{ recent_install_photos|length }}</span>
+        </div>
+      </header>
+      <div class="field-grid">
+        <form class="stacked-form" method="post" action="{{ url_for('create_technician_admin', section='field') }}">
+          <h3>Create technician account</h3>
+          <label>
+            Name
+            <input type="text" name="name" placeholder="Field Tech" required />
+          </label>
+          <label>
+            Email
+            <input type="email" name="email" placeholder="tech@example.com" required />
+          </label>
+          <label>
+            Phone
+            <input type="tel" name="phone" placeholder="555-123-4567" />
+          </label>
+          <label>
+            Temporary password
+            <input type="password" name="password" placeholder="At least 8 characters" required />
+          </label>
+          <button class="button primary" type="submit">Add technician</button>
+          <p class="form-help subtle">Technicians use these credentials at <a href="{{ url_for('tech_login') }}" target="_blank">the field portal</a>.</p>
+        </form>
+        <div class="field-roster">
+          <h3>Technician roster</h3>
+          {% if technicians %}
+          <div class="table-wrapper">
+            <table class="data-table roster-table">
+              <thead>
+                <tr>
+                  <th>Profile</th>
+                  <th>Credentials</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for tech in technicians %}
+                <tr>
+                  <td>
+                    <strong>{{ tech.name }}</strong>
+                    <div class="subtle">{{ tech.phone or 'No phone on file' }}</div>
+                    <span class="badge {% if tech.is_active %}badge-success{% else %}badge-muted{% endif %}">
+                      {% if tech.is_active %}Active{% else %}Inactive{% endif %}
+                    </span>
+                  </td>
+                  <td>
+                    <form class="stacked-form compact" method="post" action="{{ url_for('update_technician_admin', technician_id=tech.id, section='field') }}">
+                      <label>
+                        Name
+                        <input type="text" name="name" value="{{ tech.name }}" required />
+                      </label>
+                      <label>
+                        Email
+                        <input type="email" name="email" value="{{ tech.email }}" required />
+                      </label>
+                      <label>
+                        Phone
+                        <input type="tel" name="phone" value="{{ tech.phone or '' }}" />
+                      </label>
+                      <label class="checkbox">
+                        <input type="checkbox" name="is_active" {% if tech.is_active %}checked{% endif %} />
+                        <span>Active</span>
+                      </label>
+                      <label>
+                        New password
+                        <input type="password" name="new_password" placeholder="Leave blank to keep" />
+                      </label>
+                      <label>
+                        Confirm password
+                        <input type="password" name="confirm_password" placeholder="Confirm new password" />
+                      </label>
+                      <div class="record-actions">
+                        <button class="button small primary" type="submit">Save</button>
+                      </div>
+                    </form>
+                  </td>
+                  <td>
+                    <form
+                      class="inline-form"
+                      method="post"
+                      action="{{ url_for('reset_technician_password', technician_id=tech.id, section='field') }}"
+                    >
+                      <button class="button small secondary" type="submit">Reset password</button>
+                    </form>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="subtle">No technicians yet. Create an account to unlock the mobile install portal.</p>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+    <section class="card" id="field-visits">
+      <header class="section-header">
+        <div>
+          <h2>Upcoming visits</h2>
+          <p class="subtle">Track assignments and photo requirements before sign-off.</p>
+        </div>
+      </header>
+      {% if appointments %}
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Visit</th>
+              <th>Schedule</th>
+              <th>Photo checklist</th>
+              <th>Quick links</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for appointment in appointments %}
+            <tr>
+              <td>
+                <strong>{{ appointment.title }}</strong>
+                <div class="subtle">{{ appointment.client.name if appointment.client else 'Unassigned' }}</div>
+                <div class="subtle">Assigned to {{ appointment.technician.name if appointment.technician else 'Dispatch' }}</div>
+              </td>
+              <td>
+                <div>{{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}</div>
+                <span class="badge">{{ appointment.status }}</span>
+              </td>
+              <td>
+                {% set missing = field_requirements.get(appointment.id) or [] %}
+                {% if missing %}
+                <ul class="checklist pending">
+                  {% for category in missing %}
+                  <li>{{ category }}</li>
+                  {% endfor %}
+                </ul>
+                {% else %}
+                <p class="subtle">All required photos uploaded.</p>
+                {% endif %}
+              </td>
+              <td>
+                <a class="button small secondary" href="{{ url_for('tech_appointment_detail', appointment_id=appointment.id) }}" target="_blank">Open in field portal</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="subtle">No upcoming field visits. Schedule an appointment to populate this view.</p>
+      {% endif %}
+    </section>
+    <section class="card" id="field-photos">
+      <header class="section-header">
+        <div>
+          <h2>Latest install photos</h2>
+          <p class="subtle">Recent uploads from the technician portal appear here instantly.</p>
+        </div>
+      </header>
+      {% if recent_install_photos %}
+      <div class="photo-grid">
+        {% for photo in recent_install_photos %}
+        <figure class="photo-card">
+          <a href="{{ url_for('serve_install_photo', photo_id=photo.id) }}" target="_blank">
+            <img src="{{ url_for('serve_install_photo', photo_id=photo.id) }}" alt="{{ photo.category }} for {{ photo.client.name }}" />
+          </a>
+          <figcaption>
+            <strong>{{ photo.category }}</strong>
+            <span class="subtle">{{ photo.client.name if photo.client else 'Client' }}</span>
+            <span class="subtle">{{ photo.uploaded_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+          </figcaption>
+        </figure>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="subtle">Once technicians upload install photos they will stream into this gallery.</p>
       {% endif %}
     </section>
     {% elif active_section == 'support' %}
