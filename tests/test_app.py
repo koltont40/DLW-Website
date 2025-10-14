@@ -1,6 +1,6 @@
 import io
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 from io import BytesIO
 
@@ -18,9 +18,11 @@ from app import (
     SNMPConfig,
     Technician,
     DownDetectorConfig,
+    TLSConfig,
     NavigationItem,
     BlogPost,
     SupportTicket,
+    SupportTicketAttachment,
     REQUIRED_INSTALL_PHOTO_CATEGORIES,
     create_app,
     db,
@@ -36,6 +38,11 @@ def app(tmp_path):
     branding_folder = tmp_path / "branding"
     install_folder = tmp_path / "install_photos"
     verification_folder = tmp_path / "verification"
+    ticket_attachment_folder = tmp_path / "ticket_attachments"
+    tls_challenge_folder = tmp_path / "acme-challenges"
+    tls_config_folder = tmp_path / "letsencrypt"
+    tls_work_folder = tmp_path / "letsencrypt-work"
+    tls_log_folder = tmp_path / "letsencrypt-logs"
 
     app = create_app(
         {
@@ -46,6 +53,11 @@ def app(tmp_path):
             "BRANDING_UPLOAD_FOLDER": str(branding_folder),
             "INSTALL_PHOTOS_FOLDER": str(install_folder),
             "CLIENT_VERIFICATION_FOLDER": str(verification_folder),
+            "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(ticket_attachment_folder),
+            "TLS_CHALLENGE_FOLDER": str(tls_challenge_folder),
+            "TLS_CONFIG_FOLDER": str(tls_config_folder),
+            "TLS_WORK_FOLDER": str(tls_work_folder),
+            "TLS_LOG_FOLDER": str(tls_log_folder),
         }
     )
 
@@ -58,6 +70,99 @@ def app(tmp_path):
 @pytest.fixture
 def client(app):
     return app.test_client()
+
+
+def create_detailed_customer_record(app):
+    with app.app_context():
+        technician = Technician.query.filter_by(email="lead@example.com").first()
+        if technician is None:
+            technician = Technician(
+                name="Field Lead",
+                email="lead@example.com",
+                phone="205-555-0000",
+                password_hash=generate_password_hash("LeadPass123!"),
+                is_active=True,
+            )
+            db.session.add(technician)
+            db.session.commit()
+
+        customer = Client(
+            name="Focus Customer",
+            email="focus@example.com",
+            phone="205-555-0101",
+            address="100 Install Way, Prattville, AL",
+            status="Active",
+            residential_plan="Wireless Internet (WISP)",
+            business_plan="Business Wireless Pro",
+            wifi_router_needed=True,
+            driver_license_number="AL-0000001",
+            notes="Requires attic run for drop.",
+        )
+        db.session.add(customer)
+        db.session.commit()
+
+        invoice = Invoice(
+            client_id=customer.id,
+            description="Monthly Service",
+            amount_cents=6999,
+            status="Pending",
+        )
+        equipment = Equipment(
+            client_id=customer.id,
+            name="Subscriber Antenna",
+            model="LTU-Rocket",
+            serial_number="SN123456",
+        )
+        ticket = SupportTicket(
+            client_id=customer.id,
+            subject="Initial Setup",
+            message="Confirm install documentation.",
+            status="Open",
+            priority="High",
+        )
+        appointment = Appointment(
+            client_id=customer.id,
+            technician_id=technician.id,
+            title="On-site Activation",
+            scheduled_for=(utcnow() + timedelta(days=2)).replace(microsecond=0),
+            status="Confirmed",
+            notes="Arrive 15 minutes early for attic access.",
+        )
+
+        db.session.add_all([invoice, equipment, ticket, appointment])
+        db.session.commit()
+
+        install_folder = Path(app.config["INSTALL_PHOTOS_FOLDER"])
+        install_folder.mkdir(parents=True, exist_ok=True)
+        stored_filename = f"client_{customer.id}_detail.jpg"
+        (install_folder / stored_filename).write_bytes(b"photo-bytes")
+
+        photo = InstallPhoto(
+            client_id=customer.id,
+            technician_id=technician.id,
+            category=REQUIRED_INSTALL_PHOTO_CATEGORIES[0],
+            original_filename="detail.jpg",
+            stored_filename=stored_filename,
+        )
+        db.session.add(photo)
+        db.session.commit()
+
+        attachments_folder = Path(app.config["SUPPORT_TICKET_ATTACHMENT_FOLDER"])
+        attachments_folder.mkdir(parents=True, exist_ok=True)
+        ticket_folder = attachments_folder / f"ticket_{ticket.id}"
+        ticket_folder.mkdir(parents=True, exist_ok=True)
+        attachment_name = "diagnostic.log"
+        (ticket_folder / attachment_name).write_bytes(b"log-data")
+
+        attachment = SupportTicketAttachment(
+            ticket_id=ticket.id,
+            original_filename=attachment_name,
+            stored_filename=f"ticket_{ticket.id}/{attachment_name}",
+        )
+        db.session.add(attachment)
+        db.session.commit()
+
+        return customer.id
 
 
 def test_index_page_renders(client):
@@ -220,6 +325,80 @@ def test_admin_can_login_and_view_dashboard(client):
     assert b"Branding Assets" in branding_response.data
 
 
+def test_admin_can_view_security_settings(client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.get("/dashboard?section=security", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"HTTPS &amp; Certificates" in response.data
+    assert b"Request certificate" in response.data
+
+
+def test_admin_can_save_tls_settings(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/dashboard/security/tls",
+        data={
+            "domain": "secure.example.com",
+            "contact_email": "admin@example.com",
+            "auto_renew": "on",
+            "action": "save",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"TLS settings saved." in response.data
+
+    with app.app_context():
+        tls_config = TLSConfig.query.first()
+        assert tls_config is not None
+        assert tls_config.domain == "secure.example.com"
+        assert tls_config.contact_email == "admin@example.com"
+        assert tls_config.auto_renew is True
+        assert tls_config.status == "pending"
+
+
+def test_tls_provision_records_error_when_certbot_missing(app, client, monkeypatch):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    monkeypatch.setattr("app.shutil.which", lambda _: None)
+
+    response = client.post(
+        "/dashboard/security/tls",
+        data={
+            "domain": "secure.example.com",
+            "contact_email": "admin@example.com",
+            "action": "provision",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Certificate request failed" in response.data
+
+    with app.app_context():
+        tls_config = TLSConfig.query.first()
+        assert tls_config is not None
+        assert tls_config.status == "error"
+        assert tls_config.last_error is not None
+        assert "certbot" in tls_config.last_error.lower()
+
+
 def test_admin_can_add_customer_via_dashboard(app, client):
     client.post(
         "/login",
@@ -281,74 +460,7 @@ def test_customer_focus_view_surfaces_account_summary(app, client):
         follow_redirects=True,
     )
 
-    with app.app_context():
-        technician = Technician(
-            name="Field Lead",
-            email="lead@example.com",
-            phone="205-555-0000",
-            password_hash=generate_password_hash("LeadPass123!"),
-            is_active=True,
-        )
-        db.session.add(technician)
-        db.session.commit()
-
-        customer = Client(
-            name="Focus Customer",
-            email="focus@example.com",
-            phone="205-555-0101",
-            address="100 Install Way, Prattville, AL",
-            status="Active",
-            residential_plan="Wireless Internet (WISP)",
-            business_plan="Business Wireless Pro",
-            wifi_router_needed=True,
-            driver_license_number="AL-0000001",
-            notes="Requires attic run for drop.",
-        )
-        db.session.add(customer)
-        db.session.commit()
-
-        invoice = Invoice(
-            client_id=customer.id,
-            description="Monthly Service",
-            amount_cents=6999,
-            status="Pending",
-        )
-        equipment = Equipment(
-            client_id=customer.id,
-            name="Subscriber Antenna",
-            model="LTU-Rocket",
-            serial_number="SN123456",
-        )
-        ticket = SupportTicket(
-            client_id=customer.id,
-            subject="Initial Setup",
-            message="Confirm install documentation.",
-            status="Open",
-        )
-        appointment = Appointment(
-            client_id=customer.id,
-            technician_id=technician.id,
-            title="On-site Activation",
-            scheduled_for=(utcnow() + timedelta(days=2)).replace(microsecond=0),
-            status="Confirmed",
-        )
-
-        install_folder = Path(app.config["INSTALL_PHOTOS_FOLDER"])
-        install_folder.mkdir(parents=True, exist_ok=True)
-        stored_filename = f"client_{customer.id}_detail.jpg"
-        (install_folder / stored_filename).write_bytes(b"photo-bytes")
-
-        photo = InstallPhoto(
-            client_id=customer.id,
-            technician_id=technician.id,
-            category=REQUIRED_INSTALL_PHOTO_CATEGORIES[0],
-            original_filename="detail.jpg",
-            stored_filename=stored_filename,
-        )
-
-        db.session.add_all([invoice, equipment, ticket, appointment, photo])
-        db.session.commit()
-        focus_id = customer.id
+    focus_id = create_detailed_customer_record(app)
 
     response = client.get(
         "/dashboard",
@@ -365,6 +477,247 @@ def test_customer_focus_view_surfaces_account_summary(app, client):
     assert b"On-site Activation" in response.data
     assert escape(REQUIRED_INSTALL_PHOTO_CATEGORIES[0]).encode() in response.data
     assert escape(REQUIRED_INSTALL_PHOTO_CATEGORIES[1]).encode() in response.data
+
+
+def test_customer_directory_links_to_admin_account_view(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    customer_id = create_detailed_customer_record(app)
+
+    response = client.get(
+        "/dashboard",
+        query_string={"section": "customers"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert f"/dashboard/customers/{customer_id}".encode() in response.data
+    assert b"Focus Customer" in response.data
+
+
+def test_admin_customer_account_view_shows_details(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    customer_id = create_detailed_customer_record(app)
+
+    response = client.get(f"/dashboard/customers/{customer_id}", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"Customer Account" in response.data
+    assert b"Focus Customer" in response.data
+    assert b"Monthly Service" in response.data
+    assert b"Subscriber Antenna" in response.data
+    assert b"Initial Setup" in response.data
+    assert b"diagnostic.log" in response.data
+    assert b"On-site Activation" in response.data
+    assert b"Install documentation" in response.data
+
+
+def test_admin_updates_service_plans_from_account_view(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        customer = Client(
+            name="Plan Update",
+            email="planupdate@example.com",
+            status="New",
+        )
+        db.session.add(customer)
+        db.session.flush()
+
+        plans = [
+            ServicePlan(
+                name="Fiber Home 100",
+                category="Residential",
+                price_cents=10999,
+            ),
+            ServicePlan(
+                name="VoIP Essential",
+                category="Phone Service",
+                price_cents=3999,
+            ),
+            ServicePlan(
+                name="Business Wave",
+                category="Business",
+                price_cents=18999,
+            ),
+        ]
+        db.session.add_all(plans)
+        db.session.commit()
+        customer_id = customer.id
+
+    next_url = f"/dashboard/customers/{customer_id}"
+    response = client.post(
+        f"/clients/{customer_id}/service-plans",
+        data={
+            "residential_plan": "Fiber Home 100",
+            "phone_plan": "VoIP Essential",
+            "business_plan": "",
+            "status": "Active",
+            "wifi_router_needed": "yes",
+            "next": next_url,
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(next_url)
+
+    with app.app_context():
+        updated = Client.query.get(customer_id)
+        assert updated.status == "Active"
+        assert updated.residential_plan == "Fiber Home 100"
+        assert updated.phone_plan == "VoIP Essential"
+        assert updated.business_plan is None
+        assert updated.wifi_router_needed is True
+        assert updated.project_type == "Fiber Home 100, VoIP Essential"
+
+
+def test_admin_adds_invoice_from_account_view(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        customer = Client(
+            name="Billing Target",
+            email="billing@example.com",
+            status="Active",
+        )
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    next_url = f"/dashboard/customers/{customer_id}"
+    response = client.post(
+        f"/clients/{customer_id}/invoices",
+        data={
+            "description": "Monthly service",
+            "amount": "79.99",
+            "due_date": "2024-12-01",
+            "status": "Pending",
+            "next": next_url,
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(next_url)
+
+    with app.app_context():
+        invoices = Invoice.query.filter_by(client_id=customer_id).all()
+        assert len(invoices) == 1
+        assert invoices[0].description == "Monthly service"
+        assert invoices[0].amount_cents == 7999
+
+
+def test_admin_adds_equipment_from_account_view(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        customer = Client(
+            name="Equipment Owner",
+            email="equip@example.com",
+            status="Active",
+        )
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    next_url = f"/dashboard/customers/{customer_id}"
+    response = client.post(
+        f"/clients/{customer_id}/equipment",
+        data={
+            "name": "Subscriber Router",
+            "model": "UISP Express",
+            "serial_number": "SR-001",
+            "installed_on": "2024-08-01",
+            "notes": "Mounted in living room closet",
+            "next": next_url,
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(next_url)
+
+    with app.app_context():
+        devices = Equipment.query.filter_by(client_id=customer_id).all()
+        assert len(devices) == 1
+        assert devices[0].name == "Subscriber Router"
+        assert str(devices[0].installed_on) == "2024-08-01"
+
+
+def test_admin_schedules_appointment_from_account_view(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        technician = Technician(
+            name="Account Tech",
+            email="account-tech@example.com",
+            password_hash=generate_password_hash("TechPass123"),
+            is_active=True,
+        )
+        customer = Client(
+            name="Schedule Customer",
+            email="schedule-admin@example.com",
+            status="Active",
+        )
+        db.session.add_all([technician, customer])
+        db.session.commit()
+        technician_id = technician.id
+        customer_id = customer.id
+
+    scheduled_for = (datetime.now(timezone.utc) + timedelta(days=1)).replace(microsecond=0)
+    next_url = f"/dashboard/customers/{customer_id}"
+    app.config["SNMP_EMAIL_SENDER"] = lambda *args, **kwargs: True
+
+    response = client.post(
+        "/appointments",
+        data={
+            "client_id": customer_id,
+            "title": "Service visit",
+            "scheduled_for": scheduled_for.isoformat(timespec="minutes"),
+            "technician_id": technician_id,
+            "notes": "Bring replacement router",
+            "next": next_url,
+        },
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(next_url)
+
+    with app.app_context():
+        appointments = Appointment.query.filter_by(client_id=customer_id).all()
+        assert len(appointments) == 1
+        assert appointments[0].title == "Service visit"
+        assert appointments[0].technician_id == technician_id
+
+
+def test_admin_customer_account_view_requires_login(client):
+    response = client.get("/dashboard/customers/1", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
 
 
 def test_admin_can_manage_service_plans(app, client):
@@ -856,8 +1209,14 @@ def test_client_portal_login_and_ticket_creation(app, client):
 
     ticket_response = client.post(
         "/portal/tickets",
-        data={"subject": "Need help", "message": "Please check signal."},
+        data={
+            "subject": "Need help",
+            "message": "Please check signal.",
+            "priority": "High",
+            "attachments": (BytesIO(b"image-bytes"), "outage.jpg"),
+        },
         follow_redirects=True,
+        content_type="multipart/form-data",
     )
 
     assert ticket_response.status_code == 200
@@ -866,11 +1225,17 @@ def test_client_portal_login_and_ticket_creation(app, client):
     portal_view = client.get("/portal")
     assert portal_view.status_code == 200
     assert b"Need help" in portal_view.data
+    assert b"Priority: High" in portal_view.data
 
     with app.app_context():
         tickets = SupportTicket.query.filter_by(client_id=portal_client_id).all()
         assert len(tickets) == 1
         assert tickets[0].subject == "Need help"
+        assert tickets[0].priority == "High"
+        attachments = SupportTicketAttachment.query.filter_by(ticket_id=tickets[0].id).all()
+        assert len(attachments) == 1
+        stored_path = Path(app.config["SUPPORT_TICKET_ATTACHMENT_FOLDER"]) / attachments[0].stored_filename
+        assert stored_path.exists()
 
 
 def test_portal_highlights_missing_service_plan(app, client):

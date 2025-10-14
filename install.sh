@@ -35,6 +35,7 @@ require_python_module() {
 
 require_command python3 python3
 require_command pip3 python3-pip
+require_command certbot certbot
 
 if command -v python3 >/dev/null 2>&1; then
   if ! python3 -m venv --help >/dev/null 2>&1; then

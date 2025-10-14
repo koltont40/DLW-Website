@@ -12,6 +12,34 @@
       <a class="button secondary" href="{{ url_for('tech_logout') }}">Sign out</a>
     </div>
   </header>
+  {% if client.address %}
+  <section class="tech-section">
+    <header class="tech-section-header">
+      <div>
+        <h2>Navigate to the customer</h2>
+        <p class="subtle">{{ client.address }}</p>
+      </div>
+    </header>
+    <div class="tech-navigation-actions">
+      <a
+        class="button secondary"
+        href="https://maps.apple.com/?daddr={{ client.address | urlencode }}"
+        target="_blank"
+        rel="noopener"
+      >
+        Open in Apple Maps
+      </a>
+      <a
+        class="button secondary"
+        href="https://www.google.com/maps/dir/?api=1&destination={{ client.address | urlencode }}"
+        target="_blank"
+        rel="noopener"
+      >
+        Open in Google Maps
+      </a>
+    </div>
+  </section>
+  {% endif %}
   <section class="tech-section">
     <header class="tech-section-header">
       <div>
