@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Technician Login | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<div class="tech-auth">
+  <header class="tech-auth-header">
+    <h1>Technician Portal</h1>
+    <p class="subtle">Sign in to capture installs, upload documentation, and review your assignments.</p>
+  </header>
+  <form class="stacked-form tech-auth-form" method="post">
+    <label>
+      Email
+      <input type="email" name="email" placeholder="tech@example.com" required />
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" placeholder="••••••••" required />
+    </label>
+    <button class="button primary" type="submit">Log in</button>
+    <p class="form-help subtle">Need access? Ask the admin team to create or reset your technician account.</p>
+  </form>
+</div>
+{% endblock %}

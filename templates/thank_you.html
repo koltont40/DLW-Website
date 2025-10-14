@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Thank You | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="form-section narrow">
+  <h1>Thanks for checking in!</h1>
+  <p class="lead">If you just signed up, head over to the customer portal to review your install details and support options.</p>
+  <div class="card">
+    <p>
+      Need to update your request? Reply directly to the confirmation email or contact us at
+      <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.
+    </p>
+    <div class="actions">
+      <a class="button primary" href="{{ url_for('portal_dashboard') }}">Open customer portal</a>
+      <a class="button secondary" href="{{ url_for('index') }}">Return home</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

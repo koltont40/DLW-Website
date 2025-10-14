@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+{% block title %}Sign Up | DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="form-section">
+  <h1>Sign up for DIXIELAND WIRELESS LLC service</h1>
+  <p class="lead">
+    Tell us about your location and create a secure portal password so we can activate blazing-fast WISP internet and
+    crystal-clear phone service for your home or business.
+  </p>
+  <form
+    class="card form-card stacked-form two-column"
+    method="post"
+    action="{{ url_for('signup') }}"
+    enctype="multipart/form-data"
+  >
+    <label>
+      Full name
+      <input type="text" name="name" placeholder="Alex Johnson" required autocomplete="name" />
+    </label>
+    <label>
+      Email address
+      <input type="email" name="email" placeholder="alex@example.com" required autocomplete="email" />
+    </label>
+    <label>
+      Company (optional)
+      <input type="text" name="company" placeholder="DIXIELAND WIRELESS LLC" />
+    </label>
+    <label>
+      Phone number
+      <input type="tel" name="phone" placeholder="(555) 123-4567" required autocomplete="tel" />
+    </label>
+    <label class="full-width">
+      Service address
+      <input
+        type="text"
+        name="address"
+        placeholder="123 Main Street, Town, ST 36026"
+        required
+        autocomplete="street-address"
+      />
+    </label>
+    {% if residential_field or business_field or phone_field %}
+    <div class="full-width plan-choice-card">
+      <h2>Service preferences</h2>
+      <p class="subtle helper-text">
+        Tell us which connections you need. We'll only show plan choices for the services you select.
+      </p>
+      <div class="plan-toggle-grid">
+        {% if residential_field %}
+        <div class="plan-toggle">
+          <label class="checkbox-toggle">
+            <input
+              type="checkbox"
+              name="wants_residential"
+              value="yes"
+              data-plan-toggle="residential"
+              {% if residential_field.selected %}checked{% endif %}
+            />
+            <span>Residential internet</span>
+          </label>
+          <div
+            class="conditional-plan"
+            data-plan-target="residential"
+            {% if not residential_field.selected %}hidden{% endif %}
+          >
+            <label>
+              <span class="field-label">{{ residential_field.label }}</span>
+              <select
+                name="residential_plan"
+                {% if not residential_field.selected %}disabled{% endif %}
+              >
+                <option value="">Select a residential plan</option>
+                {% for plan in residential_field.plans %}
+                <option value="{{ plan.name }}" {% if residential_field.selected == plan.name %}selected{% endif %}>
+                  {{ plan.name }}{% if plan.price_cents %} ({{ plan.price_cents|currency }}/mo){% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if business_field %}
+        <div class="plan-toggle">
+          <label class="checkbox-toggle">
+            <input
+              type="checkbox"
+              name="wants_business"
+              value="yes"
+              data-plan-toggle="business"
+              {% if business_field.selected %}checked{% endif %}
+            />
+            <span>Business internet</span>
+          </label>
+          <div
+            class="conditional-plan"
+            data-plan-target="business"
+            {% if not business_field.selected %}hidden{% endif %}
+          >
+            <label>
+              <span class="field-label">{{ business_field.label }}</span>
+              <select name="business_plan" {% if not business_field.selected %}disabled{% endif %}>
+                <option value="">Select a business plan</option>
+                {% for plan in business_field.plans %}
+                <option value="{{ plan.name }}" {% if business_field.selected == plan.name %}selected{% endif %}>
+                  {{ plan.name }}{% if plan.price_cents %} ({{ plan.price_cents|currency }}/mo){% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if phone_field %}
+        <div class="plan-toggle">
+          <fieldset class="radio-toggle">
+            <legend>Phone service</legend>
+            <div class="toggle-options">
+              <label class="toggle-option">
+                <input
+                  type="radio"
+                  name="wants_phone"
+                  value="yes"
+                  data-plan-toggle="phone"
+                  {% if phone_field.selected %}checked{% endif %}
+                />
+                <span>Yes</span>
+              </label>
+              <label class="toggle-option">
+                <input
+                  type="radio"
+                  name="wants_phone"
+                  value="no"
+                  data-plan-toggle="phone"
+                  {% if not phone_field.selected %}checked{% endif %}
+                />
+                <span>No</span>
+              </label>
+            </div>
+          </fieldset>
+          <div
+            class="conditional-plan"
+            data-plan-target="phone"
+            {% if not phone_field.selected %}hidden{% endif %}
+          >
+            <label>
+              <span class="field-label">{{ phone_field.label }}</span>
+              <select name="phone_plan" {% if not phone_field.selected %}disabled{% endif %}>
+                <option value="">Select a phone service plan</option>
+                {% for plan in phone_field.plans %}
+                <option value="{{ plan.name }}" {% if phone_field.selected == plan.name %}selected{% endif %}>
+                  {{ plan.name }}{% if plan.price_cents %} ({{ plan.price_cents|currency }}/mo){% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="wifi-toggle">
+        <span class="field-label">Do you need a Wi-Fi router provided by us?</span>
+        <div class="toggle-options">
+          <label class="toggle-option">
+            <input type="radio" name="wifi_router_needed" value="yes" />
+            <span>Yes</span>
+          </label>
+          <label class="toggle-option">
+            <input type="radio" name="wifi_router_needed" value="no" checked />
+            <span>No</span>
+          </label>
+        </div>
+        <p class="subtle helper-text">We can bring a managed router to the install if you'd prefer not to supply one.</p>
+      </div>
+    </div>
+    {% endif %}
+    <label>
+      Driver's license number
+      <input type="text" name="driver_license_number" placeholder="AL-1234567" required />
+    </label>
+    <label>
+      Portal password
+      <input
+        type="password"
+        name="password"
+        minlength="8"
+        placeholder="Create a secure password"
+        required
+        autocomplete="new-password"
+      />
+    </label>
+    <label>
+      Confirm password
+      <input
+        type="password"
+        name="confirm_password"
+        minlength="8"
+        placeholder="Re-enter password"
+        required
+        autocomplete="new-password"
+      />
+    </label>
+    <label class="file-input full-width">
+      <span>Upload ID photo or PDF</span>
+      <input type="file" name="verification_photo" accept=".jpg,.jpeg,.png,.heic,.heif,.pdf" required />
+    </label>
+    <p class="subtle full-width helper-text">
+      We use your contact details and identification to activate service securely and keep technicians informed before
+      install day.
+    </p>
+    <label class="full-width">
+      Installation notes
+      <textarea
+        name="notes"
+        rows="5"
+        placeholder="Tell us about your location, desired install date, or special phone requirements."
+      ></textarea>
+    </label>
+    <button class="button primary" type="submit">Complete signup</button>
+  </form>
+</section>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const updateVisibility = (targetKey) => {
+      const container = document.querySelector(`[data-plan-target="${targetKey}"]`);
+      if (!container) return;
+      const select = container.querySelector("select");
+      const toggles = document.querySelectorAll(`[data-plan-toggle="${targetKey}"]`);
+      let active = false;
+      toggles.forEach((toggle) => {
+        if (toggle.type === "checkbox" && toggle.checked) {
+          active = true;
+        }
+        if (toggle.type === "radio" && toggle.checked && toggle.value === "yes") {
+          active = true;
+        }
+      });
+      if (active) {
+        container.removeAttribute("hidden");
+        if (select) {
+          select.disabled = false;
+        }
+      } else {
+        container.setAttribute("hidden", "hidden");
+        if (select) {
+          select.value = "";
+          select.disabled = true;
+        }
+      }
+    };
+
+    document.querySelectorAll("[data-plan-toggle]").forEach((toggle) => {
+      const targetKey = toggle.getAttribute("data-plan-toggle");
+      toggle.addEventListener("change", () => updateVisibility(targetKey));
+      updateVisibility(targetKey);
+    });
+  });
+</script>
+{% endblock %}

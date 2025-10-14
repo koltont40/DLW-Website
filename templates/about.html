@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}About DIXIELAND WIRELESS LLC{% endblock %}
+{% block content %}
+<section class="hero card about-hero">
+  <h1>About DIXIELAND WIRELESS LLC</h1>
+  <p class="subtle">
+    DixieLand Wireless keeps rural communities, small towns, and growing neighborhoods connected with fast WISP
+    internet and dependable phone service backed by local experts.
+  </p>
+</section>
+<section class="card about-grid">
+  <article>
+    <h2>Our Mission</h2>
+    <p>
+      We believe everyone deserves world-class connectivity. Our team designs, deploys, and maintains wireless
+      networks that deliver fiber-like experiences without the wait.
+    </p>
+  </article>
+  <article>
+    <h2>What We Do</h2>
+    <ul>
+      <li>High-speed fixed wireless coverage across the DixieLand service area</li>
+      <li>Managed phone solutions with full E911 support</li>
+      <li>Professional installation, maintenance, and network monitoring</li>
+      <li>Customer portal for billing, appointments, equipment, and support</li>
+    </ul>
+  </article>
+  <article>
+    <h2>Contact</h2>
+    <p>
+      Call or email our operations team for coverage checks, scheduling, or partnership opportunities.
+    </p>
+    <p>
+      <a class="button secondary" href="mailto:{{ contact_email }}">Email {{ contact_email }}</a>
+    </p>
+  </article>
+</section>
+<section class="card about-team">
+  <h2>Meet the team</h2>
+  <p class="subtle">
+    Field technicians, network engineers, and support coordinators work together to keep your service dependable.
+    From tower climbs to ticket resolution, every touch point is handled by people who live in the communities we
+    serve.
+  </p>
+</section>
+{% endblock %}
