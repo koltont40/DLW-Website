@@ -7,18 +7,37 @@
     Tell us about your location and create a secure portal password so we can activate blazing-fast WISP internet and
     crystal-clear phone service for your home or business.
   </p>
-  <form class="card two-column" method="post" action="{{ url_for('signup') }}">
+  <form
+    class="card form-card stacked-form two-column"
+    method="post"
+    action="{{ url_for('signup') }}"
+    enctype="multipart/form-data"
+  >
     <label>
       Full name
-      <input type="text" name="name" placeholder="Alex Johnson" required />
+      <input type="text" name="name" placeholder="Alex Johnson" required autocomplete="name" />
     </label>
     <label>
       Email address
-      <input type="email" name="email" placeholder="alex@example.com" required />
+      <input type="email" name="email" placeholder="alex@example.com" required autocomplete="email" />
     </label>
     <label>
       Company (optional)
       <input type="text" name="company" placeholder="DIXIELAND WIRELESS LLC" />
+    </label>
+    <label>
+      Phone number
+      <input type="tel" name="phone" placeholder="(555) 123-4567" required autocomplete="tel" />
+    </label>
+    <label class="full-width">
+      Service address
+      <input
+        type="text"
+        name="address"
+        placeholder="123 Main Street, Town, ST 36026"
+        required
+        autocomplete="street-address"
+      />
     </label>
     <label>
       Services
@@ -32,13 +51,39 @@
       </select>
     </label>
     <label>
+      Driver's license number
+      <input type="text" name="driver_license_number" placeholder="AL-1234567" required />
+    </label>
+    <label>
       Portal password
-      <input type="password" name="password" minlength="8" placeholder="Create a secure password" required />
+      <input
+        type="password"
+        name="password"
+        minlength="8"
+        placeholder="Create a secure password"
+        required
+        autocomplete="new-password"
+      />
     </label>
     <label>
       Confirm password
-      <input type="password" name="confirm_password" minlength="8" placeholder="Re-enter password" required />
+      <input
+        type="password"
+        name="confirm_password"
+        minlength="8"
+        placeholder="Re-enter password"
+        required
+        autocomplete="new-password"
+      />
     </label>
+    <label class="file-input full-width">
+      <span>Upload ID photo or PDF</span>
+      <input type="file" name="verification_photo" accept=".jpg,.jpeg,.png,.heic,.heif,.pdf" required />
+    </label>
+    <p class="subtle full-width helper-text">
+      We use your contact details and identification to activate service securely and keep technicians informed before
+      install day.
+    </p>
     <label class="full-width">
       Installation notes
       <textarea

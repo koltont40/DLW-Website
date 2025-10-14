@@ -80,12 +80,51 @@ def allowed_install_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_INSTALL_EXTENSIONS
 
 
+def allowed_verification_file(filename: str) -> bool:
+    if not filename:
+        return False
+    return Path(filename).suffix.lower() in ALLOWED_VERIFICATION_EXTENSIONS
+
+
+def delete_client_verification_photo(app: Flask, client: "Client") -> None:
+    if not client.verification_photo_filename:
+        return
+
+    base_folder = Path(app.config["CLIENT_VERIFICATION_FOLDER"])
+    file_path = base_folder / client.verification_photo_filename
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError:
+        pass
+
+
+def store_client_verification_photo(app: Flask, client: "Client", file) -> None:
+    delete_client_verification_photo(app, client)
+
+    verification_folder = (
+        Path(app.config["CLIENT_VERIFICATION_FOLDER"]) / f"client_{client.id}"
+    )
+    verification_folder.mkdir(parents=True, exist_ok=True)
+
+    timestamp = utcnow().strftime("%Y%m%d%H%M%S")
+    safe_name = secure_filename(file.filename)
+    stored_filename = f"{timestamp}_{safe_name}" if safe_name else f"{timestamp}.bin"
+    relative_path = Path(f"client_{client.id}") / stored_filename
+    file.save(verification_folder / stored_filename)
+
+    client.verification_photo_filename = str(relative_path)
+    client.verification_photo_uploaded_at = utcnow()
+
+
 class Client(db.Model):
     __tablename__ = "clients"
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(255), nullable=False)
+    phone = db.Column(db.String(40))
+    address = db.Column(db.String(255))
     company = db.Column(db.String(255))
     project_type = db.Column(db.String(120))
     notes = db.Column(db.Text)
@@ -98,6 +137,9 @@ class Client(db.Model):
     account_reference = db.Column(
         db.String(24), nullable=False, unique=True, default=generate_account_reference
     )
+    driver_license_number = db.Column(db.String(120))
+    verification_photo_filename = db.Column(db.String(255))
+    verification_photo_uploaded_at = db.Column(db.DateTime(timezone=True))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
     invoices = db.relationship(
         "Invoice", back_populates="client", cascade="all, delete-orphan"
@@ -250,6 +292,7 @@ INSTALL_PHOTO_CATEGORY_CHOICES = REQUIRED_INSTALL_PHOTO_CATEGORIES + [
     "Additional Detail"
 ]
 ALLOWED_INSTALL_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif"}
+ALLOWED_VERIFICATION_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".pdf"}
 
 
 def get_default_navigation_items() -> list[tuple[str, str, bool]]:
@@ -546,6 +589,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         "LEGAL_UPLOAD_FOLDER": str(instance_path / "legal"),
         "BRANDING_UPLOAD_FOLDER": str(instance_path / "branding"),
         "INSTALL_PHOTOS_FOLDER": str(instance_path / "install_photos"),
+        "CLIENT_VERIFICATION_FOLDER": str(instance_path / "verification"),
         "CONTACT_EMAIL": os.environ.get("CONTACT_EMAIL", "hello@example.com"),
         "SNMP_TRAP_HOST": os.environ.get("SNMP_TRAP_HOST"),
         "SNMP_TRAP_PORT": snmp_port,
@@ -571,6 +615,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "LEGAL_UPLOAD_FOLDER",
             "BRANDING_UPLOAD_FOLDER",
             "INSTALL_PHOTOS_FOLDER",
+            "CLIENT_VERIFICATION_FOLDER",
         ]:
             folder_path = Path(app.config[folder_key])
             folder_path.mkdir(parents=True, exist_ok=True)
@@ -798,6 +843,26 @@ def ensure_client_portal_fields() -> None:
         if "account_reference" not in columns:
             connection.execute(
                 text("ALTER TABLE clients ADD COLUMN account_reference VARCHAR(24)")
+            )
+        if "phone" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN phone VARCHAR(40)")
+            )
+        if "address" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN address VARCHAR(255)")
+            )
+        if "driver_license_number" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN driver_license_number VARCHAR(120)")
+            )
+        if "verification_photo_filename" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN verification_photo_filename VARCHAR(255)")
+            )
+        if "verification_photo_uploaded_at" not in columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN verification_photo_uploaded_at TIMESTAMP")
             )
 
     clients_to_update = Client.query.all()
@@ -1184,13 +1249,29 @@ def register_routes(app: Flask) -> None:
             name = request.form.get("name", "").strip()
             email = request.form.get("email", "").strip().lower()
             company = request.form.get("company", "").strip()
+            phone = request.form.get("phone", "").strip()
+            address = request.form.get("address", "").strip()
             service_plan = request.form.get("service_plan", "").strip()
             notes = request.form.get("notes", "").strip()
+            driver_license_number = request.form.get("driver_license_number", "").strip()
             password = request.form.get("password", "").strip()
             confirm_password = request.form.get("confirm_password", "").strip()
+            verification_file = request.files.get("verification_photo")
 
             if not name or not email:
                 flash("Name and email are required.", "danger")
+                return redirect(url_for("signup"))
+
+            if not phone:
+                flash("A contact phone number is required.", "danger")
+                return redirect(url_for("signup"))
+
+            if not address:
+                flash("Please provide the service address for your installation.", "danger")
+                return redirect(url_for("signup"))
+
+            if not driver_license_number:
+                flash("Share your driver's license number so we can verify your account.", "danger")
                 return redirect(url_for("signup"))
 
             if not password:
@@ -1205,6 +1286,17 @@ def register_routes(app: Flask) -> None:
                 flash("Passwords do not match. Please try again.", "danger")
                 return redirect(url_for("signup"))
 
+            if not verification_file or not verification_file.filename:
+                flash(
+                    "Upload a photo or scan of your identification so we can verify service eligibility.",
+                    "danger",
+                )
+                return redirect(url_for("signup"))
+
+            if not allowed_verification_file(verification_file.filename):
+                flash("Upload a JPG, PNG, HEIC, or PDF file for verification.", "danger")
+                return redirect(url_for("signup"))
+
             existing = Client.query.filter_by(email=email).first()
             if existing:
                 flash("This email address has already been registered.", "warning")
@@ -1213,14 +1305,21 @@ def register_routes(app: Flask) -> None:
             client = Client(
                 name=name,
                 email=email,
+                phone=phone or None,
+                address=address or None,
                 company=company or None,
                 project_type=service_plan or None,
                 notes=notes or None,
+                driver_license_number=driver_license_number or None,
             )
             client.portal_password_hash = generate_password_hash(password)
             client.portal_password_updated_at = utcnow()
             db.session.add(client)
             db.session.commit()
+
+            if verification_file and verification_file.filename:
+                store_client_verification_photo(app, client, verification_file)
+                db.session.commit()
 
             session[PORTAL_SESSION_KEY] = client.id
             session["portal_authenticated_at"] = utcnow().isoformat()
@@ -1647,6 +1746,31 @@ def register_routes(app: Flask) -> None:
 
         base_folder = Path(app.config["INSTALL_PHOTOS_FOLDER"])
         file_path = base_folder / photo.stored_filename
+        if not file_path.exists():
+            abort(404)
+
+        directory = str(file_path.parent)
+        mimetype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        return send_from_directory(directory, file_path.name, mimetype=mimetype)
+
+    @app.get("/clients/<int:client_id>/verification-photo")
+    def client_verification_photo(client_id: int):
+        client_record = Client.query.get_or_404(client_id)
+
+        authorized = False
+        if session.get("admin_authenticated"):
+            authorized = True
+        portal_client_id = session.get(PORTAL_SESSION_KEY)
+        if portal_client_id and portal_client_id == client_record.id:
+            authorized = True
+        if not authorized:
+            abort(403)
+
+        if not client_record.verification_photo_filename:
+            abort(404)
+
+        base_folder = Path(app.config["CLIENT_VERIFICATION_FOLDER"])
+        file_path = base_folder / client_record.verification_photo_filename
         if not file_path.exists():
             abort(404)
 
@@ -2163,11 +2287,15 @@ def register_routes(app: Flask) -> None:
         name = request.form.get("name", "").strip()
         email = request.form.get("email", "").strip().lower()
         company = request.form.get("company", "").strip()
+        phone = request.form.get("phone", "").strip()
+        address = request.form.get("address", "").strip()
         service_plan = request.form.get("service_plan", "").strip()
         status_value = request.form.get("status", "New").strip() or "New"
         notes = request.form.get("notes", "").strip()
+        driver_license_number = request.form.get("driver_license_number", "").strip()
         password = request.form.get("password", "").strip()
         confirm_password = request.form.get("confirm_password", "").strip()
+        verification_file = request.files.get("verification_photo")
 
         if not name or not email:
             flash("Customer name and email are required.", "danger")
@@ -2189,13 +2317,22 @@ def register_routes(app: Flask) -> None:
             flash("Passwords do not match. Please try again.", "danger")
             return _redirect_back_to_dashboard("customers")
 
+        if verification_file and verification_file.filename and not allowed_verification_file(
+            verification_file.filename
+        ):
+            flash("Upload a JPG, PNG, HEIC, or PDF file for verification.", "danger")
+            return _redirect_back_to_dashboard("customers")
+
         client = Client(
             name=name,
             email=email,
+            phone=phone or None,
+            address=address or None,
             company=company or None,
             project_type=service_plan or None,
             notes=notes or None,
             status=status_value,
+            driver_license_number=driver_license_number or None,
         )
 
         if password:
@@ -2205,7 +2342,40 @@ def register_routes(app: Flask) -> None:
         db.session.add(client)
         db.session.commit()
 
+        if verification_file and verification_file.filename:
+            store_client_verification_photo(app, client, verification_file)
+            db.session.commit()
+
         flash(f"Customer {client.name} added.", "success")
+        return _redirect_back_to_dashboard("customers")
+
+    @app.post("/clients/<int:client_id>/verification")
+    @login_required
+    def upload_client_verification(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        action = request.form.get("action", "upload").strip().lower()
+
+        if action == "remove":
+            delete_client_verification_photo(app, client)
+            client.verification_photo_filename = None
+            client.verification_photo_uploaded_at = None
+            db.session.commit()
+            flash("Verification photo removed.", "info")
+            return _redirect_back_to_dashboard("customers")
+
+        file = request.files.get("verification_photo")
+        if not file or not file.filename:
+            flash("Choose a verification file to upload.", "danger")
+            return _redirect_back_to_dashboard("customers")
+
+        if not allowed_verification_file(file.filename):
+            flash("Upload a JPG, PNG, HEIC, or PDF file for verification.", "danger")
+            return _redirect_back_to_dashboard("customers")
+
+        store_client_verification_photo(app, client, file)
+        db.session.commit()
+
+        flash("Verification photo updated.", "success")
         return _redirect_back_to_dashboard("customers")
 
     @app.post("/clients/<int:client_id>/invoices")
@@ -3132,12 +3302,18 @@ def register_routes(app: Flask) -> None:
         client = Client.query.get_or_404(client_id)
         status = request.form.get("status")
         notes = request.form.get("notes", "").strip()
+        phone = request.form.get("phone", "").strip()
+        address = request.form.get("address", "").strip()
+        driver_license_number = request.form.get("driver_license_number", "").strip()
 
         if status not in STATUS_OPTIONS:
             abort(400, description="Invalid status value")
 
         client.status = status
         client.notes = notes or None
+        client.phone = phone or None
+        client.address = address or None
+        client.driver_license_number = driver_license_number or None
         db.session.commit()
         flash("Client updated successfully.", "success")
         return redirect(

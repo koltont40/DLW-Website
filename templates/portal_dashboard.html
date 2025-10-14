@@ -45,6 +45,45 @@
           <span class="metric-value">{{ open_ticket_count }}</span>
         </div>
       </div>
+      <div class="portal-profile-grid">
+        <section class="portal-profile-card">
+          <h3>Contact information</h3>
+          <dl>
+            <div>
+              <dt>Email</dt>
+              <dd>{{ client.email }}</dd>
+            </div>
+            <div>
+              <dt>Phone</dt>
+              <dd>{{ client.phone or 'Add a number through support' }}</dd>
+            </div>
+            <div>
+              <dt>Service address</dt>
+              <dd>{{ client.address or 'Pending install details' }}</dd>
+            </div>
+            <div>
+              <dt>Driver's license</dt>
+              <dd>{{ client.driver_license_number or 'On file with the office' }}</dd>
+            </div>
+          </dl>
+        </section>
+        <section class="portal-profile-card">
+          <h3>Identity verification</h3>
+          {% if client.verification_photo_filename %}
+          <p class="subtle">Submitted {{ client.verification_photo_uploaded_at.strftime('%b %d, %Y') if client.verification_photo_uploaded_at else 'recently' }}.</p>
+          <div class="verification-preview-wrapper">
+            <img
+              src="{{ url_for('client_verification_photo', client_id=client.id) }}"
+              alt="Identification on file"
+              class="verification-preview"
+            />
+          </div>
+          {% else %}
+          <p class="subtle">No identification photo uploaded yet. Contact support if you need to update your records.</p>
+          {% endif %}
+          <p class="subtle">Need to make a change? Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a> so we can refresh your documents.</p>
+        </section>
+      </div>
     </section>
 
     <section class="card portal-section" id="billing">

@@ -202,7 +202,12 @@
           <p class="subtle">Enroll a subscriber manually and optionally issue portal credentials.</p>
         </div>
       </header>
-      <form class="stacked-form two-column" method="post" action="{{ url_for('create_client_admin', section='customers', status=request.args.get('status')) }}">
+      <form
+        class="stacked-form two-column"
+        method="post"
+        action="{{ url_for('create_client_admin', section='customers', status=request.args.get('status')) }}"
+        enctype="multipart/form-data"
+      >
         <label>
           Full name
           <input type="text" name="name" placeholder="Daisy Duke" required />
@@ -216,6 +221,14 @@
           <input type="text" name="company" placeholder="DIXIELAND WIRELESS LLC" />
         </label>
         <label>
+          Phone number
+          <input type="tel" name="phone" placeholder="(334) 555-0100" required />
+        </label>
+        <label class="full-width">
+          Service address
+          <input type="text" name="address" placeholder="123 Main Street, Tallassee, AL" required />
+        </label>
+        <label>
           Service selection
           <select name="service_plan">
             <option value="">Select a service</option>
@@ -223,6 +236,10 @@
             <option value="{{ offering }}">{{ offering }}</option>
             {% endfor %}
           </select>
+        </label>
+        <label>
+          Driver's license number
+          <input type="text" name="driver_license_number" placeholder="AL-9876543" required />
         </label>
         <label>
           Status
@@ -240,6 +257,13 @@
           Confirm password
           <input type="password" name="confirm_password" minlength="8" placeholder="Repeat password" />
         </label>
+        <label class="file-input full-width">
+          <span>Upload verification photo or PDF</span>
+          <input type="file" name="verification_photo" accept=".jpg,.jpeg,.png,.heic,.heif,.pdf" />
+        </label>
+        <p class="subtle full-width helper-text">
+          Adding contact details and an ID image keeps compliance, billing, and field teams aligned for every new subscriber.
+        </p>
         <label class="full-width">
           Notes
           <textarea name="notes" rows="3" placeholder="Construction schedule, network specifics, or onboarding needs."></textarea>
@@ -278,6 +302,7 @@
               <th>Email</th>
               <th>Account #</th>
               <th>Service</th>
+              <th>Contact &amp; Identity</th>
               <th>Status</th>
               <th>Notes</th>
               <th>Actions</th>
@@ -293,6 +318,77 @@
               <td>{{ client.email }}</td>
               <td><code>{{ client.account_reference }}</code></td>
               <td>{{ client.project_type or '—' }}</td>
+              <td class="contact-cell">
+                <div class="customer-contact-grid">
+                  <label>
+                    <span>Phone</span>
+                    <input
+                      type="tel"
+                      name="phone"
+                      value="{{ client.phone or '' }}"
+                      placeholder="(555) 555-0100"
+                      form="client-status-{{ client.id }}"
+                    />
+                  </label>
+                  <label class="full">
+                    <span>Service address</span>
+                    <textarea name="address" rows="2" placeholder="Enter service address" form="client-status-{{ client.id }}">{{ client.address or '' }}</textarea>
+                  </label>
+                  <label>
+                    <span>Driver's license</span>
+                    <input
+                      type="text"
+                      name="driver_license_number"
+                      value="{{ client.driver_license_number or '' }}"
+                      placeholder="AL-1234567"
+                      form="client-status-{{ client.id }}"
+                    />
+                  </label>
+                </div>
+                <div class="verification-panel">
+                  {% if client.verification_photo_filename %}
+                  <div class="verification-meta">
+                    <a
+                      class="button small ghost"
+                      href="{{ url_for('client_verification_photo', client_id=client.id) }}"
+                      target="_blank"
+                      rel="noopener"
+                    >
+                      View photo
+                    </a>
+                    <span class="subtle">
+                      Updated
+                      {{ client.verification_photo_uploaded_at.strftime('%b %d, %Y') if client.verification_photo_uploaded_at else 'recently' }}
+                    </span>
+                  </div>
+                  {% else %}
+                  <p class="subtle">No verification photo on file.</p>
+                  {% endif %}
+                  <form
+                    class="inline-form verification-upload"
+                    method="post"
+                    action="{{ url_for('upload_client_verification', client_id=client.id, section='customers', status=request.args.get('status')) }}"
+                    enctype="multipart/form-data"
+                  >
+                    <label class="file-input small">
+                      <span>Choose file</span>
+                      <input type="file" name="verification_photo" accept=".jpg,.jpeg,.png,.heic,.heif,.pdf" required />
+                    </label>
+                    <button class="button small" type="submit">Upload</button>
+                  </form>
+                  {% if client.verification_photo_filename %}
+                  <form
+                    class="inline-form verification-remove"
+                    method="post"
+                    action="{{ url_for('upload_client_verification', client_id=client.id, section='customers', status=request.args.get('status')) }}"
+                    onsubmit="return confirm('Remove the stored verification photo?');"
+                  >
+                    <input type="hidden" name="action" value="remove" />
+                    <button class="button small danger" type="submit">Remove</button>
+                  </form>
+                  {% endif %}
+                </div>
+              </td>
               <td>
                 <form id="client-status-{{ client.id }}" method="post" action="{{ url_for('update_client', client_id=client.id, section='customers', status=request.args.get('status')) }}">
                   <select name="status">
