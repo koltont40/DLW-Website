@@ -27,7 +27,7 @@ This project provides a self-hosted client onboarding, billing, and support port
 ## Quick Start (Ubuntu 24.04)
 
 ```bash
-sudo apt update && sudo apt install -y python3 python3-venv python3-pip
+sudo apt update && sudo apt install -y python3 python3-venv python3-pip certbot
 ./install.sh
 ```
 

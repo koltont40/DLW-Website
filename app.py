@@ -5,6 +5,7 @@ import secrets
 import shutil
 import string
 import subprocess
+import threading
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -27,6 +28,7 @@ from flask import (
 )
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.serving import BaseWSGIServer, make_server
 from werkzeug.utils import secure_filename
 
 from sqlalchemy import inspect, or_, text
@@ -4166,7 +4168,6 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    default_port = 80
     ssl_context: tuple[str, str] | None = None
 
     with app.app_context():
@@ -4176,11 +4177,45 @@ if __name__ == "__main__":
                 str(Path(tls_config.certificate_path)),
                 str(Path(tls_config.private_key_path)),
             )
-            default_port = 443
 
-    port_value = int(os.environ.get("PORT", default_port))
-    run_kwargs = {"host": "0.0.0.0", "port": port_value}
+    http_port = int(os.environ.get("PORT", 80))
+    https_port = int(os.environ.get("HTTPS_PORT", 443))
+    servers: list[BaseWSGIServer] = []
+    threads: list[threading.Thread] = []
+
+    def start_server(port: int, label: str, ssl: tuple[str, str] | None = None) -> None:
+        try:
+            server = make_server(
+                host="0.0.0.0",
+                port=port,
+                app=app,
+                ssl_context=ssl,
+            )
+        except OSError as exc:  # pragma: no cover - exercised in deployment
+            app.logger.error("Unable to start %s server on port %s: %s", label, port, exc)
+            raise SystemExit(1) from exc
+
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        servers.append(server)
+        threads.append(thread)
+        app.logger.info("%s server listening on port %s", label, port)
+
+    start_server(http_port, "HTTP")
+
     if ssl_context:
-        run_kwargs["ssl_context"] = ssl_context
+        if https_port == http_port:
+            https_port = 443
+        start_server(https_port, "HTTPS", ssl=ssl_context)
 
-    app.run(**run_kwargs)
+    wait_event = threading.Event()
+    try:
+        while any(thread.is_alive() for thread in threads):
+            wait_event.wait(0.5)
+    except KeyboardInterrupt:  # pragma: no cover - exercised in deployment
+        app.logger.info("Shutting down web servers...")
+    finally:
+        for server in servers:
+            server.shutdown()
+        for thread in threads:
+            thread.join()
