@@ -1075,6 +1075,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             folder_path = Path(app.config[folder_key])
             folder_path.mkdir(parents=True, exist_ok=True)
         db.create_all()
+        ensure_billing_schema_once()
         ensure_default_admin_user()
         ensure_client_portal_fields()
         ensure_default_navigation()
@@ -1082,7 +1083,6 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
-        ensure_billing_schema_once()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
@@ -1097,6 +1097,7 @@ def init_db() -> None:
     app = create_app()
     with app.app_context():
         db.create_all()
+        ensure_billing_schema_once()
         ensure_default_admin_user()
         ensure_client_portal_fields()
         ensure_default_navigation()
@@ -1104,7 +1105,6 @@ def init_db() -> None:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
-        ensure_billing_schema_once()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
@@ -1469,6 +1469,8 @@ def ensure_client_portal_fields() -> None:
             connection.execute(
                 text("ALTER TABLE clients ADD COLUMN verification_photo_uploaded_at TIMESTAMP")
             )
+
+    ensure_billing_schema_once()
 
     clients_to_update = Client.query.all()
 
