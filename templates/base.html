@@ -109,7 +109,14 @@
             </div>
           {% endif %}
         {% endwith %}
-        {% block content %}{% endblock %}
+        {% set page_surface_class = page_surface_class | default('page-surface') %}
+        {% if page_surface_class %}
+        <div class="{{ page_surface_class }}">
+        {% endif %}
+          {% block content %}{% endblock %}
+        {% if page_surface_class %}
+        </div>
+        {% endif %}
       </div>
     </main>
 

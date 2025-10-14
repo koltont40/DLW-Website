@@ -84,6 +84,24 @@ def generate_unique_slug(title: str, existing_id: int | None = None) -> str:
         suffix += 1
 
 
+def normalize_phone_number(raw: str | None) -> tuple[str | None, str | None]:
+    digits = "".join(ch for ch in (raw or "") if ch.isdigit())
+    if not digits:
+        return None, None
+
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+
+    display = raw.strip() if raw else digits
+    if len(digits) == 10:
+        display = f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    elif len(digits) == 7:
+        display = f"{digits[:3]}-{digits[3:]}"
+
+    href = f"tel:+1{digits}" if len(digits) >= 10 else f"tel:{digits}"
+    return display, href
+
+
 def normalize_hex_color(value: str) -> str:
     cleaned = (value or "").strip().lstrip("#")
     if len(cleaned) == 3:
@@ -1038,7 +1056,10 @@ def create_app(test_config: dict | None = None) -> Flask:
         "TLS_CONFIG_FOLDER": str(instance_path / "letsencrypt"),
         "TLS_WORK_FOLDER": str(instance_path / "letsencrypt-work"),
         "TLS_LOG_FOLDER": str(instance_path / "letsencrypt-logs"),
-        "CONTACT_EMAIL": os.environ.get("CONTACT_EMAIL", "hello@example.com"),
+        "CONTACT_EMAIL": os.environ.get(
+            "CONTACT_EMAIL", "info@dixielandwireless.com"
+        ),
+        "CONTACT_PHONE": os.environ.get("CONTACT_PHONE", "2053343969"),
         "SNMP_TRAP_HOST": os.environ.get("SNMP_TRAP_HOST"),
         "SNMP_TRAP_PORT": snmp_port,
         "SNMP_COMMUNITY": os.environ.get("SNMP_COMMUNITY", "public"),
@@ -1885,11 +1906,24 @@ def register_routes(app: Flask) -> None:
         ]
         branding_assets = {asset.asset_type: asset for asset in BrandingAsset.query.all()}
         down_detector_config = DownDetectorConfig.query.first()
-        contact_email = app.config.get("CONTACT_EMAIL", "hello@example.com")
+        contact_email = app.config.get(
+            "CONTACT_EMAIL", "info@dixielandwireless.com"
+        )
+        contact_phone_raw = app.config.get("CONTACT_PHONE", "2053343969")
+        phone_display, phone_href = normalize_phone_number(contact_phone_raw)
+        if not phone_display:
+            phone_display = contact_phone_raw
+        if not phone_href:
+            phone_href = f"tel:{contact_phone_raw}" if contact_phone_raw else None
         support_links = [
             {
                 "label": "Contact Support",
                 "url": f"mailto:{contact_email}",
+                "external": True,
+            },
+            {
+                "label": "Call Support",
+                "url": phone_href if phone_href else "tel:2053343969",
                 "external": True,
             },
             {"label": "Support Center", "url": url_for("support"), "external": False},
@@ -1950,6 +1984,9 @@ def register_routes(app: Flask) -> None:
             "service_offerings": service_offerings,
             "appointment_status_options": APPOINTMENT_STATUS_OPTIONS,
             "contact_email": contact_email,
+            "contact_phone": contact_phone_raw,
+            "contact_phone_display": phone_display,
+            "contact_phone_href": phone_href,
             "support_links": support_links,
             "down_detector_config": down_detector_config,
             "plan_category_links": plan_category_links,

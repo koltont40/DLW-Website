@@ -88,7 +88,8 @@ After signing in with the default credentials you can add additional administrat
 | `ADMIN_PASSWORD` | Dashboard login password | `admin123` |
 | `PORT` | Optional secondary HTTP port (in addition to port 80) | unset |
 | `HTTPS_PORT` | Optional secondary HTTPS port (in addition to port 443) | unset |
-| `CONTACT_EMAIL` | Primary support/contact email surfaced throughout the site | `hello@example.com` |
+| `CONTACT_EMAIL` | Primary support/contact email surfaced throughout the site | `info@dixielandwireless.com` |
+| `CONTACT_PHONE` | Support phone number shown on public pages and navigation | `2053343969` |
 | `SNMP_TRAP_HOST` | Hostname/IP for SNMP trap delivery | unset (disabled) |
 | `SNMP_TRAP_PORT` | UDP port for SNMP trap delivery | `162` |
 | `SNMP_COMMUNITY` | SNMP community string | `public` |
