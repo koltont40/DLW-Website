@@ -1785,10 +1785,12 @@
                   <th scope="col">Email</th>
                   <th scope="col">Added</th>
                   <th scope="col">Last login</th>
+                  <th scope="col" class="actions">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {% for admin in admin_users %}
+                {% set is_current_admin = current_admin_id and admin.id == current_admin_id %}
                 <tr>
                   <td>{{ admin.username }}</td>
                   <td>{{ admin.email or '—' }}</td>
@@ -1798,6 +1800,25 @@
                     {{ admin.last_login_at.strftime('%b %d, %Y %I:%M %p') }}
                     {% else %}
                     Never
+                    {% endif %}
+                  </td>
+                  <td class="actions">
+                    {% if admin_users|length > 1 %}
+                    <form
+                      method="post"
+                      action="{{ url_for('delete_admin_user', admin_id=admin.id) }}"
+                      onsubmit="return confirm('Remove this administrator?');"
+                    >
+                      <button
+                        class="button small danger"
+                        type="submit"
+                        {% if is_current_admin %}disabled title="You cannot remove the account currently signed in."{% endif %}
+                      >
+                        Remove
+                      </button>
+                    </form>
+                    {% else %}
+                    <span class="subtle">Add another admin to enable removal.</span>
                     {% endif %}
                   </td>
                 </tr>

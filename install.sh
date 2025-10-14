@@ -73,7 +73,15 @@ python3 -c "from app import init_db; init_db()"
 echo
 echo "Launching the application on ports 80 (HTTP) and 443 (HTTPS when certificates exist)."
 echo "If you encounter a permission error binding to port 80, rerun this script with sudo or grant Python the cap_net_bind_service capability."
-echo "Admin login -> Username: ${ADMIN_USERNAME:-admin} | Password: ${ADMIN_PASSWORD:-admin123}"
+if [ -n "${ADMIN_USERNAME:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ]; then
+  echo "Configured admin login -> Username: ${ADMIN_USERNAME} (password provided via ADMIN_PASSWORD)"
+else
+  cat <<'INFO'
+No administrator credentials are configured yet.
+Set ADMIN_USERNAME and ADMIN_PASSWORD (and optionally ADMIN_EMAIL) before launch to seed the first admin account,
+or create an administrator manually using 'python -c "from app import create_app, db, AdminUser; ..."' after initialization.
+INFO
+fi
 echo "Press CTRL+C to stop the server."
 
 exec python3 app.py

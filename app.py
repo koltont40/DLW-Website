@@ -1043,8 +1043,9 @@ def create_app(test_config: dict | None = None) -> Flask:
         "SECRET_KEY": secret_key,
         "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
         "SQLALCHEMY_TRACK_MODIFICATIONS": False,
-        "ADMIN_USERNAME": os.environ.get("ADMIN_USERNAME", "admin"),
-        "ADMIN_PASSWORD": os.environ.get("ADMIN_PASSWORD", "admin123"),
+        "ADMIN_USERNAME": os.environ.get("ADMIN_USERNAME"),
+        "ADMIN_PASSWORD": os.environ.get("ADMIN_PASSWORD"),
+        "ADMIN_EMAIL": os.environ.get("ADMIN_EMAIL"),
         "LEGAL_UPLOAD_FOLDER": str(instance_path / "legal"),
         "BRANDING_UPLOAD_FOLDER": str(instance_path / "branding"),
         "THEME_UPLOAD_FOLDER": str(instance_path / "theme"),
@@ -1271,12 +1272,20 @@ def ensure_default_admin_user() -> None:
     if AdminUser.query.count() > 0:
         return
 
-    username = current_app.config.get("ADMIN_USERNAME", "admin")
-    password = current_app.config.get("ADMIN_PASSWORD", "admin123")
-    contact_email = current_app.config.get("CONTACT_EMAIL")
+    username = (current_app.config.get("ADMIN_USERNAME") or "").strip()
+    password = current_app.config.get("ADMIN_PASSWORD")
+    contact_email = current_app.config.get("ADMIN_EMAIL") or current_app.config.get(
+        "CONTACT_EMAIL"
+    )
+
+    if not username or not password:
+        current_app.logger.warning(
+            "No admin users exist and ADMIN_USERNAME/ADMIN_PASSWORD were not provided."
+        )
+        return
 
     admin = AdminUser(username=username, email=contact_email)
-    admin.set_password(password or "admin123")
+    admin.set_password(password)
     db.session.add(admin)
     db.session.commit()
 
@@ -2893,6 +2902,7 @@ def register_routes(app: Flask) -> None:
                 if admin and admin.check_password(password):
                     session["admin_authenticated"] = True
                     session["admin_logged_in_at"] = utcnow().isoformat()
+                    session["admin_user_id"] = admin.id
                     admin.last_login_at = utcnow()
                     db.session.commit()
                     flash("Welcome back!", "success")
@@ -3321,6 +3331,7 @@ def register_routes(app: Flask) -> None:
             tls_certificate_ready=tls_certificate_ready,
             tls_challenge_folder=tls_challenge_folder,
             admin_users=admin_users,
+            current_admin_id=session.get("admin_user_id"),
             site_theme=site_theme,
             recent_autopay_events=recent_autopay_events,
             suspended_clients=suspended_clients,
@@ -4653,6 +4664,32 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         flash("Admin account created successfully.", "success")
+        return redirect(url_for("dashboard", section="security"))
+
+    @app.post("/dashboard/security/admins/<int:admin_id>/delete")
+    @login_required
+    def delete_admin_user(admin_id: int):
+        admin = AdminUser.query.get_or_404(admin_id)
+        total_admins = AdminUser.query.count()
+        if total_admins <= 1:
+            flash(
+                "Add another administrator before removing this account.",
+                "warning",
+            )
+            return redirect(url_for("dashboard", section="security"))
+
+        current_admin_id = session.get("admin_user_id")
+        if current_admin_id == admin.id:
+            flash(
+                "You cannot remove the administrator currently signed in.",
+                "warning",
+            )
+            return redirect(url_for("dashboard", section="security"))
+
+        db.session.delete(admin)
+        db.session.commit()
+
+        flash("Administrator removed.", "info")
         return redirect(url_for("dashboard", section="security"))
 
     @app.post("/dashboard/security/tls")

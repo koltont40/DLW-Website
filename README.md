@@ -43,16 +43,13 @@ When new releases are published you can stay up to date without rerunning the in
 
 The helper script verifies you have `git` available, fetches the latest commits for your current branch, rebases your local copy, and refreshes dependencies inside the existing virtual environment. If you have local changes you will be prompted to commit or stash them before continuing.
 
-### Default Admin Credentials
+### Creating the First Administrator
 
-- **Username:** `admin`
-- **Password:** `admin123`
-
-Change these by setting the `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment variables before launching the app.
+Set the `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and optional `ADMIN_EMAIL` environment variables before the first launch to auto-create your initial administrator. If those values are omitted the database will be initialized without an admin account—sign in via another trusted path (for example, `flask shell`) to create one manually before exposing the dashboard.
 
 Each client can be issued a customer-portal password from the admin dashboard. Generate a temporary password or set a custom credential, then share it securely with the subscriber.
 
-After signing in with the default credentials you can add additional administrators from **Dashboard → Security** so multiple staff members can manage the portal.
+After signing in you can add or remove additional administrators from **Dashboard → Security** so multiple staff members can manage the portal.
 
 ## Project Structure
 
@@ -84,8 +81,9 @@ After signing in with the default credentials you can add additional administrat
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `SECRET_KEY` | Flask session secret | Randomly generated if unset |
-| `ADMIN_USERNAME` | Dashboard login username | `admin` |
-| `ADMIN_PASSWORD` | Dashboard login password | `admin123` |
+| `ADMIN_USERNAME` | Dashboard login username used to seed the first admin | unset (required to auto-create an admin) |
+| `ADMIN_PASSWORD` | Dashboard login password used to seed the first admin | unset (required to auto-create an admin) |
+| `ADMIN_EMAIL` | Optional email to assign to the seeded administrator | unset |
 | `PORT` | Optional secondary HTTP port (in addition to port 80) | unset |
 | `HTTPS_PORT` | Optional secondary HTTPS port (in addition to port 443) | unset |
 | `CONTACT_EMAIL` | Primary support/contact email surfaced throughout the site | `info@dixielandwireless.com` |

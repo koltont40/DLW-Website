@@ -36,6 +36,10 @@ from app import (
 from werkzeug.security import generate_password_hash
 
 
+TEST_ADMIN_USERNAME = "sys-admin"
+TEST_ADMIN_PASSWORD = "SecurePass123!"
+
+
 @pytest.fixture
 def app(tmp_path):
     test_db_path = tmp_path / "test.db"
@@ -56,6 +60,9 @@ def app(tmp_path):
             "TESTING": True,
             "SECRET_KEY": "test-secret",
             "SQLALCHEMY_DATABASE_URI": f"sqlite:///{test_db_path}",
+            "ADMIN_USERNAME": TEST_ADMIN_USERNAME,
+            "ADMIN_PASSWORD": TEST_ADMIN_PASSWORD,
+            "ADMIN_EMAIL": "ops@example.com",
             "LEGAL_UPLOAD_FOLDER": str(legal_folder),
             "BRANDING_UPLOAD_FOLDER": str(branding_folder),
             "THEME_UPLOAD_FOLDER": str(theme_folder),
@@ -79,6 +86,14 @@ def app(tmp_path):
 @pytest.fixture
 def client(app):
     return app.test_client()
+
+
+def login_admin(client, follow_redirects: bool = True):
+    return client.post(
+        "/login",
+        data={"username": TEST_ADMIN_USERNAME, "password": TEST_ADMIN_PASSWORD},
+        follow_redirects=follow_redirects,
+    )
 
 
 def create_detailed_customer_record(app):
@@ -314,11 +329,7 @@ def test_dashboard_requires_login(client):
 
 
 def test_admin_can_login_and_view_dashboard(client):
-    login_response = client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_response = login_admin(client)
 
     assert login_response.status_code == 200
     assert b"Welcome back!" in login_response.data
@@ -335,11 +346,7 @@ def test_admin_can_login_and_view_dashboard(client):
 
 
 def test_admin_can_view_security_settings(client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     response = client.get("/dashboard?section=security", follow_redirects=True)
 
@@ -348,14 +355,74 @@ def test_admin_can_view_security_settings(client):
     assert b"Request certificate" in response.data
     assert b"Portal administrators" in response.data
     assert b"Add administrator" in response.data
+    assert b"Add another admin to enable removal." in response.data
+
+
+def test_admin_cannot_remove_last_admin(app, client):
+    login_admin(client)
+
+    with app.app_context():
+        last_admin = AdminUser.query.first()
+        assert last_admin is not None
+        admin_id = last_admin.id
+
+    response = client.post(
+        f"/dashboard/security/admins/{admin_id}/delete",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Add another administrator before removing this account." in response.data
+
+
+def test_admin_can_remove_other_admin(app, client):
+    login_admin(client)
+
+    with app.app_context():
+        current_admin = AdminUser.query.first()
+        assert current_admin is not None
+        removable_admin = AdminUser(username="ops-two", email="ops2@example.com")
+        removable_admin.set_password("AnotherPass123!")
+        db.session.add(removable_admin)
+        db.session.commit()
+        removable_id = removable_admin.id
+
+    # still signed in as the first admin; removing the second should succeed
+    response = client.post(
+        f"/dashboard/security/admins/{removable_id}/delete",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Administrator removed." in response.data
+
+    with app.app_context():
+        assert AdminUser.query.get(removable_id) is None
+
+
+def test_admin_cannot_remove_current_admin(app, client):
+    login_admin(client)
+
+    with app.app_context():
+        current_admin = AdminUser.query.first()
+        assert current_admin is not None
+        other_admin = AdminUser(username="ops-three", email="ops3@example.com")
+        other_admin.set_password("ThirdPass123!")
+        db.session.add(other_admin)
+        db.session.commit()
+        current_admin_id = current_admin.id
+
+    response = client.post(
+        f"/dashboard/security/admins/{current_admin_id}/delete",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"You cannot remove the administrator currently signed in." in response.data
 
 
 def test_admin_can_save_tls_settings(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     response = client.post(
         "/dashboard/security/tls",
@@ -381,11 +448,7 @@ def test_admin_can_save_tls_settings(app, client):
 
 
 def test_tls_provision_records_error_when_certbot_missing(app, client, monkeypatch):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     monkeypatch.setattr("app.shutil.which", lambda _: None)
 
@@ -411,11 +474,7 @@ def test_tls_provision_records_error_when_certbot_missing(app, client, monkeypat
 
 
 def test_admin_can_create_additional_admin_user(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     response = client.post(
         "/dashboard/security/admins",
@@ -438,11 +497,7 @@ def test_admin_can_create_additional_admin_user(app, client):
 
 
 def test_admin_can_add_customer_via_dashboard(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     response = client.post(
         "/clients",
@@ -492,11 +547,7 @@ def test_admin_can_add_customer_via_dashboard(app, client):
 
 
 def test_customer_focus_view_surfaces_account_summary(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     focus_id = create_detailed_customer_record(app)
 
@@ -518,11 +569,7 @@ def test_customer_focus_view_surfaces_account_summary(app, client):
 
 
 def test_customer_directory_links_to_admin_account_view(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     customer_id = create_detailed_customer_record(app)
 
@@ -538,11 +585,7 @@ def test_customer_directory_links_to_admin_account_view(app, client):
 
 
 def test_admin_customer_account_view_shows_details(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     customer_id = create_detailed_customer_record(app)
 
@@ -560,11 +603,7 @@ def test_admin_customer_account_view_shows_details(app, client):
 
 
 def test_admin_updates_service_plans_from_account_view(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     with app.app_context():
         customer = Client(
@@ -623,11 +662,7 @@ def test_admin_updates_service_plans_from_account_view(app, client):
 
 
 def test_admin_adds_invoice_from_account_view(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     with app.app_context():
         customer = Client(
@@ -662,11 +697,7 @@ def test_admin_adds_invoice_from_account_view(app, client):
 
 
 def test_autopay_run_pays_due_invoices(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     with app.app_context():
         customer = Client(
@@ -716,11 +747,7 @@ def test_autopay_run_pays_due_invoices(app, client):
 
 
 def test_autopay_run_suspends_when_no_method(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     with app.app_context():
         customer = Client(
@@ -758,11 +785,7 @@ def test_autopay_run_suspends_when_no_method(app, client):
 
 
 def test_admin_adds_equipment_from_account_view(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     with app.app_context():
         customer = Client(
@@ -798,11 +821,7 @@ def test_admin_adds_equipment_from_account_view(app, client):
 
 
 def test_admin_schedules_appointment_from_account_view(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     with app.app_context():
         technician = Technician(
@@ -855,11 +874,7 @@ def test_admin_customer_account_view_requires_login(client):
 
 
 def test_admin_can_manage_service_plans(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     create_response = client.post(
         "/service-plans",
@@ -915,11 +930,7 @@ def test_admin_can_manage_service_plans(app, client):
 
 
 def test_admin_can_upload_and_download_documents(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     upload_response = client.post(
         "/documents/upload",
@@ -950,11 +961,7 @@ def test_admin_can_upload_and_download_documents(app, client):
 
 
 def test_admin_can_add_navigation_item(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     response = client.post(
         "/navigation/add",
@@ -976,11 +983,7 @@ def test_admin_can_add_navigation_item(app, client):
 
 
 def test_admin_can_upload_branding_asset(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     response = client.post(
         "/branding/upload",
@@ -1002,11 +1005,7 @@ def test_admin_can_upload_branding_asset(app, client):
 
 
 def test_admin_can_update_site_theme(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     response = client.post(
         "/branding/theme",
@@ -1026,11 +1025,7 @@ def test_admin_can_update_site_theme(app, client):
 
 
 def test_admin_can_manage_theme_background_image(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     image_bytes = b"fake-image-bytes"
     response = client.post(
@@ -1096,11 +1091,7 @@ def test_default_navigation_excludes_support_dropdown_links(app):
 
 
 def test_admin_can_create_blog_post_and_publish(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     response = client.post(
         "/blog/posts",
@@ -1132,11 +1123,7 @@ def test_admin_can_create_blog_post_and_publish(app, client):
 
 
 def test_blog_draft_hidden_from_public(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     client.post(
         "/blog/posts",
@@ -1164,11 +1151,7 @@ def test_blog_draft_hidden_from_public(app, client):
 
 
 def test_admin_can_update_blog_post_status(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     client.post(
         "/blog/posts",
@@ -1213,11 +1196,7 @@ def test_admin_can_update_blog_post_status(app, client):
 
 
 def test_document_viewer_renders_pdf_inline(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     client.post(
         "/documents/upload",
@@ -1236,11 +1215,7 @@ def test_document_viewer_renders_pdf_inline(app, client):
 
 
 def test_document_viewer_uses_office_embed_for_word(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     client.post(
         "/documents/upload",
@@ -1258,11 +1233,7 @@ def test_document_viewer_uses_office_embed_for_word(app, client):
 
 
 def test_admin_can_manage_billing_equipment_and_tickets(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     signup_response = client.post(
         "/signup",
@@ -1572,11 +1543,7 @@ def test_admin_can_schedule_appointment(app, client):
         db.session.commit()
         customer_id = customer.id
 
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     scheduled_for = (utcnow() + timedelta(days=1)).replace(microsecond=0)
 
@@ -1613,11 +1580,7 @@ def test_admin_can_send_manual_snmp_email(app, client):
         (recipient, subject, body)
     ) or True
 
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     response = client.post(
         "/notifications/snmp-email",
@@ -1637,11 +1600,7 @@ def test_admin_can_send_manual_snmp_email(app, client):
 
 
 def test_admin_can_update_snmp_settings(app, client):
-    client.post(
-        "/login",
-        data={"username": "admin", "password": "admin123"},
-        follow_redirects=True,
-    )
+    login_admin(client)
 
     response = client.post(
         "/snmp-settings",
