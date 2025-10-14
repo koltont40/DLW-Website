@@ -42,6 +42,8 @@ load_dotenv()
 
 db = SQLAlchemy()
 
+_billing_schema_checked = False
+
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
@@ -241,6 +243,8 @@ def generate_payment_token(client_id: int, digits: str) -> str:
 
 
 def recalculate_client_billing_state(client: "Client") -> None:
+    ensure_billing_schema_once()
+
     outstanding = [
         invoice
         for invoice in client.invoices
@@ -1078,8 +1082,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
-        ensure_client_billing_fields()
-        ensure_invoice_payment_fields()
+        ensure_billing_schema_once()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
@@ -1101,8 +1104,7 @@ def init_db() -> None:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
-        ensure_client_billing_fields()
-        ensure_invoice_payment_fields()
+        ensure_billing_schema_once()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
@@ -1605,6 +1607,21 @@ def ensure_invoice_payment_fields() -> None:
             for stmt in statements:
                 connection.execute(text(stmt))
 
+
+def ensure_billing_schema_once() -> None:
+    """Ensure autopay-related columns exist without re-running repeatedly."""
+
+    global _billing_schema_checked
+
+    if _billing_schema_checked:
+        return
+
+    ensure_client_billing_fields()
+    ensure_invoice_payment_fields()
+
+    _billing_schema_checked = True
+
+
 def ensure_site_theme_background_fields() -> None:
     inspector = inspect(db.engine)
     try:
@@ -1844,6 +1861,10 @@ def register_routes(app: Flask) -> None:
         if not value:
             return "—"
         return value.strftime("%b %d, %Y")
+
+    @app.before_request
+    def ensure_billing_schema():
+        ensure_billing_schema_once()
 
     @app.context_processor
     def inject_status_options():
