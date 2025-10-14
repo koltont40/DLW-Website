@@ -24,6 +24,7 @@ from app import (
     BlogPost,
     SupportTicket,
     SupportTicketAttachment,
+    SiteTheme,
     REQUIRED_INSTALL_PHOTO_CATEGORIES,
     create_app,
     db,
@@ -895,6 +896,30 @@ def test_admin_can_upload_branding_asset(app, client):
         asset = BrandingAsset.query.filter_by(asset_type="logo").first()
         assert asset is not None
         assert asset.original_filename == "logo.png"
+
+
+def test_admin_can_update_site_theme(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/branding/theme",
+        data={"background_color": "#ffffff"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Updated the site background and text colors." in response.data
+
+    with app.app_context():
+        theme = SiteTheme.query.first()
+        assert theme is not None
+        assert theme.background_color == "#ffffff"
+        assert theme.text_color == "#111827"
+        assert theme.muted_color == "#475569"
 
 
 def test_default_navigation_excludes_support_dropdown_links(app):

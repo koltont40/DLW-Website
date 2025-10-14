@@ -1543,6 +1543,32 @@
           <p class="subtle">Upload the latest logos, favicons, and wordmarks for DIXIELAND WIRELESS LLC.</p>
         </div>
       </header>
+      <div class="branding-theme-panel">
+        <article class="branding-theme-card">
+          <header>
+            <h3>Site background</h3>
+            <p>Pick the primary background color for the public site and dashboard.</p>
+          </header>
+          <div
+            class="branding-theme-preview"
+            style="background: {{ site_theme.background_color }}; color: {{ site_theme.text_color }};"
+            aria-hidden="true"
+          >
+            <span class="branding-theme-preview-label">Preview</span>
+            <span class="branding-theme-preview-text">DIXIELAND WIRELESS LLC</span>
+          </div>
+          <form class="stacked-form" method="post" action="{{ url_for('update_site_theme') }}">
+            <label>
+              Background color
+              <input type="color" name="background_color" value="{{ site_theme.background_color }}" aria-describedby="theme-color-help" required />
+            </label>
+            <p class="helper-text" id="theme-color-help">Text automatically adjusts to {{ site_theme.text_color }} for readability.</p>
+            <div class="form-actions">
+              <button class="button secondary" type="submit">Update background</button>
+            </div>
+          </form>
+        </article>
+      </div>
       <div class="branding-grid">
         {% for key, metadata in branding_asset_types.items() %}
         {% set asset = branding_assets.get(key) %}

@@ -79,6 +79,27 @@ def generate_unique_slug(title: str, existing_id: int | None = None) -> str:
         suffix += 1
 
 
+def normalize_hex_color(value: str) -> str:
+    cleaned = (value or "").strip().lstrip("#")
+    if len(cleaned) == 3:
+        cleaned = "".join(ch * 2 for ch in cleaned)
+    if len(cleaned) != 6 or not all(ch in string.hexdigits for ch in cleaned):
+        raise ValueError("Invalid hex color")
+    return f"#{cleaned.lower()}"
+
+
+def derive_theme_palette(background_hex: str) -> tuple[str, str]:
+    background = normalize_hex_color(background_hex)
+    r = int(background[1:3], 16)
+    g = int(background[3:5], 16)
+    b = int(background[5:7], 16)
+
+    brightness = (r * 299 + g * 587 + b * 114) / 1000
+    if brightness >= 150:
+        return "#111827", "#475569"
+    return "#f5f3ff", "#b5a6d8"
+
+
 def allowed_install_file(filename: str) -> bool:
     if not filename:
         return False
@@ -483,6 +504,18 @@ class BrandingAsset(db.Model):
         return f"<BrandingAsset {self.asset_type}: {self.original_filename}>"
 
 
+class SiteTheme(db.Model):
+    __tablename__ = "site_theme"
+
+    id = db.Column(db.Integer, primary_key=True)
+    background_color = db.Column(db.String(7), nullable=False, default="#0e071a")
+    text_color = db.Column(db.String(7), nullable=False, default="#f5f3ff")
+    muted_color = db.Column(db.String(7), nullable=False, default="#b5a6d8")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<SiteTheme bg={self.background_color} text={self.text_color}>"
+
+
 class Invoice(db.Model):
     __tablename__ = "invoices"
 
@@ -808,6 +841,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_support_ticket_priority_field()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
+        ensure_site_theme()
 
     return app
 
@@ -827,6 +861,7 @@ def init_db() -> None:
         ensure_support_ticket_priority_field()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
+        ensure_site_theme()
 
 
 def issue_lets_encrypt_certificate(
@@ -1290,6 +1325,34 @@ def ensure_tls_configuration() -> None:
         db.session.commit()
 
 
+def ensure_site_theme() -> None:
+    theme = SiteTheme.query.first()
+    if theme is None:
+        theme = SiteTheme()
+        db.session.add(theme)
+        db.session.commit()
+        return
+
+    changed = False
+    try:
+        background = normalize_hex_color(theme.background_color)
+    except ValueError:
+        background = "#0e071a"
+        theme.background_color = background
+        changed = True
+
+    text_color, muted_color = derive_theme_palette(background)
+    if theme.text_color != text_color:
+        theme.text_color = text_color
+        changed = True
+    if theme.muted_color != muted_color:
+        theme.muted_color = muted_color
+        changed = True
+
+    if changed:
+        db.session.commit()
+
+
 def get_effective_snmp_settings(app: Flask) -> dict[str, str | int | None]:
     settings: dict[str, str | int | None] = {
         "host": app.config.get("SNMP_TRAP_HOST"),
@@ -1487,6 +1550,14 @@ def register_routes(app: Flask) -> None:
             for category in categories
         ]
 
+        site_theme = SiteTheme.query.first()
+        if site_theme is None:
+            site_theme = SiteTheme(
+                background_color="#0e071a",
+                text_color="#f5f3ff",
+                muted_color="#b5a6d8",
+            )
+
         return {
             "status_options": STATUS_OPTIONS,
             "current_year": utcnow().year,
@@ -1502,6 +1573,7 @@ def register_routes(app: Flask) -> None:
             "support_links": support_links,
             "down_detector_config": down_detector_config,
             "plan_category_links": plan_category_links,
+            "site_theme": site_theme,
         }
 
     @app.route("/.well-known/acme-challenge/<token>")
@@ -2616,6 +2688,7 @@ def register_routes(app: Flask) -> None:
 
         navigation_items = NavigationItem.query.order_by(NavigationItem.position.asc()).all()
         branding_records = {asset.asset_type: asset for asset in BrandingAsset.query.all()}
+        site_theme = SiteTheme.query.first()
 
         snmp_settings = get_effective_snmp_settings(app)
         snmp_enabled = bool(snmp_settings.get("host") or app.config.get("SNMP_EMAIL_SENDER"))
@@ -2688,6 +2761,7 @@ def register_routes(app: Flask) -> None:
             tls_certificate_ready=tls_certificate_ready,
             tls_challenge_folder=tls_challenge_folder,
             admin_users=admin_users,
+            site_theme=site_theme,
         )
 
     @app.get("/dashboard/customers/<int:client_id>")
@@ -4037,6 +4111,31 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
         flash("Navigation order updated.", "success")
         return redirect(url_for("dashboard", section="navigation"))
+
+    @app.post("/branding/theme")
+    @login_required
+    def update_site_theme():
+        background_color = request.form.get("background_color", "")
+
+        try:
+            normalized = normalize_hex_color(background_color)
+        except ValueError:
+            flash("Please choose a valid background color.", "danger")
+            return redirect(url_for("dashboard", section="branding"))
+
+        text_color, muted_color = derive_theme_palette(normalized)
+        theme = SiteTheme.query.first()
+        if theme is None:
+            theme = SiteTheme()
+            db.session.add(theme)
+
+        theme.background_color = normalized
+        theme.text_color = text_color
+        theme.muted_color = muted_color
+        db.session.commit()
+
+        flash("Updated the site background and text colors.", "success")
+        return redirect(url_for("dashboard", section="branding"))
 
     @app.post("/branding/upload")
     @login_required
