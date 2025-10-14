@@ -2509,6 +2509,121 @@ def register_routes(app: Flask) -> None:
             field_photo_map=field_photo_map,
         )
 
+    @app.get("/dashboard/customers/<int:client_id>")
+    @login_required
+    def admin_client_account(client_id: int):
+        client = Client.query.get_or_404(client_id)
+
+        invoices = (
+            Invoice.query.filter_by(client_id=client.id)
+            .order_by(Invoice.created_at.desc())
+            .all()
+        )
+        equipment_items = (
+            Equipment.query.filter_by(client_id=client.id)
+            .order_by(Equipment.created_at.desc())
+            .all()
+        )
+        tickets = (
+            SupportTicket.query.filter_by(client_id=client.id)
+            .order_by(SupportTicket.updated_at.desc())
+            .all()
+        )
+        appointments = (
+            Appointment.query.filter_by(client_id=client.id)
+            .order_by(Appointment.scheduled_for.desc())
+            .all()
+        )
+
+        current_time = utcnow()
+        upcoming_appointments = []
+        for appointment in appointments:
+            scheduled_for = appointment.scheduled_for
+            if scheduled_for.tzinfo is None:
+                scheduled_for = scheduled_for.replace(tzinfo=UTC)
+            if scheduled_for >= current_time:
+                upcoming_appointments.append(appointment)
+
+        photo_map: dict[str, list[InstallPhoto]] = {
+            category: [] for category in INSTALL_PHOTO_CATEGORY_CHOICES
+        }
+        client_photos = (
+            InstallPhoto.query.filter_by(client_id=client.id)
+            .order_by(InstallPhoto.uploaded_at.desc())
+            .all()
+        )
+        for photo in client_photos:
+            photo_map.setdefault(photo.category, []).append(photo)
+
+        missing_photo_categories = [
+            category
+            for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
+            if not photo_map.get(category)
+        ]
+
+        service_groups: list[tuple[str, str]] = []
+        if client.residential_plan:
+            service_groups.append(("Residential", client.residential_plan))
+        if client.business_plan:
+            service_groups.append(("Business", client.business_plan))
+        if client.phone_plan:
+            service_groups.append(("Phone Service", client.phone_plan))
+
+        outstanding_invoices = [
+            invoice
+            for invoice in invoices
+            if invoice.status not in {"Paid", "Cancelled"}
+        ]
+        outstanding_balance_cents = sum(
+            invoice.amount_cents for invoice in outstanding_invoices
+        )
+
+        due_dates = [
+            invoice.due_date
+            for invoice in outstanding_invoices
+            if invoice.due_date is not None
+        ]
+        upcoming_due_date = min(due_dates) if due_dates else None
+
+        open_ticket_count = sum(
+            1 for ticket in tickets if ticket.status in {"Open", "In Progress"}
+        )
+
+        address = client.address or ""
+        encoded_address = quote_plus(address) if address else None
+        google_maps_url = (
+            f"https://www.google.com/maps/dir/?api=1&destination={encoded_address}"
+            if encoded_address
+            else None
+        )
+        apple_maps_url = (
+            f"https://maps.apple.com/?daddr={encoded_address}"
+            if encoded_address
+            else None
+        )
+
+        return render_template(
+            "admin_client_account.html",
+            client=client,
+            invoices=invoices,
+            equipment_items=equipment_items,
+            tickets=tickets,
+            appointments=appointments,
+            photo_map=photo_map,
+            missing_photo_categories=missing_photo_categories,
+            service_groups=service_groups,
+            portal_enabled=bool(client.portal_password_hash),
+            outstanding_balance_cents=outstanding_balance_cents,
+            upcoming_due_date=upcoming_due_date,
+            open_ticket_count=open_ticket_count,
+            google_maps_url=google_maps_url,
+            apple_maps_url=apple_maps_url,
+            required_photo_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
+            install_photo_categories=INSTALL_PHOTO_CATEGORY_CHOICES,
+            ticket_priority_options=TICKET_PRIORITY_OPTIONS,
+            upcoming_appointments=upcoming_appointments,
+        )
+
     @app.post("/documents/upload")
     @login_required
     def upload_document():
