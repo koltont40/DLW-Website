@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Service Cancellation | DIXIELAND WIRELESS LLC{% endblock %}
+
+{% block content %}
+<section class="cancellation-hero">
+  <h1>Service cancellation</h1>
+  <p>
+    We're sorry to see you go. Follow the steps below to wrap up your DIXIELAND WIRELESS LLC service or transition to a
+    new location. Our team will guide you through equipment pickup and final billing.
+  </p>
+</section>
+
+<section class="cancellation-grid">
+  <article class="card">
+    <h2>1. Submit your request</h2>
+    <p class="subtle">
+      Send us an email at <a href="mailto:{{ contact_email }}">{{ contact_email }}</a> or open a ticket in the client
+      portal. Include your preferred disconnect date and account number.
+    </p>
+  </article>
+  <article class="card">
+    <h2>2. Schedule equipment return</h2>
+    <p class="subtle">
+      We'll coordinate a pickup appointment for leased radios, routers, and phone hardware. Self-install customers can
+      drop equipment at our office during business hours.
+    </p>
+  </article>
+  <article class="card">
+    <h2>3. Finalize your account</h2>
+    <p class="subtle">
+      A final invoice is generated once service is disconnected. Pay online through the client portal or contact billing
+      for assistance.
+    </p>
+  </article>
+</section>
+
+<section class="cancellation-help card">
+  <h2>Need a new service plan?</h2>
+  <p class="subtle">
+    If you're moving within our coverage area, we can transfer your service and keep you connected. Reach out and we'll
+    handle the rest.
+  </p>
+  <div class="support-actions">
+    <a class="button primary" href="{{ url_for('service_plans') }}">Explore plans</a>
+    <a class="button secondary" href="mailto:{{ contact_email }}">Talk with support</a>
+  </div>
+</section>
+{% endblock %}
