@@ -1672,6 +1672,67 @@
       </header>
       <div class="security-grid">
         <article class="security-panel">
+          <h3>Portal administrators</h3>
+          <p class="subtle">Control who can access the admin dashboard and manage customer data.</p>
+          {% if admin_users %}
+          <div class="admin-users-table-wrapper">
+            <table class="admin-users-table">
+              <thead>
+                <tr>
+                  <th scope="col">Username</th>
+                  <th scope="col">Email</th>
+                  <th scope="col">Added</th>
+                  <th scope="col">Last login</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for admin in admin_users %}
+                <tr>
+                  <td>{{ admin.username }}</td>
+                  <td>{{ admin.email or '—' }}</td>
+                  <td>{{ admin.created_at.strftime('%b %d, %Y') }}</td>
+                  <td>
+                    {% if admin.last_login_at %}
+                    {{ admin.last_login_at.strftime('%b %d, %Y %I:%M %p') }}
+                    {% else %}
+                    Never
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="subtle">Add your first administrator to secure the portal.</p>
+          {% endif %}
+          <form class="stacked-form" method="post" action="{{ url_for('create_admin_user') }}">
+            <div class="dual-inputs">
+              <label>
+                Username
+                <input type="text" name="username" placeholder="ops-admin" required />
+              </label>
+              <label>
+                Email
+                <input type="email" name="email" placeholder="ops@example.com" />
+              </label>
+            </div>
+            <div class="dual-inputs">
+              <label>
+                Password
+                <input type="password" name="password" minlength="8" required />
+              </label>
+              <label>
+                Confirm password
+                <input type="password" name="confirm_password" minlength="8" required />
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="button secondary" type="submit">Add administrator</button>
+            </div>
+          </form>
+        </article>
+        <article class="security-panel">
           <div class="tls-status-header">
             <h3>Certificate status</h3>
             {% set tls_status = tls_config.status if tls_config else 'pending' %}

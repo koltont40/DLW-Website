@@ -1,3 +1,4 @@
+import errno
 import mimetypes
 import os
 import re
@@ -607,6 +608,26 @@ class SupportTicketAttachment(db.Model):
         return f"<SupportTicketAttachment {self.id} ticket={self.ticket_id}>"
 
 
+class AdminUser(db.Model):
+    __tablename__ = "admin_users"
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(120), nullable=False, unique=True)
+    email = db.Column(db.String(255), unique=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    last_login_at = db.Column(db.DateTime(timezone=True))
+
+    def set_password(self, password: str) -> None:
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password: str) -> bool:
+        return check_password_hash(self.password_hash, password)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<AdminUser {self.username}>"
+
+
 class Appointment(db.Model):
     __tablename__ = "appointments"
 
@@ -778,6 +799,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             folder_path = Path(app.config[folder_key])
             folder_path.mkdir(parents=True, exist_ok=True)
         db.create_all()
+        ensure_default_admin_user()
         ensure_client_portal_fields()
         ensure_default_navigation()
         ensure_service_plans_seeded()
@@ -796,6 +818,7 @@ def init_db() -> None:
     app = create_app()
     with app.app_context():
         db.create_all()
+        ensure_default_admin_user()
         ensure_client_portal_fields()
         ensure_default_navigation()
         ensure_service_plans_seeded()
@@ -939,6 +962,20 @@ def send_email_via_snmp(app: Flask, recipient: str, subject: str, body: str) -> 
         return False
 
     return True
+
+
+def ensure_default_admin_user() -> None:
+    if AdminUser.query.count() > 0:
+        return
+
+    username = current_app.config.get("ADMIN_USERNAME", "admin")
+    password = current_app.config.get("ADMIN_PASSWORD", "admin123")
+    contact_email = current_app.config.get("CONTACT_EMAIL")
+
+    admin = AdminUser(username=username, email=contact_email)
+    admin.set_password(password or "admin123")
+    db.session.add(admin)
+    db.session.commit()
 
 
 def ensure_default_navigation() -> None:
@@ -2222,18 +2259,25 @@ def register_routes(app: Flask) -> None:
     @app.route("/login", methods=["GET", "POST"])
     def login():
         if request.method == "POST":
-            username = request.form.get("username", "").strip()
+            username_or_email = request.form.get("username", "").strip()
             password = request.form.get("password", "")
 
-            if (
-                username == app.config["ADMIN_USERNAME"]
-                and password == app.config["ADMIN_PASSWORD"]
-            ):
-                session["admin_authenticated"] = True
-                session["admin_logged_in_at"] = utcnow().isoformat()
-                flash("Welcome back!", "success")
-                redirect_target = request.args.get("next") or url_for("dashboard")
-                return redirect(redirect_target)
+            if username_or_email and password:
+                admin = AdminUser.query.filter(
+                    or_(
+                        AdminUser.username == username_or_email,
+                        AdminUser.email == username_or_email,
+                    )
+                ).first()
+
+                if admin and admin.check_password(password):
+                    session["admin_authenticated"] = True
+                    session["admin_logged_in_at"] = utcnow().isoformat()
+                    admin.last_login_at = utcnow()
+                    db.session.commit()
+                    flash("Welcome back!", "success")
+                    redirect_target = request.args.get("next") or url_for("dashboard")
+                    return redirect(redirect_target)
 
             flash("Invalid credentials. Please try again.", "danger")
 
@@ -2286,6 +2330,7 @@ def register_routes(app: Flask) -> None:
         tls_config: TLSConfig | None = None
         tls_certificate_ready = False
         tls_challenge_folder = current_app.config.get("TLS_CHALLENGE_FOLDER")
+        admin_users: list[AdminUser] = []
         if active_section in {
             "customers",
             "billing",
@@ -2360,6 +2405,9 @@ def register_routes(app: Flask) -> None:
                 .order_by(Technician.name.asc())
                 .all()
             )
+
+        if active_section == "security":
+            admin_users = AdminUser.query.order_by(AdminUser.created_at.asc()).all()
 
         appointments: list[Appointment] = []
         if active_section == "appointments":
@@ -2639,6 +2687,7 @@ def register_routes(app: Flask) -> None:
             tls_config=tls_config,
             tls_certificate_ready=tls_certificate_ready,
             tls_challenge_folder=tls_challenge_folder,
+            admin_users=admin_users,
         )
 
     @app.get("/dashboard/customers/<int:client_id>")
@@ -3665,6 +3714,45 @@ def register_routes(app: Flask) -> None:
         flash("SNMP settings updated.", "success")
         return _redirect_back_to_dashboard("support")
 
+    @app.post("/dashboard/security/admins")
+    @login_required
+    def create_admin_user():
+        username = request.form.get("username", "").strip()
+        email = request.form.get("email", "").strip() or None
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if not username or not password:
+            flash("Provide a username and password for the admin account.", "danger")
+            return redirect(url_for("dashboard", section="security"))
+
+        if password != confirm_password:
+            flash("Passwords do not match. Please re-enter them.", "danger")
+            return redirect(url_for("dashboard", section="security"))
+
+        if len(password) < 8:
+            flash("Choose an admin password with at least 8 characters.", "danger")
+            return redirect(url_for("dashboard", section="security"))
+
+        existing_username = AdminUser.query.filter_by(username=username).first()
+        if existing_username:
+            flash("That admin username is already in use.", "danger")
+            return redirect(url_for("dashboard", section="security"))
+
+        if email:
+            existing_email = AdminUser.query.filter_by(email=email).first()
+            if existing_email:
+                flash("That admin email is already assigned to another user.", "danger")
+                return redirect(url_for("dashboard", section="security"))
+
+        admin_user = AdminUser(username=username, email=email)
+        admin_user.set_password(password)
+        db.session.add(admin_user)
+        db.session.commit()
+
+        flash("Admin account created successfully.", "success")
+        return redirect(url_for("dashboard", section="security"))
+
     @app.post("/dashboard/security/tls")
     @login_required
     def configure_tls():
@@ -4178,12 +4266,33 @@ if __name__ == "__main__":
                 str(Path(tls_config.private_key_path)),
             )
 
-    http_port = int(os.environ.get("PORT", 80))
-    https_port = int(os.environ.get("HTTPS_PORT", 443))
+    http_port = 80
+    https_port = 443
+    extra_http_port: int | None = None
+    extra_https_port: int | None = None
+
+    port_env = os.environ.get("PORT")
+    if port_env:
+        try:
+            parsed = int(port_env)
+            if parsed != http_port:
+                extra_http_port = parsed
+        except ValueError:
+            app.logger.warning("Ignoring invalid PORT value: %s", port_env)
+
+    https_env = os.environ.get("HTTPS_PORT")
+    if https_env:
+        try:
+            parsed = int(https_env)
+            if parsed not in {http_port, https_port}:
+                extra_https_port = parsed
+        except ValueError:
+            app.logger.warning("Ignoring invalid HTTPS_PORT value: %s", https_env)
+
     servers: list[BaseWSGIServer] = []
     threads: list[threading.Thread] = []
 
-    def start_server(port: int, label: str, ssl: tuple[str, str] | None = None) -> None:
+    def start_server(port: int, label: str, ssl: tuple[str, str] | None = None) -> bool:
         try:
             server = make_server(
                 host="0.0.0.0",
@@ -4192,7 +4301,14 @@ if __name__ == "__main__":
                 ssl_context=ssl,
             )
         except OSError as exc:  # pragma: no cover - exercised in deployment
-            app.logger.error("Unable to start %s server on port %s: %s", label, port, exc)
+            if exc.errno == errno.EACCES:
+                app.logger.error(
+                    "Permission denied starting %s server on port %s. Run as root or grant the Python binary the 'cap_net_bind_service' capability.",
+                    label,
+                    port,
+                )
+            else:
+                app.logger.error("Unable to start %s server on port %s: %s", label, port, exc)
             raise SystemExit(1) from exc
 
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -4200,13 +4316,18 @@ if __name__ == "__main__":
         servers.append(server)
         threads.append(thread)
         app.logger.info("%s server listening on port %s", label, port)
+        return True
 
     start_server(http_port, "HTTP")
 
+    if extra_http_port is not None:
+        start_server(extra_http_port, "HTTP (PORT override)")
+
     if ssl_context:
-        if https_port == http_port:
-            https_port = 443
         start_server(https_port, "HTTPS", ssl=ssl_context)
+
+        if extra_https_port is not None:
+            start_server(extra_https_port, "HTTPS (env override)", ssl=ssl_context)
 
     wait_event = threading.Event()
     try:

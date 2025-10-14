@@ -7,6 +7,7 @@ from io import BytesIO
 import pytest
 
 from app import (
+    AdminUser,
     BrandingAsset,
     Client,
     Document,
@@ -337,6 +338,8 @@ def test_admin_can_view_security_settings(client):
     assert response.status_code == 200
     assert b"HTTPS &amp; Certificates" in response.data
     assert b"Request certificate" in response.data
+    assert b"Portal administrators" in response.data
+    assert b"Add administrator" in response.data
 
 
 def test_admin_can_save_tls_settings(app, client):
@@ -394,9 +397,36 @@ def test_tls_provision_records_error_when_certbot_missing(app, client, monkeypat
     with app.app_context():
         tls_config = TLSConfig.query.first()
         assert tls_config is not None
-        assert tls_config.status == "error"
-        assert tls_config.last_error is not None
-        assert "certbot" in tls_config.last_error.lower()
+    assert tls_config.status == "error"
+    assert tls_config.last_error is not None
+    assert "certbot" in tls_config.last_error.lower()
+
+
+def test_admin_can_create_additional_admin_user(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/dashboard/security/admins",
+        data={
+            "username": "opslead",
+            "email": "opslead@example.com",
+            "password": "StrongPass!2",
+            "confirm_password": "StrongPass!2",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Admin account created successfully." in response.data
+
+    with app.app_context():
+        new_admin = AdminUser.query.filter_by(username="opslead").one()
+        assert new_admin.email == "opslead@example.com"
+        assert new_admin.check_password("StrongPass!2")
 
 
 def test_admin_can_add_customer_via_dashboard(app, client):

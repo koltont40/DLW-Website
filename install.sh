@@ -68,15 +68,12 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-python -c "from app import init_db; init_db()"
-
-export FLASK_APP=app
-export FLASK_RUN_HOST=0.0.0.0
-export FLASK_RUN_PORT=${PORT:-8000}
+python3 -c "from app import init_db; init_db()"
 
 echo
-echo "Launching the development server on http://$FLASK_RUN_HOST:$FLASK_RUN_PORT"
+echo "Launching the application on ports 80 (HTTP) and 443 (HTTPS when certificates exist)."
+echo "If you encounter a permission error binding to port 80, rerun this script with sudo or grant Python the cap_net_bind_service capability."
 echo "Admin login -> Username: ${ADMIN_USERNAME:-admin} | Password: ${ADMIN_PASSWORD:-admin123}"
 echo "Press CTRL+C to stop the server."
 
-exec flask run
+exec python3 app.py
