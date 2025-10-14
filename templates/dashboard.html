@@ -26,6 +26,10 @@
         <a class="sidebar-link {% if active_section == 'blog' %}active{% endif %}" href="{{ url_for('dashboard', section='blog') }}">Blog</a>
         <a class="sidebar-link {% if active_section == 'legal' %}active{% endif %}" href="{{ url_for('dashboard', section='legal') }}">Legal</a>
       </div>
+      <div class="sidebar-group">
+        <span class="sidebar-group-label">Infrastructure</span>
+        <a class="sidebar-link {% if active_section == 'security' %}active{% endif %}" href="{{ url_for('dashboard', section='security') }}">Security</a>
+      </div>
     </nav>
     <div class="sidebar-footer">
       <a class="button secondary" href="{{ url_for('logout') }}">Log out</a>
@@ -1656,6 +1660,116 @@
         {% else %}
         <p class="subtle">No posts yet. Draft your first update to keep subscribers informed.</p>
         {% endif %}
+      </div>
+    </section>
+    {% elif active_section == 'security' %}
+    <section class="card security-card" id="security">
+      <header class="section-header">
+        <div>
+          <h2>HTTPS &amp; Certificates</h2>
+          <p class="subtle">Issue Let's Encrypt certificates so the dashboard serves securely on port 443.</p>
+        </div>
+      </header>
+      <div class="security-grid">
+        <article class="security-panel">
+          <div class="tls-status-header">
+            <h3>Certificate status</h3>
+            {% set tls_status = tls_config.status if tls_config else 'pending' %}
+            {% set status_label = 'Pending' %}
+            {% set status_class = 'status-pending' %}
+            {% if tls_status == 'active' and tls_certificate_ready %}
+            {% set status_label = 'Active' %}
+            {% set status_class = 'status-active' %}
+            {% elif tls_status == 'error' %}
+            {% set status_label = 'Error' %}
+            {% set status_class = 'status-disabled' %}
+            {% endif %}
+            <span class="status-pill {{ status_class }}">{{ status_label }}</span>
+          </div>
+          <dl class="tls-metadata">
+            <div>
+              <dt>Domain</dt>
+              <dd>{{ tls_config.domain if tls_config and tls_config.domain else 'Not configured' }}</dd>
+            </div>
+            <div>
+              <dt>Contact email</dt>
+              <dd>{{ tls_config.contact_email if tls_config and tls_config.contact_email else 'Not configured' }}</dd>
+            </div>
+            <div>
+              <dt>Auto renew</dt>
+              <dd>{{ 'Enabled' if tls_config and tls_config.auto_renew else 'Manual' }}</dd>
+            </div>
+            <div>
+              <dt>Last provisioned</dt>
+              <dd>
+                {% if tls_config and tls_config.last_provisioned_at %}
+                {{ tls_config.last_provisioned_at.strftime('%b %d, %Y %I:%M %p') }}
+                {% else %}
+                Never
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Certificate path</dt>
+              <dd>
+                {% if tls_config and tls_config.certificate_path %}
+                <code>{{ tls_config.certificate_path }}</code>
+                {% else %}
+                Pending
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Private key path</dt>
+              <dd>
+                {% if tls_config and tls_config.private_key_path %}
+                <code>{{ tls_config.private_key_path }}</code>
+                {% else %}
+                Pending
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Challenge folder</dt>
+              <dd><code>{{ (tls_config.challenge_path if tls_config and tls_config.challenge_path else tls_challenge_folder) }}</code></dd>
+            </div>
+          </dl>
+          <p class="subtle tls-hint">The application listens on HTTP port 80 and automatically upgrades to HTTPS on port 443 when a valid certificate is available.</p>
+          {% if tls_certificate_ready %}
+          <p class="subtle success-text">Restart the Flask service to begin serving traffic over HTTPS.</p>
+          {% else %}
+          <p class="subtle">When you request a certificate we answer challenges from <code>/.well-known/acme-challenge/</code>.</p>
+          {% endif %}
+          {% if tls_config and tls_config.last_error %}
+          <p class="alert subtle">Last error: {{ tls_config.last_error }}</p>
+          {% endif %}
+        </article>
+        <article class="security-panel">
+          <h3>Provision certificate</h3>
+          <form class="stacked-form" method="post" action="{{ url_for('configure_tls') }}">
+            <label>
+              Domain name
+              <input type="text" name="domain" placeholder="secure.example.com" value="{{ tls_config.domain if tls_config else '' }}" required />
+            </label>
+            <label>
+              Contact email
+              <input type="email" name="contact_email" placeholder="you@example.com" value="{{ tls_config.contact_email if tls_config else '' }}" required />
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" name="auto_renew" {% if tls_config and tls_config.auto_renew %}checked{% endif %} />
+              <span>Automatically renew with the same settings</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" name="use_staging" {% if tls_config and tls_config.use_staging %}checked{% endif %} />
+              <span>Use Let's Encrypt staging (testing)</span>
+            </label>
+            <div class="form-actions dual-action">
+              <button class="button secondary" type="submit" name="action" value="save">Save settings</button>
+              <button class="button primary" type="submit" name="action" value="provision">Request certificate</button>
+            </div>
+            <p class="subtle">Ensure port 80 is reachable and forward port 443 to this service so browsers load the dashboard at <code>https://{{ tls_config.domain or 'your-domain' }}</code>.</p>
+          </form>
+        </article>
       </div>
     </section>
     {% elif active_section == 'legal' %}

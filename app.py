@@ -2,7 +2,9 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import string
+import subprocess
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -660,6 +662,34 @@ class DownDetectorConfig(db.Model):
         return f"<DownDetectorConfig target={self.target_url}>"
 
 
+class TLSConfig(db.Model):
+    __tablename__ = "tls_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    domain = db.Column(db.String(255))
+    contact_email = db.Column(db.String(255))
+    certificate_path = db.Column(db.String(500))
+    private_key_path = db.Column(db.String(500))
+    challenge_path = db.Column(db.String(500))
+    auto_renew = db.Column(db.Boolean, nullable=False, default=True)
+    use_staging = db.Column(db.Boolean, nullable=False, default=False)
+    status = db.Column(db.String(50), nullable=False, default="pending")
+    last_error = db.Column(db.Text)
+    last_provisioned_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def certificate_ready(self) -> bool:
+        return bool(
+            self.certificate_path
+            and self.private_key_path
+            and Path(self.certificate_path).exists()
+            and Path(self.private_key_path).exists()
+        )
+
+
 class BlogPost(db.Model):
     __tablename__ = "blog_posts"
 
@@ -707,6 +737,10 @@ def create_app(test_config: dict | None = None) -> Flask:
         "INSTALL_PHOTOS_FOLDER": str(instance_path / "install_photos"),
         "CLIENT_VERIFICATION_FOLDER": str(instance_path / "verification"),
         "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(instance_path / "ticket_attachments"),
+        "TLS_CHALLENGE_FOLDER": str(instance_path / "acme-challenges"),
+        "TLS_CONFIG_FOLDER": str(instance_path / "letsencrypt"),
+        "TLS_WORK_FOLDER": str(instance_path / "letsencrypt-work"),
+        "TLS_LOG_FOLDER": str(instance_path / "letsencrypt-logs"),
         "CONTACT_EMAIL": os.environ.get("CONTACT_EMAIL", "hello@example.com"),
         "SNMP_TRAP_HOST": os.environ.get("SNMP_TRAP_HOST"),
         "SNMP_TRAP_PORT": snmp_port,
@@ -734,6 +768,10 @@ def create_app(test_config: dict | None = None) -> Flask:
             "INSTALL_PHOTOS_FOLDER",
             "CLIENT_VERIFICATION_FOLDER",
             "SUPPORT_TICKET_ATTACHMENT_FOLDER",
+            "TLS_CHALLENGE_FOLDER",
+            "TLS_CONFIG_FOLDER",
+            "TLS_WORK_FOLDER",
+            "TLS_LOG_FOLDER",
         ]:
             folder_path = Path(app.config[folder_key])
             folder_path.mkdir(parents=True, exist_ok=True)
@@ -745,6 +783,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
         ensure_down_detector_configuration()
+        ensure_tls_configuration()
 
     return app
 
@@ -762,6 +801,65 @@ def init_db() -> None:
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
         ensure_down_detector_configuration()
+        ensure_tls_configuration()
+
+
+def issue_lets_encrypt_certificate(
+    app: Flask, config: TLSConfig, *, staging: bool = False
+) -> tuple[bool, str | None, Path | None, Path | None]:
+    domain = (config.domain or "").strip()
+    contact_email = (config.contact_email or "").strip()
+    if not domain or not contact_email:
+        return False, "Domain and contact email are required before provisioning.", None, None
+
+    certbot_path = shutil.which("certbot")
+    if not certbot_path:
+        return False, "Certbot is not installed on this system.", None, None
+
+    challenge_folder = Path(app.config["TLS_CHALLENGE_FOLDER"])
+    config_folder = Path(app.config["TLS_CONFIG_FOLDER"])
+    work_folder = Path(app.config["TLS_WORK_FOLDER"])
+    log_folder = Path(app.config["TLS_LOG_FOLDER"])
+
+    for folder in (challenge_folder, config_folder, work_folder, log_folder):
+        folder.mkdir(parents=True, exist_ok=True)
+
+    command = [
+        certbot_path,
+        "certonly",
+        "--non-interactive",
+        "--agree-tos",
+        "--webroot",
+        "-w",
+        str(challenge_folder),
+        "-d",
+        domain,
+        "--email",
+        contact_email,
+        "--config-dir",
+        str(config_folder),
+        "--work-dir",
+        str(work_folder),
+        "--logs-dir",
+        str(log_folder),
+    ]
+
+    if staging:
+        command.append("--test-cert")
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        error_output = result.stderr.strip() or result.stdout.strip()
+        message = error_output or "Certbot failed without output."
+        return False, message, None, None
+
+    cert_dir = config_folder / "live" / domain
+    cert_path = cert_dir / "fullchain.pem"
+    key_path = cert_dir / "privkey.pem"
+    if not cert_path.exists() or not key_path.exists():
+        return False, "Certificate files were not found after provisioning.", None, None
+
+    return True, None, cert_path, key_path
 
 
 def send_email_via_snmp(app: Flask, recipient: str, subject: str, body: str) -> bool:
@@ -1141,6 +1239,18 @@ def ensure_down_detector_configuration() -> None:
     db.session.commit()
 
 
+def ensure_tls_configuration() -> None:
+    config = TLSConfig.query.first()
+    desired_path = current_app.config.get("TLS_CHALLENGE_FOLDER")
+    if config is None:
+        config = TLSConfig(challenge_path=desired_path)
+        db.session.add(config)
+        db.session.commit()
+    elif desired_path and config.challenge_path != desired_path:
+        config.challenge_path = desired_path
+        db.session.commit()
+
+
 def get_effective_snmp_settings(app: Flask) -> dict[str, str | int | None]:
     settings: dict[str, str | int | None] = {
         "host": app.config.get("SNMP_TRAP_HOST"),
@@ -1354,6 +1464,17 @@ def register_routes(app: Flask) -> None:
             "down_detector_config": down_detector_config,
             "plan_category_links": plan_category_links,
         }
+
+    @app.route("/.well-known/acme-challenge/<token>")
+    def acme_http_challenge(token: str):
+        if "/" in token or "\\" in token or token.startswith("."):
+            abort(404)
+
+        challenge_dir = Path(app.config["TLS_CHALLENGE_FOLDER"])
+        file_path = challenge_dir / token
+        if not file_path.exists():
+            abort(404)
+        return send_from_directory(challenge_dir, token)
 
     @app.route("/")
     def index():
@@ -2139,6 +2260,7 @@ def register_routes(app: Flask) -> None:
             "blog",
             "plans",
             "field",
+            "security",
         }
         if active_section not in valid_sections:
             active_section = "overview"
@@ -2159,6 +2281,9 @@ def register_routes(app: Flask) -> None:
         selected_client_missing_categories: list[str] = []
         selected_client_service_groups: list[tuple[str, str]] = []
         selected_client_portal_enabled = False
+        tls_config: TLSConfig | None = None
+        tls_certificate_ready = False
+        tls_challenge_folder = current_app.config.get("TLS_CHALLENGE_FOLDER")
         if active_section in {
             "customers",
             "billing",
@@ -2370,6 +2495,10 @@ def register_routes(app: Flask) -> None:
                 ]
                 field_requirements[ap.id] = missing
 
+        tls_config = TLSConfig.query.first()
+        if tls_config:
+            tls_certificate_ready = tls_config.certificate_ready()
+
         operations_snapshot = [
             {
                 "key": "customers",
@@ -2505,6 +2634,9 @@ def register_routes(app: Flask) -> None:
             install_photo_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
             field_requirements=field_requirements,
             field_photo_map=field_photo_map,
+            tls_config=tls_config,
+            tls_certificate_ready=tls_certificate_ready,
+            tls_challenge_folder=tls_challenge_folder,
         )
 
     @app.get("/dashboard/customers/<int:client_id>")
@@ -3531,6 +3663,60 @@ def register_routes(app: Flask) -> None:
         flash("SNMP settings updated.", "success")
         return _redirect_back_to_dashboard("support")
 
+    @app.post("/dashboard/security/tls")
+    @login_required
+    def configure_tls():
+        tls_config = TLSConfig.query.first()
+        if tls_config is None:
+            tls_config = TLSConfig(
+                challenge_path=current_app.config.get("TLS_CHALLENGE_FOLDER")
+            )
+            db.session.add(tls_config)
+
+        domain = (request.form.get("domain", "").strip().lower() or None)
+        contact_email = request.form.get("contact_email", "").strip() or None
+        auto_renew = bool(request.form.get("auto_renew"))
+        staging = bool(request.form.get("use_staging"))
+        action = request.form.get("action", "save")
+
+        tls_config.domain = domain
+        tls_config.contact_email = contact_email
+        tls_config.auto_renew = auto_renew
+        tls_config.use_staging = staging
+        tls_config.challenge_path = current_app.config.get("TLS_CHALLENGE_FOLDER")
+
+        if action == "provision":
+            success, error_message, cert_path, key_path = issue_lets_encrypt_certificate(
+                current_app, tls_config, staging=staging
+            )
+            if success:
+                tls_config.certificate_path = str(cert_path) if cert_path else None
+                tls_config.private_key_path = str(key_path) if key_path else None
+                tls_config.status = "active"
+                tls_config.last_error = None
+                tls_config.last_provisioned_at = utcnow()
+                flash(
+                    "Certificate issued successfully. Restart the app to serve HTTPS.",
+                    "success",
+                )
+            else:
+                tls_config.status = "error"
+                tls_config.last_error = error_message
+                flash(
+                    f"Certificate request failed: {error_message}",
+                    "danger",
+                )
+        else:
+            tls_config.last_error = None if tls_config.certificate_ready() else tls_config.last_error
+            tls_config.status = (
+                "active" if tls_config.certificate_ready() else "pending"
+            )
+            flash("TLS settings saved.", "success")
+
+        db.session.commit()
+
+        return redirect(url_for("dashboard", section="security"))
+
     @app.post("/down-detector/config")
     @login_required
     def update_down_detector_config():
@@ -3980,4 +4166,21 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    default_port = 80
+    ssl_context: tuple[str, str] | None = None
+
+    with app.app_context():
+        tls_config = TLSConfig.query.first()
+        if tls_config and tls_config.certificate_ready():
+            ssl_context = (
+                str(Path(tls_config.certificate_path)),
+                str(Path(tls_config.private_key_path)),
+            )
+            default_port = 443
+
+    port_value = int(os.environ.get("PORT", default_port))
+    run_kwargs = {"host": "0.0.0.0", "port": port_value}
+    if ssl_context:
+        run_kwargs["ssl_context"] = ssl_context
+
+    app.run(**run_kwargs)

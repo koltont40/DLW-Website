@@ -2505,6 +2505,83 @@ body {
   font-size: 0.85rem;
 }
 
+.security-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.security-panel {
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  background: var(--surface);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.08);
+}
+
+.security-panel code {
+  background: rgba(148, 163, 184, 0.15);
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.tls-status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.tls-metadata {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.85rem 1.25rem;
+  margin: 0;
+}
+
+.tls-metadata div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.tls-metadata dt {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.tls-metadata dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--secondary);
+}
+
+.tls-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.success-text {
+  margin: 0;
+  font-weight: 600;
+  color: var(--success);
+}
+
+.form-actions.dual-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .status-pill.status-active {
   background: rgba(34, 197, 94, 0.2);
   color: #86efac;

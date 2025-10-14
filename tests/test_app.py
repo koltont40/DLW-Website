@@ -18,6 +18,7 @@ from app import (
     SNMPConfig,
     Technician,
     DownDetectorConfig,
+    TLSConfig,
     NavigationItem,
     BlogPost,
     SupportTicket,
@@ -38,6 +39,10 @@ def app(tmp_path):
     install_folder = tmp_path / "install_photos"
     verification_folder = tmp_path / "verification"
     ticket_attachment_folder = tmp_path / "ticket_attachments"
+    tls_challenge_folder = tmp_path / "acme-challenges"
+    tls_config_folder = tmp_path / "letsencrypt"
+    tls_work_folder = tmp_path / "letsencrypt-work"
+    tls_log_folder = tmp_path / "letsencrypt-logs"
 
     app = create_app(
         {
@@ -49,6 +54,10 @@ def app(tmp_path):
             "INSTALL_PHOTOS_FOLDER": str(install_folder),
             "CLIENT_VERIFICATION_FOLDER": str(verification_folder),
             "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(ticket_attachment_folder),
+            "TLS_CHALLENGE_FOLDER": str(tls_challenge_folder),
+            "TLS_CONFIG_FOLDER": str(tls_config_folder),
+            "TLS_WORK_FOLDER": str(tls_work_folder),
+            "TLS_LOG_FOLDER": str(tls_log_folder),
         }
     )
 
@@ -314,6 +323,80 @@ def test_admin_can_login_and_view_dashboard(client):
     branding_response = client.get("/dashboard?section=branding", follow_redirects=True)
     assert branding_response.status_code == 200
     assert b"Branding Assets" in branding_response.data
+
+
+def test_admin_can_view_security_settings(client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.get("/dashboard?section=security", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"HTTPS &amp; Certificates" in response.data
+    assert b"Request certificate" in response.data
+
+
+def test_admin_can_save_tls_settings(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/dashboard/security/tls",
+        data={
+            "domain": "secure.example.com",
+            "contact_email": "admin@example.com",
+            "auto_renew": "on",
+            "action": "save",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"TLS settings saved." in response.data
+
+    with app.app_context():
+        tls_config = TLSConfig.query.first()
+        assert tls_config is not None
+        assert tls_config.domain == "secure.example.com"
+        assert tls_config.contact_email == "admin@example.com"
+        assert tls_config.auto_renew is True
+        assert tls_config.status == "pending"
+
+
+def test_tls_provision_records_error_when_certbot_missing(app, client, monkeypatch):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    monkeypatch.setattr("app.shutil.which", lambda _: None)
+
+    response = client.post(
+        "/dashboard/security/tls",
+        data={
+            "domain": "secure.example.com",
+            "contact_email": "admin@example.com",
+            "action": "provision",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Certificate request failed" in response.data
+
+    with app.app_context():
+        tls_config = TLSConfig.query.first()
+        assert tls_config is not None
+        assert tls_config.status == "error"
+        assert tls_config.last_error is not None
+        assert "certbot" in tls_config.last_error.lower()
 
 
 def test_admin_can_add_customer_via_dashboard(app, client):
