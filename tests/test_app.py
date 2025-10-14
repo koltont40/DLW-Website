@@ -1,6 +1,7 @@
 import io
 from pathlib import Path
 from datetime import date, timedelta
+from html import escape
 from io import BytesIO
 
 import pytest
@@ -20,6 +21,7 @@ from app import (
     NavigationItem,
     BlogPost,
     SupportTicket,
+    REQUIRED_INSTALL_PHOTO_CATEGORIES,
     create_app,
     db,
     utcnow,
@@ -270,6 +272,99 @@ def test_admin_can_add_customer_via_dashboard(app, client):
     )
     assert admin_photo_response.status_code == 200
     assert admin_photo_response.data == b"admin-id"
+
+
+def test_customer_focus_view_surfaces_account_summary(app, client):
+    client.post(
+        "/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        technician = Technician(
+            name="Field Lead",
+            email="lead@example.com",
+            phone="205-555-0000",
+            password_hash=generate_password_hash("LeadPass123!"),
+            is_active=True,
+        )
+        db.session.add(technician)
+        db.session.commit()
+
+        customer = Client(
+            name="Focus Customer",
+            email="focus@example.com",
+            phone="205-555-0101",
+            address="100 Install Way, Prattville, AL",
+            status="Active",
+            residential_plan="Wireless Internet (WISP)",
+            business_plan="Business Wireless Pro",
+            wifi_router_needed=True,
+            driver_license_number="AL-0000001",
+            notes="Requires attic run for drop.",
+        )
+        db.session.add(customer)
+        db.session.commit()
+
+        invoice = Invoice(
+            client_id=customer.id,
+            description="Monthly Service",
+            amount_cents=6999,
+            status="Pending",
+        )
+        equipment = Equipment(
+            client_id=customer.id,
+            name="Subscriber Antenna",
+            model="LTU-Rocket",
+            serial_number="SN123456",
+        )
+        ticket = SupportTicket(
+            client_id=customer.id,
+            subject="Initial Setup",
+            message="Confirm install documentation.",
+            status="Open",
+        )
+        appointment = Appointment(
+            client_id=customer.id,
+            technician_id=technician.id,
+            title="On-site Activation",
+            scheduled_for=(utcnow() + timedelta(days=2)).replace(microsecond=0),
+            status="Confirmed",
+        )
+
+        install_folder = Path(app.config["INSTALL_PHOTOS_FOLDER"])
+        install_folder.mkdir(parents=True, exist_ok=True)
+        stored_filename = f"client_{customer.id}_detail.jpg"
+        (install_folder / stored_filename).write_bytes(b"photo-bytes")
+
+        photo = InstallPhoto(
+            client_id=customer.id,
+            technician_id=technician.id,
+            category=REQUIRED_INSTALL_PHOTO_CATEGORIES[0],
+            original_filename="detail.jpg",
+            stored_filename=stored_filename,
+        )
+
+        db.session.add_all([invoice, equipment, ticket, appointment, photo])
+        db.session.commit()
+        focus_id = customer.id
+
+    response = client.get(
+        "/dashboard",
+        query_string={"section": "customers", "focus": focus_id},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Focus Customer" in response.data
+    assert b"Install documentation" in response.data
+    assert b"Monthly Service" in response.data
+    assert b"Subscriber Antenna" in response.data
+    assert b"Initial Setup" in response.data
+    assert b"On-site Activation" in response.data
+    assert escape(REQUIRED_INSTALL_PHOTO_CATEGORIES[0]).encode() in response.data
+    assert escape(REQUIRED_INSTALL_PHOTO_CATEGORIES[1]).encode() in response.data
 
 
 def test_admin_can_manage_service_plans(app, client):
@@ -1076,7 +1171,7 @@ def test_technician_uploads_install_photo(app, client):
 
     upload_data = {
         "appointment_id": str(appointment_id),
-        "category": "Site Overview",
+        "category": REQUIRED_INSTALL_PHOTO_CATEGORIES[0],
         "notes": "Mounted to west gable.",
         "next": f"/tech/appointments/{appointment_id}",
         "photo": (io.BytesIO(b"fake image bytes"), "install.jpg"),

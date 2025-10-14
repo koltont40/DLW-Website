@@ -195,6 +195,188 @@
       </div>
     </section>
     {% elif active_section == 'customers' %}
+    {% if selected_client %}
+    <section class="card customer-detail-card" id="customer-detail">
+      <header class="section-header customer-detail-header">
+        <div>
+          <h2>{{ selected_client.name }}</h2>
+          <p class="subtle">
+            Account <code>{{ selected_client.account_reference }}</code>
+            • <a class="inline-link" href="mailto:{{ selected_client.email }}">{{ selected_client.email }}</a>
+          </p>
+        </div>
+        <div class="customer-detail-actions">
+          <span class="badge">{{ selected_client.status }}</span>
+          {% if selected_client_portal_enabled %}
+          <span class="badge success">Portal active</span>
+          {% else %}
+          <span class="badge warning">Portal pending</span>
+          {% endif %}
+          <a
+            class="button small ghost"
+            href="{{ url_for('dashboard', section='customers', status=status_filter) }}"
+            >Close</a
+          >
+        </div>
+      </header>
+      <div class="customer-detail-grid">
+        <article class="detail-column">
+          <h3>Contact &amp; Identity</h3>
+          <dl class="detail-list">
+            <div>
+              <dt>Phone</dt>
+              <dd>{{ selected_client.phone or 'Not provided' }}</dd>
+            </div>
+            <div>
+              <dt>Service address</dt>
+              <dd>{{ selected_client.address or 'Not provided' }}</dd>
+            </div>
+            <div>
+              <dt>Driver license</dt>
+              <dd>{{ selected_client.driver_license_number or 'Not captured' }}</dd>
+            </div>
+          </dl>
+          <div class="detail-actions">
+            {% if selected_client.phone %}
+            <a class="button small ghost" href="tel:{{ selected_client.phone }}">Call</a>
+            {% endif %}
+            <a class="button small ghost" href="mailto:{{ selected_client.email }}">Email</a>
+            {% if selected_client.verification_photo_filename %}
+            <a
+              class="button small ghost"
+              href="{{ url_for('client_verification_photo', client_id=selected_client.id) }}"
+              target="_blank"
+              rel="noopener"
+              >View verification</a
+            >
+            {% endif %}
+          </div>
+          {% if selected_client.notes %}
+          <div class="detail-note">
+            <h4>Account notes</h4>
+            <p>{{ selected_client.notes }}</p>
+          </div>
+          {% endif %}
+        </article>
+        <article class="detail-column">
+          <h3>Service summary</h3>
+          {% if selected_client_service_groups %}
+          <ul class="detail-pill-list">
+            {% for label, plan in selected_client_service_groups %}
+            <li><span class="pill">{{ label }}</span> {{ plan }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="subtle">No service plans assigned yet.</p>
+          {% endif %}
+          <p class="subtle router-state">
+            Managed Wi-Fi router:
+            <strong>{% if selected_client.wifi_router_needed %}Provided by DIXIELAND{% else %}Customer supplied{% endif %}</strong>
+          </p>
+          {% if selected_client_equipment %}
+          <h4>Installed equipment</h4>
+          <ul class="detail-stack">
+            {% for item in selected_client_equipment %}
+            <li>
+              <div class="detail-primary">{{ item.name }}</div>
+              <div class="detail-subtle">
+                {{ item.model or 'Model pending' }} • {{ item.serial_number or 'Serial pending' }}
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="subtle">No equipment on file.</p>
+          {% endif %}
+        </article>
+        <article class="detail-column">
+          <h3>Billing &amp; Support</h3>
+          {% if selected_client_invoices %}
+          <h4>Invoices</h4>
+          <ul class="detail-stack">
+            {% for invoice in selected_client_invoices %}
+            <li>
+              <div class="detail-primary">{{ invoice.description }}</div>
+              <div class="detail-subtle">
+                {{ invoice.status }} • {{ (invoice.amount_cents / 100) | currency }}
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="subtle">No invoices generated.</p>
+          {% endif %}
+          {% if selected_client_tickets %}
+          <h4>Support tickets</h4>
+          <ul class="detail-stack">
+            {% for ticket in selected_client_tickets %}
+            <li>
+              <div class="detail-primary">{{ ticket.subject }}</div>
+              <div class="detail-subtle">{{ ticket.status }} • {{ ticket.created_at.strftime('%b %d, %Y') }}</div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="subtle">No support tickets yet.</p>
+          {% endif %}
+          {% if selected_client_appointments %}
+          <h4>Appointments</h4>
+          <ul class="detail-stack">
+            {% for appointment in selected_client_appointments %}
+            <li>
+              <div class="detail-primary">{{ appointment.title }}</div>
+              <div class="detail-subtle">
+                {{ appointment.status }} • {{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}
+              </div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </article>
+      </div>
+      <div class="customer-detail-sections">
+        <section>
+          <header>
+            <h3>Install documentation</h3>
+            {% if selected_client_missing_categories %}
+            <p class="alert subtle">
+              Missing categories: {{ selected_client_missing_categories | join(', ') }}
+            </p>
+            {% else %}
+            <p class="subtle">All required photo categories are on file.</p>
+            {% endif %}
+          </header>
+          <div class="detail-photo-grid">
+            {% for category in install_photo_categories %}
+            {% set photos = selected_client_photo_map.get(category) %}
+            <article class="detail-photo-item {% if photos %}complete{% else %}missing{% endif %}">
+              <h4>{{ category }}</h4>
+              {% if photos %}
+              <div class="photo-chip-group">
+                {% for photo in photos %}
+                <a href="{{ url_for('serve_install_photo', photo_id=photo.id) }}" target="_blank" rel="noopener">View</a>
+                {% endfor %}
+              </div>
+              {% else %}
+              <p class="subtle">Upload needed</p>
+              {% endif %}
+            </article>
+            {% endfor %}
+            {% for category, photos in selected_client_photo_map.items() if category not in install_photo_categories and photos %}
+            <article class="detail-photo-item optional">
+              <h4>{{ category }}</h4>
+              <div class="photo-chip-group">
+                {% for photo in photos %}
+                <a href="{{ url_for('serve_install_photo', photo_id=photo.id) }}" target="_blank" rel="noopener">View</a>
+                {% endfor %}
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+        </section>
+      </div>
+    </section>
+    {% endif %}
     <section class="card" id="customers">
       <header class="section-header">
         <div>
@@ -336,9 +518,14 @@
           </thead>
           <tbody>
             {% for client in clients %}
-            <tr>
+            <tr class="{% if focus_client_id and client.id == focus_client_id %}selected-row{% endif %}">
               <td>
-                <strong>{{ client.name }}</strong>
+                <a
+                  class="customer-name-link {% if focus_client_id and client.id == focus_client_id %}active{% endif %}"
+                  href="{{ url_for('dashboard', section='customers', status=status_filter, focus=client.id) }}"
+                >
+                  {{ client.name }}
+                </a>
                 <div class="subtle">Joined {{ client.created_at.strftime('%b %d, %Y') }}</div>
               </td>
               <td>{{ client.email }}</td>
@@ -431,7 +618,7 @@
                   <form
                     class="inline-form verification-upload"
                     method="post"
-                    action="{{ url_for('upload_client_verification', client_id=client.id, section='customers', status=request.args.get('status')) }}"
+                    action="{{ url_for('upload_client_verification', client_id=client.id, section='customers', status=status_filter, focus=focus_client_id) }}"
                     enctype="multipart/form-data"
                   >
                     <label class="file-input small">
@@ -444,7 +631,7 @@
                   <form
                     class="inline-form verification-remove"
                     method="post"
-                    action="{{ url_for('upload_client_verification', client_id=client.id, section='customers', status=request.args.get('status')) }}"
+                    action="{{ url_for('upload_client_verification', client_id=client.id, section='customers', status=status_filter, focus=focus_client_id) }}"
                     onsubmit="return confirm('Remove the stored verification photo?');"
                   >
                     <input type="hidden" name="action" value="remove" />
@@ -454,7 +641,11 @@
                 </div>
               </td>
               <td>
-                <form id="client-status-{{ client.id }}" method="post" action="{{ url_for('update_client', client_id=client.id, section='customers', status=request.args.get('status')) }}">
+                <form
+                  id="client-status-{{ client.id }}"
+                  method="post"
+                  action="{{ url_for('update_client', client_id=client.id, section='customers', status=status_filter, focus=focus_client_id) }}"
+                >
                   <select name="status">
                     {% for option in status_options %}
                     <option value="{{ option }}" {% if client.status == option %}selected{% endif %}>{{ option }}</option>
@@ -467,7 +658,12 @@
               </td>
               <td class="action-cell">
                 <button class="button small primary" type="submit" form="client-status-{{ client.id }}">Save</button>
-                <form method="post" class="inline-form" action="{{ url_for('delete_client', client_id=client.id, section='customers', status=request.args.get('status')) }}" onsubmit="return confirm('Remove this client?');">
+                <form
+                  method="post"
+                  class="inline-form"
+                  action="{{ url_for('delete_client', client_id=client.id, section='customers', status=status_filter, focus=focus_client_id) }}"
+                  onsubmit="return confirm('Remove this client?');"
+                >
                   <button class="button small danger" type="submit">Delete</button>
                 </form>
               </td>

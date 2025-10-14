@@ -1035,6 +1035,245 @@ body {
   flex-wrap: wrap;
 }
 
+.customer-detail-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.customer-detail-header {
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.customer-detail-actions {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.badge.success {
+  background: rgba(34, 197, 94, 0.18);
+  color: var(--success);
+}
+
+.badge.warning {
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--warning);
+}
+
+.customer-detail-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.detail-column h3 {
+  margin: 0 0 0.9rem;
+}
+
+.detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.detail-list div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.detail-list dt {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.detail-list dd {
+  margin: 0;
+  color: var(--secondary);
+}
+
+.detail-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.detail-note {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  background: rgba(167, 139, 250, 0.08);
+  border: 1px solid rgba(167, 139, 250, 0.2);
+}
+
+.detail-note h4 {
+  margin: 0 0 0.5rem;
+}
+
+.detail-pill-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(167, 139, 250, 0.18);
+  color: var(--primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.detail-stack {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.detail-primary {
+  font-weight: 600;
+}
+
+.detail-subtle {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.router-state {
+  margin: 0 0 1rem;
+}
+
+.customer-detail-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.customer-detail-sections section > header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.detail-photo-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.detail-photo-item {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1rem;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.detail-photo-item.complete {
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.detail-photo-item.missing {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.detail-photo-item.optional {
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+.photo-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.photo-chip-group a {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  background: rgba(167, 139, 250, 0.22);
+  color: var(--primary);
+  text-decoration: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.photo-chip-group a:hover,
+.photo-chip-group a:focus-visible {
+  background: rgba(167, 139, 250, 0.32);
+  outline: none;
+}
+
+.customer-name-link {
+  color: var(--secondary);
+  text-decoration: none;
+  font-weight: 600;
+  transition: color 0.2s ease;
+}
+
+.customer-name-link:hover,
+.customer-name-link:focus-visible {
+  color: var(--primary);
+  text-decoration: underline;
+  outline: none;
+}
+
+.customer-name-link.active {
+  color: var(--primary);
+}
+
+.table-wrapper table tr.selected-row {
+  background: rgba(167, 139, 250, 0.12);
+}
+
+.table-wrapper table tr.selected-row:hover {
+  background: rgba(167, 139, 250, 0.18);
+}
+
+.table-wrapper table tr.selected-row td {
+  border-bottom-color: rgba(167, 139, 250, 0.35);
+}
+
+@media (max-width: 720px) {
+  .customer-detail-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .customer-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
 .file-input.small {
   padding: 0.4rem 0.65rem;
   font-size: 0.875rem;

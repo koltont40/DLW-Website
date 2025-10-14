@@ -318,10 +318,14 @@ def is_truthy(value: str | None) -> bool:
 PORTAL_SESSION_KEY = "client_portal_id"
 TECH_SESSION_KEY = "technician_portal_id"
 REQUIRED_INSTALL_PHOTO_CATEGORIES = [
-    "Site Overview",
-    "Equipment Placement",
-    "Mounting & Cabling",
-    "Speed Test",
+    "Arrival & Site Overview",
+    "Mounting Location & Hardware",
+    "Cable Path & Building Entry",
+    "Grounding & Weatherproofing",
+    "Interior Equipment & Rack",
+    "Power & Battery Backup",
+    "Customer Premise Gear & Wi-Fi",
+    "Speed Test & Service Validation",
 ]
 INSTALL_PHOTO_CATEGORY_CHOICES = REQUIRED_INSTALL_PHOTO_CATEGORIES + [
     "Additional Detail"
@@ -1985,6 +1989,16 @@ def register_routes(app: Flask) -> None:
 
         clients: list[Client] = []
         technicians: list[Technician] = []
+        focus_client_id = request.args.get("focus", type=int)
+        selected_client: Client | None = None
+        selected_client_invoices: list[Invoice] = []
+        selected_client_equipment: list[Equipment] = []
+        selected_client_tickets: list[SupportTicket] = []
+        selected_client_appointments: list[Appointment] = []
+        selected_client_photo_map: dict[str, list[InstallPhoto]] = {}
+        selected_client_missing_categories: list[str] = []
+        selected_client_service_groups: list[tuple[str, str]] = []
+        selected_client_portal_enabled = False
         if active_section in {
             "customers",
             "portal",
@@ -1997,6 +2011,62 @@ def register_routes(app: Flask) -> None:
             if status_filter:
                 query = query.filter_by(status=status_filter)
             clients = query.all()
+
+        if active_section == "customers" and focus_client_id:
+            selected_client = Client.query.get(focus_client_id)
+            if selected_client:
+                selected_client_portal_enabled = bool(selected_client.portal_password_hash)
+                selected_client_invoices = (
+                    Invoice.query.filter_by(client_id=selected_client.id)
+                    .order_by(Invoice.created_at.desc())
+                    .limit(6)
+                    .all()
+                )
+                selected_client_equipment = (
+                    Equipment.query.filter_by(client_id=selected_client.id)
+                    .order_by(Equipment.created_at.desc())
+                    .limit(6)
+                    .all()
+                )
+                selected_client_tickets = (
+                    SupportTicket.query.filter_by(client_id=selected_client.id)
+                    .order_by(SupportTicket.created_at.desc())
+                    .limit(6)
+                    .all()
+                )
+                selected_client_appointments = (
+                    Appointment.query.filter_by(client_id=selected_client.id)
+                    .order_by(Appointment.scheduled_for.desc())
+                    .limit(6)
+                    .all()
+                )
+                selected_client_photo_map = {
+                    category: [] for category in INSTALL_PHOTO_CATEGORY_CHOICES
+                }
+                client_photos = (
+                    InstallPhoto.query.filter_by(client_id=selected_client.id)
+                    .order_by(InstallPhoto.uploaded_at.desc())
+                    .all()
+                )
+                for photo in client_photos:
+                    selected_client_photo_map.setdefault(photo.category, []).append(photo)
+                selected_client_missing_categories = [
+                    category
+                    for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
+                    if not selected_client_photo_map.get(category)
+                ]
+                if selected_client.residential_plan:
+                    selected_client_service_groups.append(
+                        ("Residential", selected_client.residential_plan)
+                    )
+                if selected_client.business_plan:
+                    selected_client_service_groups.append(
+                        ("Business", selected_client.business_plan)
+                    )
+                if selected_client.phone_plan:
+                    selected_client_service_groups.append(
+                        ("Phone Service", selected_client.phone_plan)
+                    )
 
         if active_section in {"appointments", "field"}:
             technicians = (
@@ -2243,6 +2313,16 @@ def register_routes(app: Flask) -> None:
             recent_invoices=recent_invoices,
             recent_equipment=recent_equipment,
             recent_tickets=recent_tickets,
+            selected_client=selected_client,
+            selected_client_invoices=selected_client_invoices,
+            selected_client_equipment=selected_client_equipment,
+            selected_client_tickets=selected_client_tickets,
+            selected_client_appointments=selected_client_appointments,
+            selected_client_photo_map=selected_client_photo_map,
+            selected_client_missing_categories=selected_client_missing_categories,
+            selected_client_service_groups=selected_client_service_groups,
+            selected_client_portal_enabled=selected_client_portal_enabled,
+            focus_client_id=focus_client_id,
             status_filter=status_filter,
             legal_documents=documents,
             navigation_items=navigation_items,
@@ -2418,6 +2498,9 @@ def register_routes(app: Flask) -> None:
         section_value = request.args.get("section") or default_section
         if section_value:
             params["section"] = section_value
+        focus_value = request.args.get("focus")
+        if focus_value:
+            params["focus"] = focus_value
         return redirect(url_for("dashboard", **params))
 
     @app.post("/clients")
@@ -3477,11 +3560,13 @@ def register_routes(app: Flask) -> None:
             )
         db.session.commit()
         flash("Client updated successfully.", "success")
+        focus_value = request.args.get("focus")
         return redirect(
             url_for(
                 "dashboard",
                 status=request.args.get("status"),
                 section=request.args.get("section", "customers"),
+                focus=focus_value,
             )
         )
 
@@ -3492,11 +3577,15 @@ def register_routes(app: Flask) -> None:
         db.session.delete(client)
         db.session.commit()
         flash("Client removed.", "info")
+        focus_value = request.args.get("focus")
+        if focus_value and focus_value == str(client_id):
+            focus_value = None
         return redirect(
             url_for(
                 "dashboard",
                 status=request.args.get("status"),
                 section=request.args.get("section", "customers"),
+                focus=focus_value,
             )
         )
 
