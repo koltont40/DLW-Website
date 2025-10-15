@@ -11,9 +11,20 @@
       <a class="button secondary" href="{{ url_for('tech_logout') }}">Sign out</a>
     </div>
   </header>
+  <nav class="tech-quick-links" aria-label="Dashboard sections">
+    <a href="#calendar">Calendar</a>
+    <a href="#schedule">My schedule</a>
+    <a href="#jobs-current">Current jobs</a>
+    <a href="#jobs-upcoming">Upcoming jobs</a>
+    <a href="#jobs-completed">Completed jobs</a>
+  </nav>
   <section class="tech-summary">
     <div class="summary-tile">
-      <span class="summary-label">Upcoming visits</span>
+      <span class="summary-label">Current jobs</span>
+      <span class="summary-value">{{ current_appointments|length }}</span>
+    </div>
+    <div class="summary-tile">
+      <span class="summary-label">Upcoming jobs</span>
       <span class="summary-value">{{ upcoming_appointments|length }}</span>
     </div>
     <div class="summary-tile">
@@ -25,16 +36,196 @@
       <span class="summary-value">{{ recent_uploads|length }}</span>
     </div>
   </section>
-  <section class="tech-section">
+  <section id="calendar" class="tech-section">
     <header class="tech-section-header">
       <div>
-        <h2>Today's and upcoming work</h2>
+        <h2>Calendar overview</h2>
+        <p class="subtle">Shifts and installs for {{ calendar_range_label }}.</p>
+      </div>
+    </header>
+    <div class="tech-availability">
+      {% for week in dashboard_calendar_weeks %}
+      <div class="availability-week">
+        {% for day in week %}
+        <article class="availability-day{% if day.is_today %} today{% endif %}{% if day.has_jobs %} selected{% endif %}">
+          <header class="availability-day-header">
+            <span class="day-name">{{ day.date.strftime('%a') }}</span>
+            <span class="day-date">{{ day.date.strftime('%b %d') }}</span>
+          </header>
+          <div class="availability-content">
+            {% if day.blocks %}
+            <div class="availability-group">
+              <h3>Availability</h3>
+              <ul class="availability-list">
+                {% for block in day.blocks %}
+                <li class="availability-item">
+                  <span class="time-range">{{ block.time_range }}</span>
+                  {% if block.note %}<span class="note subtle">{{ block.note }}</span>{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+            {% if day.appointments %}
+            <div class="availability-group jobs">
+              <h3>Jobs</h3>
+              <ul class="availability-list">
+                {% for job in day.appointments %}
+                <li class="availability-item{% if job.is_current %} current{% endif %}">
+                  <div class="job-header">
+                    <span class="time-range">{{ job.time }}</span>
+                    {% if job.status %}<span class="status subtle">{{ job.status }}</span>{% endif %}
+                  </div>
+                  <a class="job-link" href="{{ job.link }}">{{ job.title }}</a>
+                  {% if job.client %}<span class="subtle job-client">{{ job.client }}</span>{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+            {% if not day.blocks and not day.appointments %}
+            <p class="subtle availability-empty">No availability published.</p>
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  <section id="schedule" class="tech-section">
+    <header class="tech-section-header">
+      <div>
+        <h2>Manage your schedule</h2>
+        <p class="subtle">Set the days and hours you can take on-site appointments.</p>
+      </div>
+    </header>
+    <form class="card form-card tech-schedule-form" method="post" action="{{ url_for('create_technician_schedule') }}">
+      <label>
+        Date
+        <input type="date" name="date" required />
+      </label>
+      <label>
+        Start time
+        <input type="time" name="start_time" required />
+      </label>
+      <label>
+        End time
+        <input type="time" name="end_time" required />
+      </label>
+      <label class="note-field">
+        Notes (optional)
+        <input type="text" name="note" placeholder="On-call, warehouse, etc." />
+      </label>
+      <div class="schedule-actions">
+        <button class="button primary" type="submit">Save shift</button>
+      </div>
+    </form>
+    <div class="tech-schedule">
+      <div class="tech-schedule-column">
+        <h3>Upcoming shifts</h3>
+        {% if upcoming_schedule %}
+        <ul class="schedule-list">
+          {% for block in upcoming_schedule %}
+          <li class="schedule-item">
+            <div class="schedule-meta">
+              <strong>{{ block.start_at.strftime('%b %d, %Y') }}</strong>
+              <span>{{ block.start_at.strftime('%I:%M %p') }} – {{ block.end_at.strftime('%I:%M %p') }}</span>
+              {% if block.note %}<span class="subtle">{{ block.note }}</span>{% endif %}
+              <span
+                class="schedule-status {% if block.status == 'cancel_pending' %}status-pending{% else %}status-approved{% endif %}"
+              >
+                {% if block.status == 'cancel_pending' %}
+                Cancellation pending manager approval
+                {% else %}
+                Approved shift
+                {% endif %}
+              </span>
+            </div>
+            <div class="schedule-actions-inline">
+              {% if block.status == 'cancel_pending' %}
+              <span class="subtle">Awaiting manager review.</span>
+              {% else %}
+              <form method="post" action="{{ url_for('delete_technician_schedule', block_id=block.id) }}">
+                <button class="button link" type="submit">Request cancellation</button>
+              </form>
+              {% endif %}
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="subtle">Add your upcoming availability to help dispatch plan assignments.</p>
+        {% endif %}
+      </div>
+      <div class="tech-schedule-column">
+        <h3>Recent shifts</h3>
+        {% if past_schedule %}
+        <ul class="schedule-list">
+          {% for block in past_schedule %}
+          <li class="schedule-item past">
+            <div class="schedule-meta">
+              <strong>{{ block.start_at.strftime('%b %d, %Y') }}</strong>
+              <span>{{ block.start_at.strftime('%I:%M %p') }} – {{ block.end_at.strftime('%I:%M %p') }}</span>
+              {% if block.note %}<span class="subtle">{{ block.note }}</span>{% endif %}
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="subtle">Recent shifts will appear here after they conclude.</p>
+        {% endif %}
+      </div>
+      <div class="tech-schedule-column">
+        <h3>Requests awaiting approval</h3>
+        {% if pending_schedule_requests %}
+        <ul class="schedule-list">
+          {% for block in pending_schedule_requests %}
+          <li class="schedule-item pending">
+            <div class="schedule-meta">
+              <strong>{{ block.start_at.strftime('%b %d, %Y') }}</strong>
+              <span>{{ block.start_at.strftime('%I:%M %p') }} – {{ block.end_at.strftime('%I:%M %p') }}</span>
+              <span class="schedule-status status-pending">Waiting for manager approval</span>
+              {% if block.note %}<span class="subtle">{{ block.note }}</span>{% endif %}
+            </div>
+            <form method="post" action="{{ url_for('delete_technician_schedule', block_id=block.id) }}">
+              <button class="button link" type="submit">Withdraw</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="subtle">No new requests are waiting for review.</p>
+        {% endif %}
+        {% if rejected_schedule_requests %}
+        <div class="schedule-feedback">
+          <h4>Manager responses</h4>
+          <ul class="schedule-feedback-list">
+            {% for block in rejected_schedule_requests %}
+            <li>
+              <strong>{{ block.start_at.strftime('%b %d, %Y') }}</strong>
+              <span>Request declined{% if block.review_note %}: {{ block.review_note }}{% endif %}</span>
+              <form method="post" action="{{ url_for('delete_technician_schedule', block_id=block.id) }}">
+                <button class="button link" type="submit">Dismiss</button>
+              </form>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+  <section id="jobs-current" class="tech-section">
+    <header class="tech-section-header">
+      <div>
+        <h2>Current jobs</h2>
         <p class="subtle">Tap a visit to upload photos or review install requirements.</p>
       </div>
     </header>
-    {% if upcoming_appointments %}
+    {% if current_appointments %}
     <div class="tech-visit-grid">
-      {% for appointment in upcoming_appointments %}
+      {% for appointment in current_appointments %}
       {% set missing = missing_requirements.get(appointment.client_id) or [] %}
       <article class="tech-visit-card {% if missing %}visit-open{% else %}visit-complete{% endif %}">
         <div class="visit-time">{{ appointment.scheduled_for.strftime('%b %d, %I:%M %p') }}</div>
@@ -49,12 +240,108 @@
         {% else %}
         <p class="subtle">All required photos complete.</p>
         {% endif %}
+        {% if appointment.client.address %}
+        <div class="visit-directions">
+          <a
+            class="inline-link"
+            href="https://maps.apple.com/?daddr={{ appointment.client.address | urlencode }}"
+            target="_blank"
+            rel="noopener"
+          >
+            Apple Maps
+          </a>
+          <span>•</span>
+          <a
+            class="inline-link"
+            href="https://www.google.com/maps/dir/?api=1&destination={{ appointment.client.address | urlencode }}"
+            target="_blank"
+            rel="noopener"
+          >
+            Google Maps
+          </a>
+        </div>
+        {% endif %}
         <a class="button primary" href="{{ url_for('tech_appointment_detail', appointment_id=appointment.id) }}">Open visit</a>
       </article>
       {% endfor %}
     </div>
     {% else %}
-    <p class="subtle">No upcoming assignments. Check back soon or contact dispatch for new work.</p>
+    <p class="subtle">No work scheduled right now. Check your upcoming shifts or contact dispatch.</p>
+    {% endif %}
+  </section>
+  <section id="jobs-upcoming" class="tech-section">
+    <header class="tech-section-header">
+      <div>
+        <h2>Upcoming jobs</h2>
+        <p class="subtle">Preview future assignments so you can prep gear and routes.</p>
+      </div>
+    </header>
+    {% if upcoming_appointments %}
+    <div class="tech-visit-grid">
+      {% for appointment in upcoming_appointments %}
+      {% set missing = missing_requirements.get(appointment.client_id) or [] %}
+      <article class="tech-visit-card visit-upcoming {% if missing %}visit-open{% else %}visit-complete{% endif %}">
+        <div class="visit-time">{{ appointment.scheduled_for.strftime('%b %d, %I:%M %p') }}</div>
+        <h3>{{ appointment.client.name }}</h3>
+        <p class="subtle">{{ appointment.title }}</p>
+        {% if missing %}
+        <ul class="visit-checklist">
+          {% for category in missing %}
+          <li>{{ category }}</li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="subtle">All required photos complete.</p>
+        {% endif %}
+        {% if appointment.client.address %}
+        <div class="visit-directions">
+          <a
+            class="inline-link"
+            href="https://maps.apple.com/?daddr={{ appointment.client.address | urlencode }}"
+            target="_blank"
+            rel="noopener"
+          >
+            Apple Maps
+          </a>
+          <span>•</span>
+          <a
+            class="inline-link"
+            href="https://www.google.com/maps/dir/?api=1&destination={{ appointment.client.address | urlencode }}"
+            target="_blank"
+            rel="noopener"
+          >
+            Google Maps
+          </a>
+        </div>
+        {% endif %}
+        <a class="button secondary" href="{{ url_for('tech_appointment_detail', appointment_id=appointment.id) }}">Review details</a>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="subtle">No future assignments booked. Update your availability so dispatch can schedule you.</p>
+    {% endif %}
+  </section>
+  <section id="jobs-completed" class="tech-section">
+    <header class="tech-section-header">
+      <div>
+        <h2>Completed jobs</h2>
+        <p class="subtle">Reference recent work and confirm customer records are complete.</p>
+      </div>
+    </header>
+    {% if completed_appointments %}
+    <div class="tech-visit-grid past">
+      {% for appointment in completed_appointments %}
+      <article class="tech-visit-card visit-past">
+        <div class="visit-time">{{ appointment.scheduled_for.strftime('%b %d, %I:%M %p') }}</div>
+        <h3>{{ appointment.client.name }}</h3>
+        <p class="subtle">{{ appointment.title }}</p>
+        <a class="button link" href="{{ url_for('tech_appointment_detail', appointment_id=appointment.id) }}">Review visit</a>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="subtle">Complete visits will appear here once you wrap up assignments.</p>
     {% endif %}
   </section>
   <section class="tech-section">

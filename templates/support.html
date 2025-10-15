@@ -13,7 +13,7 @@
     </p>
     <div class="support-actions">
       <a class="button primary" href="mailto:{{ contact_email }}">Email support</a>
-      <a class="button secondary" href="{{ url_for('signup') }}">Start service signup</a>
+      <a class="button secondary" href="{{ url_for('signup') }}">Sign Up Now</a>
       <a class="button ghost" href="{{ url_for('portal_login') }}">Client portal</a>
     </div>
   </div>
@@ -40,7 +40,16 @@
     <ul class="support-contact-list">
       <li><strong>Email:</strong> <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></li>
       <li><strong>Portal:</strong> <a href="{{ url_for('portal_login') }}">Secure client login</a></li>
-      <li><strong>Phone:</strong> (555) 010-1155</li>
+      {% if contact_phone_display %}
+      <li>
+        <strong>Phone:</strong>
+        {% if contact_phone_href %}
+        <a href="{{ contact_phone_href }}">{{ contact_phone_display }}</a>
+        {% else %}
+        {{ contact_phone_display }}
+        {% endif %}
+      </li>
+      {% endif %}
     </ul>
     <p class="subtle">Field technicians are available for emergencies 24/7.</p>
   </article>
@@ -61,7 +70,6 @@
     <ul class="support-link-list">
       <li><a href="{{ url_for('uptime') }}">Uptime status dashboard</a></li>
       <li><a href="{{ url_for('down_detector') }}">Down detector</a></li>
-      <li><a href="{{ url_for('service_cancellation') }}">Need to cancel service?</a></li>
     </ul>
   </article>
 </section>
