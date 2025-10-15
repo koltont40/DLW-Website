@@ -115,9 +115,18 @@ def stripe_active(app: Flask | None = None) -> bool:
 
 
 def init_stripe(app: Flask) -> None:
-    if stripe_active(app):
-        stripe.api_key = app.config["STRIPE_SECRET_KEY"]
+    if stripe is None:
+        return
+
+    secret_key = app.config.get("STRIPE_SECRET_KEY")
+    if secret_key:
+        stripe.api_key = secret_key
         stripe.default_http_client = stripe.http_client.RequestsClient()
+    else:
+        try:
+            stripe.api_key = None
+        except AttributeError:
+            pass
 
 
 def normalize_phone_number(raw: str | None) -> tuple[str | None, str | None]:
@@ -1478,6 +1487,22 @@ class DownDetectorConfig(db.Model):
         return f"<DownDetectorConfig target={self.target_url}>"
 
 
+class StripeConfig(db.Model):
+    __tablename__ = "stripe_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    secret_key = db.Column(db.String(255))
+    publishable_key = db.Column(db.String(255))
+    webhook_secret = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return "<StripeConfig>"
+
+
 class TLSConfig(db.Model):
     __tablename__ = "tls_config"
 
@@ -1656,6 +1681,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             folder_path = Path(app.config[folder_key])
             folder_path.mkdir(parents=True, exist_ok=True)
         db.create_all()
+        apply_stripe_config_from_database(app)
         ensure_billing_schema_once()
         ensure_default_admin_user()
         ensure_client_portal_fields()
@@ -1679,6 +1705,7 @@ def init_db() -> None:
     app = create_app()
     with app.app_context():
         db.create_all()
+        apply_stripe_config_from_database(app)
         ensure_billing_schema_once()
         ensure_default_admin_user()
         ensure_client_portal_fields()
@@ -2327,6 +2354,51 @@ def ensure_snmp_configuration() -> None:
     )
     db.session.add(config)
     db.session.commit()
+
+
+def apply_stripe_config_from_database(app: Flask) -> StripeConfig:
+    config = StripeConfig.query.first()
+
+    def _clean(value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    if config is None:
+        config = StripeConfig(
+            secret_key=_clean(app.config.get("STRIPE_SECRET_KEY")),
+            publishable_key=_clean(app.config.get("STRIPE_PUBLISHABLE_KEY")),
+            webhook_secret=_clean(app.config.get("STRIPE_WEBHOOK_SECRET")),
+        )
+        db.session.add(config)
+        db.session.commit()
+    else:
+        cleaned_secret = _clean(config.secret_key)
+        cleaned_publishable = _clean(config.publishable_key)
+        cleaned_webhook = _clean(config.webhook_secret)
+
+        changed = False
+        if config.secret_key != cleaned_secret:
+            config.secret_key = cleaned_secret
+            changed = True
+        if config.publishable_key != cleaned_publishable:
+            config.publishable_key = cleaned_publishable
+            changed = True
+        if config.webhook_secret != cleaned_webhook:
+            config.webhook_secret = cleaned_webhook
+            changed = True
+
+        if changed:
+            db.session.commit()
+
+    app.config["STRIPE_SECRET_KEY"] = config.secret_key
+    app.config["STRIPE_PUBLISHABLE_KEY"] = config.publishable_key
+    app.config["STRIPE_WEBHOOK_SECRET"] = config.webhook_secret
+
+    init_stripe(app)
+
+    return config
 
 
 def ensure_down_detector_configuration() -> None:
@@ -4173,6 +4245,7 @@ def register_routes(app: Flask) -> None:
         suspended_clients: list[Client] = []
         team_members: list[TeamMember] = []
         trusted_businesses: list[TrustedBusiness] = []
+        stripe_config: StripeConfig | None = None
         if active_section in {
             "customers",
             "billing",
@@ -4407,6 +4480,8 @@ def register_routes(app: Flask) -> None:
         if tls_config:
             tls_certificate_ready = tls_config.certificate_ready()
 
+        stripe_config = StripeConfig.query.first()
+
         operations_snapshot = [
             {
                 "key": "customers",
@@ -4553,6 +4628,8 @@ def register_routes(app: Flask) -> None:
             trusted_businesses=trusted_businesses,
             recent_autopay_events=recent_autopay_events,
             suspended_clients=suspended_clients,
+            stripe_config=stripe_config,
+            stripe_ready=stripe_active(),
         )
 
     @app.get("/dashboard/customers/<int:client_id>")
@@ -6075,6 +6152,44 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         flash("Administrator removed.", "info")
+        return redirect(url_for("dashboard", section="security"))
+
+    @app.post("/dashboard/security/stripe")
+    @login_required
+    def configure_stripe_settings():
+        secret_key = (request.form.get("secret_key", "") or "").strip()
+        publishable_key = (request.form.get("publishable_key", "") or "").strip()
+        webhook_secret = (request.form.get("webhook_secret", "") or "").strip()
+
+        config = StripeConfig.query.first()
+        if config is None:
+            config = StripeConfig()
+            db.session.add(config)
+
+        config.secret_key = secret_key or None
+        config.publishable_key = publishable_key or None
+        config.webhook_secret = webhook_secret or None
+        config.updated_at = utcnow()
+
+        db.session.commit()
+
+        current_app.config["STRIPE_SECRET_KEY"] = config.secret_key
+        current_app.config["STRIPE_PUBLISHABLE_KEY"] = config.publishable_key
+        current_app.config["STRIPE_WEBHOOK_SECRET"] = config.webhook_secret
+
+        init_stripe(current_app)
+
+        if config.secret_key and config.publishable_key:
+            flash(
+                "Stripe configuration saved. Customer payments and autopay are ready.",
+                "success",
+            )
+        else:
+            flash(
+                "Stripe configuration saved. Provide both API keys to enable card payments.",
+                "info",
+            )
+
         return redirect(url_for("dashboard", section="security"))
 
     @app.post("/dashboard/security/tls")

@@ -32,6 +32,7 @@ from app import (
     SiteTheme,
     TeamMember,
     TrustedBusiness,
+    StripeConfig,
     REQUIRED_INSTALL_PHOTO_CATEGORIES,
     create_app,
     db,
@@ -697,6 +698,70 @@ def test_admin_can_create_additional_admin_user(app, client):
         new_admin = AdminUser.query.filter_by(username="opslead").one()
         assert new_admin.email == "opslead@example.com"
         assert new_admin.check_password("StrongPass!2")
+
+
+def test_admin_can_save_stripe_configuration(app, client):
+    login_admin(client)
+
+    response = client.post(
+        "/dashboard/security/stripe",
+        data={
+            "secret_key": "sk_live_configured",
+            "publishable_key": "pk_live_configured",
+            "webhook_secret": "whsec_configured",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Stripe configuration saved." in response.data
+
+    with app.app_context():
+        config = StripeConfig.query.first()
+        assert config is not None
+        assert config.secret_key == "sk_live_configured"
+        assert config.publishable_key == "pk_live_configured"
+        assert config.webhook_secret == "whsec_configured"
+        assert app.config["STRIPE_SECRET_KEY"] == "sk_live_configured"
+        assert app.config["STRIPE_PUBLISHABLE_KEY"] == "pk_live_configured"
+        assert app.config["STRIPE_WEBHOOK_SECRET"] == "whsec_configured"
+
+
+def test_admin_can_disable_stripe_configuration(app, client):
+    login_admin(client)
+
+    client.post(
+        "/dashboard/security/stripe",
+        data={
+            "secret_key": "sk_live_enabled",
+            "publishable_key": "pk_live_enabled",
+            "webhook_secret": "whsec_enabled",
+        },
+        follow_redirects=True,
+    )
+
+    response = client.post(
+        "/dashboard/security/stripe",
+        data={
+            "secret_key": "",
+            "publishable_key": "",
+            "webhook_secret": "",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Provide both API keys" in response.data
+
+    with app.app_context():
+        config = StripeConfig.query.first()
+        assert config is not None
+        assert config.secret_key is None
+        assert config.publishable_key is None
+        assert config.webhook_secret is None
+        assert app.config["STRIPE_SECRET_KEY"] is None
+        assert app.config["STRIPE_PUBLISHABLE_KEY"] is None
+        assert app.config["STRIPE_WEBHOOK_SECRET"] is None
 
 
 def test_admin_can_add_customer_via_dashboard(app, client):

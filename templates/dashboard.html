@@ -2035,6 +2035,97 @@
         </article>
         <article class="security-panel">
           <div class="tls-status-header">
+            <h3>Stripe payments</h3>
+            {% set stripe_status = 'Disabled' %}
+            {% set stripe_status_class = 'status-disabled' %}
+            {% if stripe_ready %}
+            {% set stripe_status = 'Active' %}
+            {% set stripe_status_class = 'status-active' %}
+            {% endif %}
+            <span class="status-pill {{ stripe_status_class }}">{{ stripe_status }}</span>
+          </div>
+          <p class="subtle">Connect your Stripe account to power autopay, customer payments, and refunds.</p>
+          <dl class="tls-metadata">
+            <div>
+              <dt>Secret key</dt>
+              <dd>
+                {% if stripe_config and stripe_config.secret_key %}
+                <code>{{ stripe_config.secret_key }}</code>
+                {% else %}
+                Not set
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Publishable key</dt>
+              <dd>
+                {% if stripe_config and stripe_config.publishable_key %}
+                <code>{{ stripe_config.publishable_key }}</code>
+                {% else %}
+                Not set
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Webhook secret</dt>
+              <dd>
+                {% if stripe_config and stripe_config.webhook_secret %}
+                <code>{{ stripe_config.webhook_secret }}</code>
+                {% else %}
+                Not set
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Last updated</dt>
+              <dd>
+                {% if stripe_config and stripe_config.updated_at %}
+                {{ stripe_config.updated_at.strftime('%b %d, %Y %I:%M %p') }}
+                {% else %}
+                Never
+                {% endif %}
+              </dd>
+            </div>
+          </dl>
+          <form class="stacked-form" method="post" action="{{ url_for('configure_stripe_settings') }}">
+            <label>
+              Secret key
+              <input
+                type="text"
+                name="secret_key"
+                value="{{ stripe_config.secret_key if stripe_config and stripe_config.secret_key else '' }}"
+                placeholder="sk_live_..."
+                autocomplete="off"
+              />
+            </label>
+            <label>
+              Publishable key
+              <input
+                type="text"
+                name="publishable_key"
+                value="{{ stripe_config.publishable_key if stripe_config and stripe_config.publishable_key else '' }}"
+                placeholder="pk_live_..."
+                autocomplete="off"
+              />
+            </label>
+            <label>
+              Webhook secret
+              <input
+                type="text"
+                name="webhook_secret"
+                value="{{ stripe_config.webhook_secret if stripe_config and stripe_config.webhook_secret else '' }}"
+                placeholder="whsec_..."
+                autocomplete="off"
+              />
+            </label>
+            <div class="form-actions">
+              <button class="button secondary" type="submit">Save Stripe settings</button>
+            </div>
+            <p class="subtle">Leave fields blank to disable Stripe-powered payments until you're ready.</p>
+          </form>
+        </article>
+        <article class="security-panel">
+          <div class="tls-status-header">
             <h3>Certificate status</h3>
             {% set tls_status = tls_config.status if tls_config else 'pending' %}
             {% set status_label = 'Pending' %}
