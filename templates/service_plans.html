@@ -7,7 +7,7 @@
     Choose the DixieLand Wireless package that fits your home or business. All plans include friendly local
     support and access to the customer portal for billing, appointments, and equipment details.
   </p>
-  <a class="button primary" href="{{ url_for('signup') }}">Start your signup</a>
+  <a class="button primary" href="{{ url_for('signup') }}">Sign Up Now</a>
 </section>
 {% if plans_by_category %}
   {% for category, plans in plans_by_category %}
@@ -43,7 +43,7 @@
         </ul>
         {% endif %}
         <footer class="plan-footer">
-          <a class="button secondary" href="{{ url_for('signup') }}?plan={{ plan.name | urlencode }}">Select plan</a>
+          <a class="button secondary" href="{{ url_for('signup') }}?plan={{ plan.name | urlencode }}">Sign Up for this plan</a>
         </footer>
       </article>
       {% endfor %}
