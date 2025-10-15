@@ -2260,6 +2260,135 @@ def test_admin_can_send_manual_snmp_email(app, client):
     ]
 
 
+def test_invoice_notifications_sent_on_create_and_update(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    login_admin(client)
+
+    with app.app_context():
+        customer = Client(
+            name="Billing Notice",
+            email="billing@example.com",
+            status="Active",
+        )
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    response = client.post(
+        f"/clients/{customer_id}/invoices",
+        data={
+            "description": "Installation deposit",
+            "amount": "150.00",
+            "due_date": "2024-02-01",
+            "status": "Pending",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "billing@example.com"
+    assert subject.startswith("Invoice posted: Installation deposit")
+    assert "new invoice" in body.lower()
+    assert "$150.00" in body
+    assert "Due date: 2024-02-01" in body
+
+    with app.app_context():
+        invoice = Invoice.query.filter_by(client_id=customer_id).one()
+        invoice_id = invoice.id
+
+    notifications.clear()
+
+    response = client.post(
+        f"/invoices/{invoice_id}/update",
+        data={
+            "description": "Installation deposit",
+            "amount": "175.00",
+            "due_date": "2024-02-15",
+            "status": "Pending",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "billing@example.com"
+    assert subject.startswith("Invoice updated: Installation deposit")
+    assert "updated your invoice" in body
+    assert "$175.00" in body
+    assert "Due date: 2024-02-15" in body
+
+
+def test_equipment_notifications_sent_on_create_and_update(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    login_admin(client)
+
+    with app.app_context():
+        customer = Client(
+            name="Equipment Notice",
+            email="gear@example.com",
+            status="Active",
+        )
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    response = client.post(
+        f"/clients/{customer_id}/equipment",
+        data={
+            "name": "Customer Router",
+            "model": "XR500",
+            "serial_number": "SN-100",
+            "notes": "Initial install",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "gear@example.com"
+    assert subject.startswith("Equipment added: Customer Router")
+    assert "new equipment" in body.lower()
+    assert "Customer Router" in body
+
+    with app.app_context():
+        equipment = Equipment.query.filter_by(client_id=customer_id).one()
+        equipment_id = equipment.id
+
+    notifications.clear()
+
+    response = client.post(
+        f"/equipment/{equipment_id}/update",
+        data={
+            "name": "Customer Router",
+            "model": "XR500",
+            "serial_number": "SN-100",
+            "installed_on": date(2024, 1, 15).strftime("%Y-%m-%d"),
+            "notes": "Mounted in hallway",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "gear@example.com"
+    assert subject.startswith("Equipment updated: Customer Router")
+    assert "mounted in hallway" in body.lower()
+    assert "Installed on: 2024-01-15" in body
+
+
 def test_admin_can_update_snmp_settings(app, client):
     login_admin(client)
 
