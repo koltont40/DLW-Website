@@ -3906,7 +3906,19 @@ def register_routes(app: Flask) -> None:
         recent = past_appointments[:5]
         displayed_past = past_appointments[:10]
 
-        upcoming_combined = today_appointments + future_appointments
+        current_appointments = today_appointments
+        upcoming_appointments = future_appointments
+        completed_appointments = displayed_past
+
+        def _coerce_utc(dt: datetime | None) -> datetime:
+            if dt is None:
+                return now
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
+
+        def _format_time(dt: datetime) -> str:
+            return dt.strftime("%I:%M %p").lstrip("0")
 
         schedule_blocks = (
             TechnicianSchedule.query.filter_by(technician_id=technician.id)
@@ -3937,6 +3949,119 @@ def register_routes(app: Flask) -> None:
             key=lambda block: _with_utc(block.start_at),
             reverse=True,
         )[:5]
+
+        calendar_reference: datetime | None = None
+        for candidate in [
+            *(appointment.scheduled_for for appointment in appointments),
+            *(block.start_at for block in schedule_blocks),
+        ]:
+            if candidate is not None:
+                calendar_reference = candidate
+                break
+
+        display_tz = (
+            calendar_reference.tzinfo
+            if calendar_reference is not None and calendar_reference.tzinfo
+            else UTC
+        )
+        display_now = now.astimezone(display_tz)
+        calendar_start_display = display_now.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        calendar_start_display -= timedelta(days=calendar_start_display.weekday())
+        calendar_days = 14
+        calendar_start = calendar_start_display.astimezone(UTC)
+        calendar_end = calendar_start + timedelta(days=calendar_days)
+
+        relevant_schedule = [
+            block
+            for block in schedule_blocks
+            if _coerce_utc(block.end_at) >= calendar_start
+            and _coerce_utc(block.start_at) < calendar_end
+        ]
+
+        relevant_appointments = [
+            visit
+            for visit in appointments
+            if calendar_start
+            <= _coerce_utc(visit.scheduled_for)
+            < calendar_end
+        ]
+
+        current_appointment_ids = {ap.id for ap in today_appointments}
+        calendar_days_payload: list[dict[str, object]] = []
+        for offset in range(calendar_days):
+            day_start_utc = calendar_start + timedelta(days=offset)
+            day_end_utc = day_start_utc + timedelta(days=1)
+            day_display = day_start_utc.astimezone(display_tz)
+
+            block_entries: list[tuple[datetime, dict[str, str]]] = []
+            for block in relevant_schedule:
+                block_start_utc = _coerce_utc(block.start_at)
+                block_end_utc = _coerce_utc(block.end_at)
+                if block_end_utc <= day_start_utc or block_start_utc >= day_end_utc:
+                    continue
+                start_display = block_start_utc.astimezone(display_tz)
+                end_display = block_end_utc.astimezone(display_tz)
+                block_entries.append(
+                    (
+                        block_start_utc,
+                        {
+                            "time_range": f"{_format_time(start_display)} – {_format_time(end_display)}",
+                            "note": block.note or "",
+                        },
+                    )
+                )
+
+            block_entries.sort(key=lambda item: item[0])
+            day_blocks = [payload for _, payload in block_entries]
+
+            job_entries: list[tuple[datetime, dict[str, object]]] = []
+            for visit in relevant_appointments:
+                visit_start_utc = _coerce_utc(visit.scheduled_for)
+                if not (day_start_utc <= visit_start_utc < day_end_utc):
+                    continue
+                visit_display = visit_start_utc.astimezone(display_tz)
+                job_entries.append(
+                    (
+                        visit_start_utc,
+                        {
+                            "time": _format_time(visit_display),
+                            "title": visit.title,
+                            "client": visit.client.name if visit.client else "",
+                            "status": visit.status,
+                            "link": url_for(
+                                "tech_appointment_detail", appointment_id=visit.id
+                            ),
+                            "is_current": visit.id in current_appointment_ids,
+                        },
+                    )
+                )
+
+            job_entries.sort(key=lambda item: item[0])
+            day_jobs = [payload for _, payload in job_entries]
+
+            calendar_days_payload.append(
+                {
+                    "date": day_display,
+                    "is_today": day_display.date() == display_now.date(),
+                    "has_jobs": bool(day_jobs),
+                    "blocks": day_blocks,
+                    "appointments": day_jobs,
+                }
+            )
+
+        dashboard_calendar_weeks = [
+            calendar_days_payload[i : i + 7]
+            for i in range(0, len(calendar_days_payload), 7)
+        ]
+
+        calendar_range_label = "{start} – {end}".format(
+            start=calendar_start_display.strftime("%b %d"),
+            end=(calendar_start_display + timedelta(days=calendar_days - 1)).strftime(
+                "%b %d"
+            ),
+        )
 
         required_categories = get_required_install_photo_categories()
         photo_category_choices = get_install_photo_category_choices()
@@ -3988,10 +4113,12 @@ def register_routes(app: Flask) -> None:
         return render_template(
             "tech_dashboard.html",
             technician=technician,
+            current_appointments=current_appointments,
             today_appointments=today_appointments,
             future_appointments=future_appointments,
+            upcoming_appointments=upcoming_appointments,
+            completed_appointments=completed_appointments,
             past_appointments=displayed_past,
-            upcoming_appointments=upcoming_combined,
             recent_appointments=recent,
             missing_requirements=missing_requirements,
             photo_map=photo_map,
@@ -4001,6 +4128,8 @@ def register_routes(app: Flask) -> None:
             acknowledgements_map=acknowledgements_map,
             upcoming_schedule=upcoming_schedule,
             past_schedule=past_schedule,
+            dashboard_calendar_weeks=dashboard_calendar_weeks,
+            calendar_range_label=calendar_range_label,
         )
 
     @app.post("/tech/schedule")
