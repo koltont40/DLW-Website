@@ -249,7 +249,12 @@ def test_about_page_highlights_mission(client):
 
 def test_about_page_lists_team_members(app, client):
     with app.app_context():
-        member = TeamMember(name="Jordan Williams", title="Network Ops Manager", position=1)
+        member = TeamMember(
+            name="Jordan Williams",
+            title="Network Ops Manager",
+            bio="Keeps towers tuned for peak performance.",
+            position=1,
+        )
         db.session.add(member)
         db.session.commit()
 
@@ -257,6 +262,7 @@ def test_about_page_lists_team_members(app, client):
     assert response.status_code == 200
     assert b"Jordan Williams" in response.data
     assert b"Network Ops Manager" in response.data
+    assert b"Keeps towers tuned for peak performance." in response.data
 
 
 def test_support_page_offers_resources(client):
@@ -389,6 +395,7 @@ def test_admin_can_create_team_member_with_photo(app, client):
         data={
             "name": "Jordan Williams",
             "title": "Network Ops Manager",
+            "bio": "Keeps towers tuned for peak performance.",
             "photo": (BytesIO(b"fake-image"), "headshot.png"),
         },
         content_type="multipart/form-data",
@@ -402,6 +409,7 @@ def test_admin_can_create_team_member_with_photo(app, client):
         member = TeamMember.query.filter_by(name="Jordan Williams").first()
         assert member is not None
         assert member.title == "Network Ops Manager"
+        assert member.bio == "Keeps towers tuned for peak performance."
         assert member.photo_filename is not None
         member_id = member.id
         photo_path = Path(app.config["TEAM_UPLOAD_FOLDER"]) / member.photo_filename

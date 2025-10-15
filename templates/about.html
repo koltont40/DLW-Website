@@ -57,6 +57,9 @@
       {% if member.title %}
       <p class="subtle">{{ member.title }}</p>
       {% endif %}
+      {% if member.bio %}
+      <p class="team-bio">{{ member.bio }}</p>
+      {% endif %}
     </article>
     {% endfor %}
     {% else %}

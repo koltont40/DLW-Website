@@ -10,10 +10,12 @@ import shutil
 import string
 import subprocess
 import threading
+import time
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
@@ -35,7 +37,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.serving import BaseWSGIServer, make_server
 from werkzeug.utils import secure_filename
 
-from sqlalchemy import inspect, or_, text
+from sqlalchemy import event, inspect, or_, text
 from sqlalchemy.exc import IntegrityError, NoSuchTableError
 
 load_dotenv()
@@ -43,6 +45,9 @@ load_dotenv()
 db = SQLAlchemy()
 
 _billing_schema_checked = False
+
+SITE_SHELL_CACHE_KEY = "_site_shell_cache"
+SITE_SHELL_CACHE_SECONDS_DEFAULT = 15.0
 
 
 def utcnow() -> datetime:
@@ -1124,6 +1129,7 @@ class TeamMember(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     title = db.Column(db.String(160))
+    bio = db.Column(db.Text())
     photo_filename = db.Column(db.String(255))
     photo_original = db.Column(db.String(255))
     position = db.Column(db.Integer, nullable=False, default=0)
@@ -1195,6 +1201,11 @@ def create_app(test_config: dict | None = None) -> Flask:
             "CONTACT_EMAIL", "info@dixielandwireless.com"
         ),
         "CONTACT_PHONE": os.environ.get("CONTACT_PHONE", "2053343969"),
+        "SITE_SHELL_CACHE_SECONDS": float(
+            os.environ.get(
+                "SITE_SHELL_CACHE_SECONDS", SITE_SHELL_CACHE_SECONDS_DEFAULT
+            )
+        ),
         "SNMP_TRAP_HOST": os.environ.get("SNMP_TRAP_HOST"),
         "SNMP_TRAP_PORT": snmp_port,
         "SNMP_COMMUNITY": os.environ.get("SNMP_COMMUNITY", "public"),
@@ -1241,6 +1252,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_team_member_bio_field()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
@@ -1263,6 +1275,7 @@ def init_db() -> None:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_team_member_bio_field()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
         ensure_tls_configuration()
@@ -1696,6 +1709,20 @@ def ensure_support_ticket_priority_field() -> None:
         )
 
 
+def ensure_team_member_bio_field() -> None:
+    inspector = inspect(db.engine)
+    try:
+        columns = {column["name"] for column in inspector.get_columns("team_members")}
+    except NoSuchTableError:
+        return
+
+    if "bio" in columns:
+        return
+
+    with db.engine.begin() as connection:
+        connection.execute(text("ALTER TABLE team_members ADD COLUMN bio TEXT"))
+
+
 def ensure_client_billing_fields() -> None:
     inspector = inspect(db.engine)
     try:
@@ -1977,6 +2004,112 @@ def technician_login_required(func):
     return wrapper
 
 
+def invalidate_site_shell_cache(app: Flask | None = None) -> None:
+    target_app = app
+    if target_app is None:
+        try:
+            target_app = current_app._get_current_object()
+        except RuntimeError:
+            target_app = None
+
+    if target_app is None:
+        return
+
+    target_app.config.pop(SITE_SHELL_CACHE_KEY, None)
+
+
+def get_site_shell_snapshot(app: Flask) -> dict[str, object]:
+    ttl_seconds = float(
+        app.config.get("SITE_SHELL_CACHE_SECONDS", SITE_SHELL_CACHE_SECONDS_DEFAULT)
+    )
+    now = time.monotonic()
+    cached = app.config.get(SITE_SHELL_CACHE_KEY)
+
+    if cached and cached.get("expires_at", 0) > now:
+        return cached["payload"]
+
+    navigation_items = [
+        SimpleNamespace(
+            label=item.label,
+            url=item.url,
+            open_in_new_tab=bool(item.open_in_new_tab),
+        )
+        for item in NavigationItem.query.order_by(NavigationItem.position.asc()).all()
+    ]
+
+    branding_assets = {
+        asset.asset_type: SimpleNamespace(
+            asset_type=asset.asset_type,
+            original_filename=asset.original_filename,
+            uploaded_at=asset.uploaded_at,
+        )
+        for asset in BrandingAsset.query.all()
+    }
+
+    down_detector = DownDetectorConfig.query.first()
+    down_detector_snapshot = None
+    if down_detector:
+        down_detector_snapshot = SimpleNamespace(
+            target_url=down_detector.target_url,
+            updated_at=down_detector.updated_at,
+        )
+
+    service_offerings = get_service_offerings()
+    plan_categories = [
+        category
+        for category, _plans in get_ordered_service_plan_categories()
+        if category
+    ]
+
+    site_theme = SiteTheme.query.first()
+    if site_theme is None:
+        site_theme_snapshot = SimpleNamespace(
+            background_color="#0e071a",
+            text_color="#f5f3ff",
+            muted_color="#b5a6d8",
+            background_image_filename=None,
+            background_image_original=None,
+        )
+    else:
+        site_theme_snapshot = SimpleNamespace(
+            background_color=site_theme.background_color,
+            text_color=site_theme.text_color,
+            muted_color=site_theme.muted_color,
+            background_image_filename=site_theme.background_image_filename,
+            background_image_original=site_theme.background_image_original,
+        )
+
+    payload = {
+        "navigation_items": navigation_items,
+        "branding_assets": branding_assets,
+        "service_offerings": service_offerings,
+        "plan_categories": plan_categories,
+        "site_theme": site_theme_snapshot,
+        "down_detector_config": down_detector_snapshot,
+    }
+
+    app.config[SITE_SHELL_CACHE_KEY] = {
+        "payload": payload,
+        "expires_at": now + ttl_seconds,
+    }
+    return payload
+
+
+def _site_shell_cache_invalidator(mapper, connection, target):  # noqa: ARG001
+    invalidate_site_shell_cache()
+
+
+for model in (
+    NavigationItem,
+    BrandingAsset,
+    SiteTheme,
+    ServicePlan,
+    DownDetectorConfig,
+):
+    for event_name in ("after_insert", "after_update", "after_delete"):
+        event.listen(model, event_name, _site_shell_cache_invalidator)
+
+
 def register_routes(app: Flask) -> None:
     def _resolve_document(doc_type: str):
         if doc_type not in LEGAL_DOCUMENT_TYPES:
@@ -2036,6 +2169,7 @@ def register_routes(app: Flask) -> None:
 
     @app.context_processor
     def inject_status_options():
+        snapshot = get_site_shell_snapshot(app)
         support_urls = {
             url_for("support"),
             url_for("uptime"),
@@ -2044,13 +2178,11 @@ def register_routes(app: Flask) -> None:
         }
         navigation_items = [
             item
-            for item in NavigationItem.query.order_by(
-                NavigationItem.position.asc()
-            ).all()
+            for item in snapshot["navigation_items"]
             if item.url not in support_urls
         ]
-        branding_assets = {asset.asset_type: asset for asset in BrandingAsset.query.all()}
-        down_detector_config = DownDetectorConfig.query.first()
+        branding_assets = snapshot["branding_assets"]
+        down_detector_config = snapshot["down_detector_config"]
         contact_email = app.config.get(
             "CONTACT_EMAIL", "info@dixielandwireless.com"
         )
@@ -2081,41 +2213,22 @@ def register_routes(app: Flask) -> None:
             {
                 "label": "Down Detector",
                 "url": url_for("down_detector"),
-                "external": bool(down_detector_config and down_detector_config.target_url),
+                "external": bool(
+                    down_detector_config and down_detector_config.target_url
+                ),
             },
         ]
 
-        service_offerings = get_service_offerings()
-
-        plan_categories_raw = (
-            ServicePlan.query.with_entities(ServicePlan.category)
-            .filter(ServicePlan.category.isnot(None))
-            .distinct()
-            .all()
-        )
-        category_order = {"Residential": 0, "Phone Service": 1, "Business": 2}
-        categories = sorted(
-            [category for (category,) in plan_categories_raw if category],
-            key=lambda category: (
-                category_order.get(category, len(category_order)),
-                category,
-            ),
-        )
+        service_offerings = snapshot["service_offerings"]
         plan_category_links = [
             {
                 "label": f"{category} Plans",
                 "url": f"{url_for('service_plans')}#plans-{slugify_segment(category)}",
             }
-            for category in categories
+            for category in snapshot["plan_categories"]
         ]
 
-        site_theme = SiteTheme.query.first()
-        if site_theme is None:
-            site_theme = SiteTheme(
-                background_color="#0e071a",
-                text_color="#f5f3ff",
-                muted_color="#b5a6d8",
-            )
+        site_theme = snapshot["site_theme"]
 
         return {
             "status_options": STATUS_OPTIONS,
@@ -5381,6 +5494,7 @@ def register_routes(app: Flask) -> None:
     def create_team_member_admin():
         name = request.form.get("name", "").strip()
         title = request.form.get("title", "").strip()
+        bio = request.form.get("bio", "").strip()
         photo = request.files.get("photo")
 
         if not name:
@@ -5391,7 +5505,12 @@ def register_routes(app: Flask) -> None:
             db.session.query(db.func.max(TeamMember.position)).scalar() or 0
         ) + 1
 
-        member = TeamMember(name=name, title=title or None, position=next_position)
+        member = TeamMember(
+            name=name,
+            title=title or None,
+            bio=bio or None,
+            position=next_position,
+        )
         db.session.add(member)
         db.session.commit()
 
@@ -5416,6 +5535,7 @@ def register_routes(app: Flask) -> None:
 
         name = request.form.get("name", "").strip()
         title = request.form.get("title", "").strip()
+        bio = request.form.get("bio", "").strip()
         photo = request.files.get("photo")
 
         if not name:
@@ -5424,6 +5544,7 @@ def register_routes(app: Flask) -> None:
 
         member.name = name
         member.title = title or None
+        member.bio = bio or None
 
         if photo and photo.filename:
             try:

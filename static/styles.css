@@ -3539,6 +3539,12 @@ a.trusted-logo:hover {
   text-align: center;
 }
 
+.team-bio {
+  font-size: 0.95rem;
+  color: var(--secondary);
+  line-height: 1.45;
+}
+
 .team-photo {
   width: 96px;
   height: 96px;
