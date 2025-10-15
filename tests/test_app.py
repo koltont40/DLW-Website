@@ -35,6 +35,7 @@ from app import (
     TeamMember,
     TrustedBusiness,
     StripeConfig,
+    NotificationConfig,
     create_app,
     db,
     get_install_photo_category_choices,
@@ -2205,7 +2206,7 @@ def test_admin_can_send_manual_snmp_email(app, client):
     )
 
     assert response.status_code == 200
-    assert b"SNMP email notification queued" in response.data
+    assert b"Notification email queued for delivery." in response.data
     assert notifications == [
         ("alert@example.com", "Maintenance window", "Expect brief downtime at midnight."),
     ]
@@ -2241,6 +2242,93 @@ def test_admin_can_update_snmp_settings(app, client):
         assert app.config["SNMP_TRAP_PORT"] == 1162
         assert app.config["SNMP_COMMUNITY"] == "dlw-community"
         assert app.config["SNMP_ADMIN_EMAIL"] == "noc@dixielandwireless.com"
+
+
+def test_admin_can_configure_office365_notifications(app, client):
+    login_admin(client)
+
+    response = client.post(
+        "/dashboard/notifications/office365",
+        data={
+            "from_name": "DixieLand Wireless",
+            "from_email": "info@dixielandwireless.com",
+            "smtp_host": "smtp.office365.com",
+            "smtp_port": "587",
+            "smtp_username": "alerts@dixielandwireless.com",
+            "smtp_password": "SuperSecret!",
+            "use_tls": "on",
+            "tenant_id": "tenant-123",
+            "client_id": "client-abc",
+            "client_secret": "graph-secret",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Office 365 email settings saved" in response.data
+
+    with app.app_context():
+        config = NotificationConfig.query.first()
+        assert config is not None
+        assert config.from_email == "info@dixielandwireless.com"
+        assert config.from_name == "DixieLand Wireless"
+        assert config.smtp_host == "smtp.office365.com"
+        assert config.smtp_port == 587
+        assert config.smtp_username == "alerts@dixielandwireless.com"
+        assert config.smtp_password == "SuperSecret!"
+        assert config.use_tls is True
+        assert config.tenant_id == "tenant-123"
+        assert config.client_id == "client-abc"
+        assert config.client_secret == "graph-secret"
+        assert config.office365_ready() is True
+
+
+def test_office365_password_retained_when_blank(app, client):
+    with app.app_context():
+        config = app_module.ensure_notification_configuration()
+        config.smtp_username = "ops@dixielandwireless.com"
+        config.smtp_password = "keep-me"
+        config.from_email = "ops@dixielandwireless.com"
+        config.use_tls = True
+        db.session.commit()
+
+    login_admin(client)
+
+    response = client.post(
+        "/dashboard/notifications/office365",
+        data={
+            "from_email": "ops@dixielandwireless.com",
+            "smtp_host": "smtp.office365.com",
+            "smtp_port": "2525",
+            "smtp_username": "ops@dixielandwireless.com",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        config = NotificationConfig.query.first()
+        assert config.smtp_port == 2525
+        assert config.smtp_password == "keep-me"
+
+
+def test_admin_can_update_notification_preferences(app, client):
+    login_admin(client)
+
+    response = client.post(
+        "/dashboard/notifications/preferences",
+        data={"notify_installs": "on"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Notification preferences updated" in response.data
+
+    with app.app_context():
+        config = NotificationConfig.query.first()
+        assert config.notify_install_activity is True
+        assert config.notify_customer_activity is False
 
 
 def test_technician_portal_login_and_dashboard(app, client):

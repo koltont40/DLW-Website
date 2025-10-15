@@ -3394,6 +3394,83 @@ a.trusted-logo:hover {
   justify-content: flex-end;
 }
 
+.notification-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.notification-card {
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  background: rgba(15, 23, 42, 0.35);
+  backdrop-filter: blur(6px);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.notification-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.notification-card-header h3 {
+  margin: 0;
+}
+
+.notification-card-header p {
+  margin: 0.35rem 0 0;
+}
+
+.notification-form-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.notification-form-grid .checkbox-field {
+  align-items: center;
+}
+
+.notification-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.notification-test-panel {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.notification-test-panel h4 {
+  margin: 0;
+}
+
+.notification-test-panel .stacked-form {
+  gap: 0.75rem;
+}
+
+.notification-clear-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  grid-column: 1 / -1;
+}
+
+.notification-clear-toggle label {
+  margin: 0;
+}
+
 
 .plan-category {
   margin-top: 2.5rem;
@@ -4889,6 +4966,14 @@ a.trusted-logo:hover {
   }
 
   .field-roster {
+    padding: 1.25rem;
+  }
+
+  .notification-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .notification-card {
     padding: 1.25rem;
   }
 }

@@ -17,7 +17,7 @@ This project provides a self-hosted client onboarding, billing, and support port
 - **Support Ticketing** – Monitor and update customer-submitted tickets with resolution notes from the admin dashboard.
 - **Customer Portal** – Clients log in with a password to see balances, hardware details, appointments, and submit new support tickets.
 - **Field Appointments** – Schedule installs or service calls, capture customer responses, and approve reschedules from the admin dashboard.
-- **SNMP Notifications** – Stream appointment updates and on-demand emails to your operations tooling via configurable SNMP traps.
+- **Notification Center** – Configure Microsoft 365 email delivery and SNMP fallbacks for automated customer and technician alerts.
 - **Service Plan Management** – Update residential, business, and phone offerings that power signup flows and public pricing pages.
 - **Phone Service Landing** – Share hosted voice benefits and plan details on a dedicated page that links straight into signup and the customer portal.
 - **Configurable Contact Details** – Set a single contact email that powers navigation links, portal reminders, and signup confirmations.
@@ -97,6 +97,10 @@ After signing in you can add or remove additional administrators from **Dashboar
 | `SNMP_ENTERPRISE_OID` | Enterprise OID prefix for emitted traps | `1.3.6.1.4.1.8072.9999` |
 | `SNMP_ADMIN_EMAIL` | Operations email to notify on client responses | unset |
 
+### Microsoft 365 Email
+
+Head to **Dashboard → Notifications** to enter your Microsoft 365 SMTP credentials. The dashboard stores the sender name, from address, username, and password securely in the database and will use them for all automated customer and technician alerts. Leave the password fields blank to keep existing secrets, or check the accompanying "Clear" boxes to remove stored credentials. Once a valid username, password, and sender email are provided the status pill will show **Connected** and install notices, billing updates, and portal activity will send directly through Office 365.
+
 ### SNMP Email Notifications
 
 When `SNMP_TRAP_HOST` is provided the application emits SNMP traps for appointment events (new bookings, customer reschedules, and approvals). Many network monitoring platforms can translate these traps into emails or tickets. Customize delivery with:
@@ -104,7 +108,7 @@ When `SNMP_TRAP_HOST` is provided the application emits SNMP traps for appointme
 - `SNMP_TRAP_PORT`, `SNMP_COMMUNITY`, and `SNMP_ENTERPRISE_OID` to match your monitoring stack.
 - `SNMP_ADMIN_EMAIL` so client responses trigger a notification to your operations inbox.
 
-Administrators can also compose ad-hoc SNMP-backed emails from the Support section of the dashboard to broadcast outage updates or reminders.
+Administrators can also compose ad-hoc notifications from the Notifications section of the dashboard to broadcast outage updates or reminders. The system attempts Microsoft 365 delivery first and falls back to SNMP traps when an SMTP connection is not available.
 
 During automated testing you can override the trap sender by assigning a callable to `app.config["SNMP_EMAIL_SENDER"]`.
 

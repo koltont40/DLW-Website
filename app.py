@@ -7,6 +7,8 @@ import os
 import re
 import secrets
 import shutil
+import smtplib
+import ssl
 import string
 import subprocess
 import threading
@@ -14,6 +16,8 @@ import time
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from email.message import EmailMessage
+from email.utils import formataddr
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote_plus
@@ -1578,6 +1582,37 @@ class StripeConfig(db.Model):
         return "<StripeConfig>"
 
 
+class NotificationConfig(db.Model):
+    __tablename__ = "notification_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    smtp_host = db.Column(db.String(255), nullable=False, default="smtp.office365.com")
+    smtp_port = db.Column(db.Integer, nullable=False, default=587)
+    use_tls = db.Column(db.Boolean, nullable=False, default=True)
+    from_email = db.Column(db.String(255))
+    from_name = db.Column(db.String(255))
+    smtp_username = db.Column(db.String(255))
+    smtp_password = db.Column(db.String(255))
+    tenant_id = db.Column(db.String(255))
+    client_id = db.Column(db.String(255))
+    client_secret = db.Column(db.String(255))
+    notify_install_activity = db.Column(db.Boolean, nullable=False, default=True)
+    notify_customer_activity = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def office365_ready(self) -> bool:
+        username = (self.smtp_username or "").strip()
+        password = (self.smtp_password or "").strip()
+        sender = (self.from_email or username or "").strip()
+        return bool(username and password and sender)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return "<NotificationConfig>"
+
+
 class TLSConfig(db.Model):
     __tablename__ = "tls_config"
 
@@ -1763,6 +1798,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_default_navigation()
         ensure_service_plans_seeded()
         ensure_snmp_configuration()
+        ensure_notification_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
         ensure_install_photo_requirements_seeded()
@@ -1789,6 +1825,7 @@ def init_db() -> None:
         ensure_default_navigation()
         ensure_service_plans_seeded()
         ensure_snmp_configuration()
+        ensure_notification_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
         ensure_install_photo_requirements_seeded()
@@ -1856,6 +1893,51 @@ def issue_lets_encrypt_certificate(
         return False, "Certificate files were not found after provisioning.", None, None
 
     return True, None, cert_path, key_path
+
+
+def send_email_via_office365(
+    app: Flask, recipient: str, subject: str, body: str
+) -> bool:
+    config = NotificationConfig.query.first()
+    if not config or not recipient:
+        return False
+
+    if not config.office365_ready():
+        return False
+
+    host = (config.smtp_host or "smtp.office365.com").strip()
+    try:
+        port = int(config.smtp_port or 587)
+    except (TypeError, ValueError):
+        port = 587
+
+    from_email = (config.from_email or config.smtp_username or "").strip()
+    from_name = (config.from_name or app.config.get("SITE_NAME") or "").strip() or "DixieLand Wireless"
+    username = (config.smtp_username or "").strip()
+    password = config.smtp_password or ""
+
+    if not from_email or not username or not password:
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = formataddr((from_name, from_email))
+    message["To"] = recipient
+    message.set_content(body)
+
+    try:
+        with smtplib.SMTP(host, port, timeout=10) as smtp:
+            smtp.ehlo()
+            if config.use_tls:
+                context = ssl.create_default_context()
+                smtp.starttls(context=context)
+                smtp.ehlo()
+            smtp.login(username, password)
+            smtp.send_message(message)
+        return True
+    except Exception as exc:  # pragma: no cover - external service dependency
+        app.logger.warning("Office 365 email delivery failed: %s", exc)
+        return False
 
 
 def send_email_via_snmp(app: Flask, recipient: str, subject: str, body: str) -> bool:
@@ -2490,6 +2572,17 @@ def ensure_snmp_configuration() -> None:
     db.session.commit()
 
 
+def ensure_notification_configuration() -> NotificationConfig:
+    config = NotificationConfig.query.first()
+    if config:
+        return config
+
+    config = NotificationConfig()
+    db.session.add(config)
+    db.session.commit()
+    return config
+
+
 def apply_stripe_config_from_database(app: Flask) -> StripeConfig:
     config = StripeConfig.query.first()
 
@@ -2616,6 +2709,19 @@ def get_effective_snmp_settings(app: Flask) -> dict[str, str | int | None]:
             settings["admin_email"] = config.admin_email
 
     return settings
+
+
+def should_send_notification(category: str) -> bool:
+    config = NotificationConfig.query.first()
+    if config is None:
+        return True
+
+    normalized = category.lower()
+    if normalized == "install":
+        return config.notify_install_activity
+    if normalized == "customer":
+        return config.notify_customer_activity
+    return True
 
 
 def login_required(func):
@@ -3094,8 +3200,16 @@ def register_routes(app: Flask) -> None:
 
         return document, upload_folder, file_path
 
-    def notify_via_snmp(recipient: str, subject: str, body: str) -> bool:
+    def dispatch_notification(
+        recipient: str, subject: str, body: str, category: str = "general"
+    ) -> bool:
         if not recipient:
+            return False
+
+        if should_send_notification(category):
+            if send_email_via_office365(app, recipient, subject, body):
+                return True
+        else:
             return False
 
         sender = app.config.get("SNMP_EMAIL_SENDER")
@@ -3856,7 +3970,7 @@ def register_routes(app: Flask) -> None:
         admin_settings = get_effective_snmp_settings(app)
         admin_recipient = admin_settings.get("admin_email")
         if admin_recipient:
-            notify_via_snmp(
+            dispatch_notification(
                 admin_recipient,
                 subject,
                 (
@@ -3870,6 +3984,7 @@ def register_routes(app: Flask) -> None:
                         else ""
                     )
                 ),
+                category="customer",
             )
 
         flash(confirmation_text, "success")
@@ -4765,6 +4880,7 @@ def register_routes(app: Flask) -> None:
             "plans",
             "field",
             "security",
+            "notifications",
             "story",
         }
         if active_section not in valid_sections:
@@ -4800,12 +4916,15 @@ def register_routes(app: Flask) -> None:
         stripe_config: StripeConfig | None = None
         pending_schedule_requests: list[TechnicianSchedule] = []
         recent_schedule_decisions: list[TechnicianSchedule] = []
+        notification_config: NotificationConfig | None = None
+        office365_ready = False
         if active_section in {
             "customers",
             "billing",
             "network",
             "support",
             "appointments",
+            "notifications",
         }:
             query = Client.query.order_by(Client.created_at.desc())
             if status_filter:
@@ -5130,6 +5249,14 @@ def register_routes(app: Flask) -> None:
         snmp_config = SNMPConfig.query.first()
         down_detector_config = DownDetectorConfig.query.first()
 
+        if active_section == "notifications":
+            notification_config = ensure_notification_configuration()
+        else:
+            notification_config = NotificationConfig.query.first()
+
+        if notification_config:
+            office365_ready = notification_config.office365_ready()
+
         blog_posts = BlogPost.query.order_by(BlogPost.created_at.desc()).all()
 
         service_plans = ServicePlan.query.order_by(
@@ -5185,6 +5312,8 @@ def register_routes(app: Flask) -> None:
             snmp_settings=snmp_settings,
             blog_posts=blog_posts,
             down_detector_config=down_detector_config,
+            notification_config=notification_config,
+            office365_ready=office365_ready,
             service_plans=service_plans,
             service_plans_by_category=ordered_plan_categories,
             plan_field_config=plan_field_config,
@@ -6432,7 +6561,7 @@ def register_routes(app: Flask) -> None:
         db.session.add(appointment)
         db.session.commit()
 
-        notify_via_snmp(
+        dispatch_notification(
             client.email,
             f"New appointment scheduled: {title}",
             (
@@ -6442,10 +6571,11 @@ def register_routes(app: Flask) -> None:
                 + (f"Notes: {appointment.notes}\n\n" if appointment.notes else "\n")
                 + "Reply from your portal to confirm or request changes."
             ),
+            category="customer",
         )
 
         if technician:
-            notify_via_snmp(
+            dispatch_notification(
                 technician.email,
                 f"New field visit assigned: {title}",
                 (
@@ -6453,6 +6583,7 @@ def register_routes(app: Flask) -> None:
                     f"Scheduled for: {appointment.scheduled_for.strftime('%Y-%m-%d %H:%M %Z')}\n"
                     + (f"Notes: {appointment.notes}\n" if appointment.notes else "")
                 ),
+                category="install",
             )
 
         flash("Appointment scheduled.", "success")
@@ -6522,7 +6653,7 @@ def register_routes(app: Flask) -> None:
         appointment.updated_at = utcnow()
         db.session.commit()
 
-        notify_via_snmp(
+        dispatch_notification(
             appointment.client.email,
             f"Appointment update: {appointment.title}",
             (
@@ -6530,10 +6661,11 @@ def register_routes(app: Flask) -> None:
                 f"Scheduled for: {appointment.scheduled_for.strftime('%Y-%m-%d %H:%M %Z')}\n"
                 + (f"Notes: {appointment.notes}\n" if appointment.notes else "")
             ),
+            category="customer",
         )
 
         if new_technician and new_technician.id != previous_technician_id:
-            notify_via_snmp(
+            dispatch_notification(
                 new_technician.email,
                 f"Updated field visit: {appointment.title}",
                 (
@@ -6541,6 +6673,7 @@ def register_routes(app: Flask) -> None:
                     f"Scheduled for: {appointment.scheduled_for.strftime('%Y-%m-%d %H:%M %Z')}\n"
                     + (f"Notes: {appointment.notes}\n" if appointment.notes else "")
                 ),
+                category="install",
             )
 
         flash("Appointment updated.", "success")
@@ -6789,22 +6922,22 @@ def register_routes(app: Flask) -> None:
 
         if not recipient or not subject or not body:
             flash(
-                "Provide a recipient, subject, and message to dispatch an SNMP email.",
+                "Provide a recipient, subject, and message to dispatch an email notification.",
                 "danger",
             )
-            return _redirect_back_to_dashboard("support")
+            return _redirect_back_to_dashboard("notifications")
 
-        sent = notify_via_snmp(recipient, subject, body)
+        sent = dispatch_notification(recipient, subject, body, category="manual")
 
         if sent:
-            flash("SNMP email notification queued for delivery.", "success")
+            flash("Notification email queued for delivery.", "success")
         else:
             flash(
-                "Unable to deliver SNMP email. Verify trap settings and try again.",
+                "Unable to deliver the notification. Verify email settings and try again.",
                 "warning",
             )
 
-        return _redirect_back_to_dashboard("support")
+        return _redirect_back_to_dashboard("notifications")
 
     @app.post("/snmp-settings")
     @login_required
@@ -6821,7 +6954,7 @@ def register_routes(app: Flask) -> None:
                 port_value = max(1, min(65535, int(port_raw)))
             except ValueError:
                 flash("Provide a valid SNMP port between 1 and 65535.", "danger")
-                return _redirect_back_to_dashboard("support")
+                return _redirect_back_to_dashboard("notifications")
 
         config = SNMPConfig.query.first()
         if not config:
@@ -6844,7 +6977,67 @@ def register_routes(app: Flask) -> None:
         app.config["SNMP_ADMIN_EMAIL"] = config.admin_email
 
         flash("SNMP settings updated.", "success")
-        return _redirect_back_to_dashboard("support")
+        return _redirect_back_to_dashboard("notifications")
+
+    @app.post("/dashboard/notifications/office365")
+    @login_required
+    def configure_office365_notifications():
+        config = ensure_notification_configuration()
+
+        config.smtp_host = (request.form.get("smtp_host", "") or "smtp.office365.com").strip()
+        port_raw = request.form.get("smtp_port", "").strip()
+        try:
+            config.smtp_port = max(1, min(65535, int(port_raw))) if port_raw else 587
+        except ValueError:
+            flash("Provide a valid SMTP port between 1 and 65535.", "danger")
+            return _redirect_back_to_dashboard("notifications")
+
+        config.use_tls = request.form.get("use_tls") == "on"
+        config.from_email = request.form.get("from_email", "").strip() or None
+        config.from_name = request.form.get("from_name", "").strip() or None
+        config.smtp_username = request.form.get("smtp_username", "").strip() or None
+
+        new_password = request.form.get("smtp_password", "")
+        if new_password.strip():
+            config.smtp_password = new_password.strip()
+        elif request.form.get("reset_smtp_password") == "on":
+            config.smtp_password = None
+
+        config.tenant_id = request.form.get("tenant_id", "").strip() or None
+        config.client_id = request.form.get("client_id", "").strip() or None
+
+        new_client_secret = request.form.get("client_secret", "")
+        if new_client_secret.strip():
+            config.client_secret = new_client_secret.strip()
+        elif request.form.get("reset_client_secret") == "on":
+            config.client_secret = None
+        config.updated_at = utcnow()
+
+        db.session.commit()
+
+        if config.office365_ready():
+            flash("Office 365 email settings saved and ready for use.", "success")
+        else:
+            flash(
+                "Office 365 settings saved. Provide a username, password, and sender address to enable delivery.",
+                "info",
+            )
+
+        return _redirect_back_to_dashboard("notifications")
+
+    @app.post("/dashboard/notifications/preferences")
+    @login_required
+    def update_notification_preferences():
+        config = ensure_notification_configuration()
+
+        config.notify_install_activity = request.form.get("notify_installs") == "on"
+        config.notify_customer_activity = request.form.get("notify_customers") == "on"
+        config.updated_at = utcnow()
+
+        db.session.commit()
+
+        flash("Notification preferences updated.", "success")
+        return _redirect_back_to_dashboard("notifications")
 
     @app.post("/dashboard/security/admins")
     @login_required
