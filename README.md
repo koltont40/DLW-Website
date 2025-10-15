@@ -99,7 +99,7 @@ After signing in you can add or remove additional administrators from **Dashboar
 
 ### Microsoft 365 Email
 
-Head to **Dashboard → Notifications** to enter your Microsoft 365 SMTP credentials. The dashboard stores the sender name, from address, username, and password securely in the database and will use them for all automated customer and technician alerts. Leave the password fields blank to keep existing secrets, or check the accompanying "Clear" boxes to remove stored credentials. Once a valid username, password, and sender email are provided the status pill will show **Connected** and install notices, billing updates, and portal activity will send directly through Office 365.
+Head to **Dashboard → Notifications** to enter your Microsoft 365 SMTP credentials. The dashboard stores the sender name, from address, username, and password securely in the database and will use them for all automated customer and technician alerts. Leave the password fields blank to keep existing secrets, or check the accompanying "Clear" boxes to remove stored credentials. Once a valid username, password, and sender email are provided the status pill will show **Connected** and install notices, billing updates, and portal activity will send directly through Office 365. Configure the optional reply-to contact and List-Unsubscribe URL/mailbox to add the deliverability headers mailbox providers expect—this greatly reduces the chance that automated emails land in spam.
 
 ### SNMP Email Notifications
 

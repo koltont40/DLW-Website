@@ -2252,6 +2252,8 @@ def test_admin_can_configure_office365_notifications(app, client):
         data={
             "from_name": "DixieLand Wireless",
             "from_email": "info@dixielandwireless.com",
+            "reply_to_name": "Customer Success",
+            "reply_to_email": "support@dixielandwireless.com",
             "smtp_host": "smtp.office365.com",
             "smtp_port": "587",
             "smtp_username": "alerts@dixielandwireless.com",
@@ -2260,6 +2262,8 @@ def test_admin_can_configure_office365_notifications(app, client):
             "tenant_id": "tenant-123",
             "client_id": "client-abc",
             "client_secret": "graph-secret",
+            "list_unsubscribe_url": "https://dixielandwireless.com/unsubscribe",
+            "list_unsubscribe_mailto": "mailto:unsubscribe@dixielandwireless.com",
         },
         follow_redirects=True,
     )
@@ -2280,6 +2284,10 @@ def test_admin_can_configure_office365_notifications(app, client):
         assert config.tenant_id == "tenant-123"
         assert config.client_id == "client-abc"
         assert config.client_secret == "graph-secret"
+        assert config.reply_to_name == "Customer Success"
+        assert config.reply_to_email == "support@dixielandwireless.com"
+        assert config.list_unsubscribe_url == "https://dixielandwireless.com/unsubscribe"
+        assert config.list_unsubscribe_mailto == "unsubscribe@dixielandwireless.com"
         assert config.office365_ready() is True
 
 
@@ -2311,6 +2319,68 @@ def test_office365_password_retained_when_blank(app, client):
         config = NotificationConfig.query.first()
         assert config.smtp_port == 2525
         assert config.smtp_password == "keep-me"
+
+
+def test_office365_email_includes_deliverability_headers(app, monkeypatch):
+    sent_messages = []
+
+    class DummySMTP:
+        def __init__(self, host, port, timeout=10):
+            self.host = host
+            self.port = port
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def ehlo(self):
+            pass
+
+        def starttls(self, context=None):
+            pass
+
+        def login(self, username, password):
+            assert username == "alerts@dixielandwireless.com"
+            assert password == "keep-me"
+
+        def send_message(self, message):
+            sent_messages.append(message)
+
+    monkeypatch.setattr(app_module.smtplib, "SMTP", DummySMTP)
+
+    with app.app_context():
+        config = app_module.ensure_notification_configuration()
+        config.smtp_host = "smtp.office365.com"
+        config.smtp_port = 587
+        config.use_tls = True
+        config.from_email = "info@dixielandwireless.com"
+        config.from_name = "DixieLand Wireless"
+        config.reply_to_email = "support@dixielandwireless.com"
+        config.reply_to_name = "Support Desk"
+        config.list_unsubscribe_url = "https://dixielandwireless.com/unsubscribe"
+        config.list_unsubscribe_mailto = "unsubscribe@dixielandwireless.com"
+        config.smtp_username = "alerts@dixielandwireless.com"
+        config.smtp_password = "keep-me"
+        db.session.commit()
+
+        result = app_module.send_email_via_office365(
+            app, "customer@example.com", "Welcome to DixieLand Wireless", "Hello there!"
+        )
+
+    assert result is True
+    assert sent_messages, "Expected one email to be queued"
+    message = sent_messages[0]
+    assert message["Reply-To"] == "Support Desk <support@dixielandwireless.com>"
+    assert (
+        message["List-Unsubscribe"]
+        == "<mailto:unsubscribe@dixielandwireless.com>, <https://dixielandwireless.com/unsubscribe>"
+    )
+    assert message["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+    assert message["Message-ID"].endswith("@dixielandwireless.com>")
+    assert message["Date"]
 
 
 def test_admin_can_update_notification_preferences(app, client):

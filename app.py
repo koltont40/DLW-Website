@@ -17,7 +17,7 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
-from email.utils import formataddr
+from email.utils import formataddr, format_datetime, make_msgid
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote_plus
@@ -1591,11 +1591,15 @@ class NotificationConfig(db.Model):
     use_tls = db.Column(db.Boolean, nullable=False, default=True)
     from_email = db.Column(db.String(255))
     from_name = db.Column(db.String(255))
+    reply_to_email = db.Column(db.String(255))
+    reply_to_name = db.Column(db.String(255))
     smtp_username = db.Column(db.String(255))
     smtp_password = db.Column(db.String(255))
     tenant_id = db.Column(db.String(255))
     client_id = db.Column(db.String(255))
     client_secret = db.Column(db.String(255))
+    list_unsubscribe_url = db.Column(db.String(500))
+    list_unsubscribe_mailto = db.Column(db.String(500))
     notify_install_activity = db.Column(db.Boolean, nullable=False, default=True)
     notify_customer_activity = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
@@ -1923,6 +1927,35 @@ def send_email_via_office365(
     message["Subject"] = subject
     message["From"] = formataddr((from_name, from_email))
     message["To"] = recipient
+    message["Date"] = format_datetime(datetime.now(UTC))
+    message["Message-ID"] = make_msgid(domain=from_email.split("@")[-1])
+
+    reply_to_email = (config.reply_to_email or "").strip()
+    reply_to_name = (config.reply_to_name or "").strip()
+    if reply_to_email:
+        if reply_to_name:
+            message["Reply-To"] = formataddr((reply_to_name, reply_to_email))
+        else:
+            message["Reply-To"] = reply_to_email
+
+    unsubscribe_entries: list[str] = []
+    mailto_value = (config.list_unsubscribe_mailto or "").strip()
+    has_http_unsubscribe = False
+    if mailto_value:
+        if mailto_value.lower().startswith("mailto:"):
+            unsubscribe_entries.append(f"<{mailto_value}>")
+        else:
+            unsubscribe_entries.append(f"<mailto:{mailto_value}>")
+    url_value = (config.list_unsubscribe_url or "").strip()
+    if url_value:
+        unsubscribe_entries.append(f"<{url_value}>")
+        if url_value.lower().startswith("http"):
+            has_http_unsubscribe = True
+    if unsubscribe_entries:
+        message["List-Unsubscribe"] = ", ".join(unsubscribe_entries)
+        if has_http_unsubscribe:
+            message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+
     message.set_content(body)
 
     try:
@@ -2573,6 +2606,40 @@ def ensure_snmp_configuration() -> None:
 
 
 def ensure_notification_configuration() -> NotificationConfig:
+    inspector = inspect(db.engine)
+    table_missing = False
+    try:
+        columns = {column["name"] for column in inspector.get_columns("notification_config")}
+    except NoSuchTableError:
+        columns = set()
+        table_missing = True
+
+    statements: list[str] = []
+    if "reply_to_email" not in columns:
+        statements.append(
+            "ALTER TABLE notification_config ADD COLUMN reply_to_email VARCHAR(255)"
+        )
+    if "reply_to_name" not in columns:
+        statements.append(
+            "ALTER TABLE notification_config ADD COLUMN reply_to_name VARCHAR(255)"
+        )
+    if "list_unsubscribe_url" not in columns:
+        statements.append(
+            "ALTER TABLE notification_config ADD COLUMN list_unsubscribe_url VARCHAR(500)"
+        )
+    if "list_unsubscribe_mailto" not in columns:
+        statements.append(
+            "ALTER TABLE notification_config ADD COLUMN list_unsubscribe_mailto VARCHAR(500)"
+        )
+
+    if statements and not table_missing:
+        with db.engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+    if table_missing:
+        db.create_all()
+
     config = NotificationConfig.query.first()
     if config:
         return config
@@ -6995,6 +7062,8 @@ def register_routes(app: Flask) -> None:
         config.use_tls = request.form.get("use_tls") == "on"
         config.from_email = request.form.get("from_email", "").strip() or None
         config.from_name = request.form.get("from_name", "").strip() or None
+        config.reply_to_email = request.form.get("reply_to_email", "").strip() or None
+        config.reply_to_name = request.form.get("reply_to_name", "").strip() or None
         config.smtp_username = request.form.get("smtp_username", "").strip() or None
 
         new_password = request.form.get("smtp_password", "")
@@ -7011,6 +7080,14 @@ def register_routes(app: Flask) -> None:
             config.client_secret = new_client_secret.strip()
         elif request.form.get("reset_client_secret") == "on":
             config.client_secret = None
+
+        unsubscribe_url = request.form.get("list_unsubscribe_url", "").strip()
+        config.list_unsubscribe_url = unsubscribe_url or None
+
+        unsubscribe_mailto = request.form.get("list_unsubscribe_mailto", "").strip()
+        if unsubscribe_mailto.lower().startswith("mailto:"):
+            unsubscribe_mailto = unsubscribe_mailto[len("mailto:") :]
+        config.list_unsubscribe_mailto = unsubscribe_mailto or None
         config.updated_at = utcnow()
 
         db.session.commit()

@@ -1554,6 +1554,24 @@
                 <input type="email" name="from_email" placeholder="noreply@dixielandwireless.com" value="{{ notification_config.from_email if notification_config and notification_config.from_email else '' }}" />
               </label>
               <label>
+                Reply-to name
+                <input
+                  type="text"
+                  name="reply_to_name"
+                  placeholder="Support Team"
+                  value="{{ notification_config.reply_to_name if notification_config and notification_config.reply_to_name else '' }}"
+                />
+              </label>
+              <label>
+                Reply-to email
+                <input
+                  type="email"
+                  name="reply_to_email"
+                  placeholder="support@dixielandwireless.com"
+                  value="{{ notification_config.reply_to_email if notification_config and notification_config.reply_to_email else '' }}"
+                />
+              </label>
+              <label>
                 SMTP username
                 <input type="email" name="smtp_username" placeholder="notifications@dixielandwireless.com" value="{{ notification_config.smtp_username if notification_config and notification_config.smtp_username else '' }}" />
               </label>
@@ -1595,6 +1613,26 @@
                 <input type="checkbox" id="reset-client-secret" name="reset_client_secret" />
                 <label for="reset-client-secret">Clear saved secret</label>
               </div>
+              <label>
+                List-Unsubscribe URL
+                <input
+                  type="url"
+                  name="list_unsubscribe_url"
+                  placeholder="https://dixielandwireless.com/unsubscribe"
+                  value="{{ notification_config.list_unsubscribe_url if notification_config and notification_config.list_unsubscribe_url else '' }}"
+                />
+                <span class="subtle">Adds one-click unsubscribe headers for mailbox providers.</span>
+              </label>
+              <label>
+                List-Unsubscribe email
+                <input
+                  type="email"
+                  name="list_unsubscribe_mailto"
+                  placeholder="unsubscribe@dixielandwireless.com"
+                  value="{{ notification_config.list_unsubscribe_mailto if notification_config and notification_config.list_unsubscribe_mailto else '' }}"
+                />
+                <span class="subtle">Include a monitored inbox to improve deliverability.</span>
+              </label>
             </div>
             <div class="notification-actions">
               <button class="button primary" type="submit">Save Office 365 settings</button>
