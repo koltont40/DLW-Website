@@ -13,22 +13,26 @@
         <a class="sidebar-link {% if active_section == 'overview' %}active{% endif %}" href="{{ url_for('dashboard', section='overview') }}">Operations</a>
       </div>
       <div class="sidebar-group">
-        <span class="sidebar-group-label">Customer Ops</span>
+        <span class="sidebar-group-label">CRM</span>
         <a class="sidebar-link {% if active_section == 'customers' %}active{% endif %}" href="{{ url_for('dashboard', section='customers') }}">Customers</a>
-        <a class="sidebar-link {% if active_section == 'portal' %}active{% endif %}" href="{{ url_for('dashboard', section='portal') }}">Portal Access</a>
         <a class="sidebar-link {% if active_section == 'billing' %}active{% endif %}" href="{{ url_for('dashboard', section='billing') }}">Billing</a>
-        <a class="sidebar-link {% if active_section == 'network' %}active{% endif %}" href="{{ url_for('dashboard', section='network') }}">Network</a>
-        <a class="sidebar-link {% if active_section == 'appointments' %}active{% endif %}" href="{{ url_for('dashboard', section='appointments') }}">Appointments</a>
         <a class="sidebar-link {% if active_section == 'support' %}active{% endif %}" href="{{ url_for('dashboard', section='support') }}">Support</a>
-        <a class="sidebar-link {% if active_section == 'field' %}active{% endif %}" href="{{ url_for('dashboard', section='field') }}">Field Ops</a>
       </div>
       <div class="sidebar-group">
         <span class="sidebar-group-label">Site Experience</span>
         <a class="sidebar-link {% if active_section == 'plans' %}active{% endif %}" href="{{ url_for('dashboard', section='plans') }}">Service Plans</a>
         <a class="sidebar-link {% if active_section == 'navigation' %}active{% endif %}" href="{{ url_for('dashboard', section='navigation') }}">Header Links</a>
         <a class="sidebar-link {% if active_section == 'branding' %}active{% endif %}" href="{{ url_for('dashboard', section='branding') }}">Branding</a>
+        <a class="sidebar-link {% if active_section == 'story' %}active{% endif %}" href="{{ url_for('dashboard', section='story') }}">Team &amp; Trust</a>
         <a class="sidebar-link {% if active_section == 'blog' %}active{% endif %}" href="{{ url_for('dashboard', section='blog') }}">Blog</a>
         <a class="sidebar-link {% if active_section == 'legal' %}active{% endif %}" href="{{ url_for('dashboard', section='legal') }}">Legal</a>
+      </div>
+      <div class="sidebar-group">
+        <span class="sidebar-group-label">NMS</span>
+        <a class="sidebar-link {% if active_section == 'network' %}active{% endif %}" href="{{ url_for('dashboard', section='network') }}">Network</a>
+        <a class="sidebar-link {% if active_section == 'field' %}active{% endif %}" href="{{ url_for('dashboard', section='field') }}">Field Ops</a>
+        <a class="sidebar-link {% if active_section == 'security' %}active{% endif %}" href="{{ url_for('dashboard', section='security') }}">Security</a>
+        <a class="sidebar-link {% if active_section == 'notifications' %}active{% endif %}" href="{{ url_for('dashboard', section='notifications') }}">Notifications</a>
       </div>
     </nav>
     <div class="sidebar-footer">
@@ -193,6 +197,75 @@
           {% endif %}
         </article>
       </div>
+      <div class="field-checklist-manager">
+        <div>
+          <h3>Install photo checklist</h3>
+          <p class="subtle">
+            Choose the categories technicians must capture before signing off on an install. Adjust the order to match your
+            workflow.
+          </p>
+        </div>
+        <form class="stacked-form compact" method="post" action="{{ url_for('create_install_photo_requirement') }}">
+          <div class="form-row">
+            <label>
+              Category name
+              <input type="text" name="label" placeholder="Grounding rod" required />
+            </label>
+            <label>
+              Position
+              <input
+                type="number"
+                name="position"
+                min="0"
+                placeholder="{{ install_photo_requirements|length }}"
+              />
+            </label>
+          </div>
+          <div class="record-actions">
+            <button class="button small primary" type="submit">Add requirement</button>
+          </div>
+        </form>
+        {% if install_photo_requirements %}
+        <div class="requirement-list">
+          {% for requirement in install_photo_requirements %}
+          <div class="requirement-item">
+            <form
+              id="update-requirement-{{ requirement.id }}"
+              class="stacked-form compact"
+              method="post"
+              action="{{ url_for('update_install_photo_requirement', requirement_id=requirement.id) }}"
+            >
+              <div class="form-row">
+                <label>
+                  Category name
+                  <input type="text" name="label" value="{{ requirement.label }}" required />
+                </label>
+                <label>
+                  Position
+                  <input type="number" name="position" min="0" value="{{ loop.index0 }}" />
+                </label>
+              </div>
+            </form>
+            <form
+              id="delete-requirement-{{ requirement.id }}"
+              method="post"
+              action="{{ url_for('delete_install_photo_requirement', requirement_id=requirement.id) }}"
+            ></form>
+            <div class="record-actions">
+              <button class="button small primary" type="submit" form="update-requirement-{{ requirement.id }}">
+                Save
+              </button>
+              <button class="button small secondary" type="submit" form="delete-requirement-{{ requirement.id }}">
+                Remove
+              </button>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="subtle">No required photos configured yet. Add categories above to build your checklist.</p>
+        {% endif %}
+      </div>
     </section>
     {% elif active_section == 'customers' %}
     {% if selected_client %}
@@ -250,6 +323,40 @@
               >View verification</a
             >
             {% endif %}
+          </div>
+          <div class="portal-management">
+            <h4>Portal access</h4>
+            {% if selected_client.portal_password_updated_at %}
+            <p class="subtle">Password last updated {{ selected_client.portal_password_updated_at.strftime('%b %d, %Y %I:%M %p') }}</p>
+            {% else %}
+            <p class="alert subtle">Password not issued yet.</p>
+            {% endif %}
+            <form
+              class="stacked-form"
+              method="post"
+              action="{{ url_for('set_portal_password', client_id=selected_client.id, section='customers', status=request.args.get('status'), focus=selected_client.id) }}"
+            >
+              <label>
+                New password
+                <input type="password" name="password" minlength="8" placeholder="Create a secure password" required />
+              </label>
+              <label>
+                Confirm password
+                <input type="password" name="confirm_password" minlength="8" placeholder="Re-enter password" required />
+              </label>
+              <button class="button small primary" type="submit">Save password</button>
+            </form>
+            <form
+              class="stacked-form"
+              method="post"
+              action="{{ url_for('reset_portal_password', client_id=selected_client.id, section='customers', status=request.args.get('status'), focus=selected_client.id) }}"
+            >
+              <button class="button small" type="submit">Generate temporary password</button>
+            </form>
+            <p class="subtle">
+              Share the login URL:
+              <a href="{{ url_for('portal_login', _external=True) }}" target="_blank" rel="noopener">Customer Portal</a>.
+            </p>
           </div>
           {% if selected_client.notes %}
           <div class="detail-note">
@@ -312,7 +419,7 @@
             {% for ticket in selected_client_tickets %}
             <li>
               <div class="detail-primary">{{ ticket.subject }}</div>
-              <div class="detail-subtle">{{ ticket.status }} • {{ ticket.created_at.strftime('%b %d, %Y') }}</div>
+              <div class="detail-subtle">{{ ticket.status }} • Priority {{ ticket.priority }} • {{ ticket.created_at.strftime('%b %d, %Y') }}</div>
             </li>
             {% endfor %}
           </ul>
@@ -377,129 +484,30 @@
       </div>
     </section>
     {% endif %}
-    <section class="card" id="customers">
-      <header class="section-header">
-        <div>
-          <h2>Add Customer</h2>
-          <p class="subtle">Enroll a subscriber manually and optionally issue portal credentials.</p>
-        </div>
-      </header>
-      <form
-        class="stacked-form two-column"
-        method="post"
-        action="{{ url_for('create_client_admin', section='customers', status=request.args.get('status')) }}"
-        enctype="multipart/form-data"
-      >
-        <label>
-          Full name
-          <input type="text" name="name" placeholder="Daisy Duke" required />
-        </label>
-        <label>
-          Email
-          <input type="email" name="email" placeholder="daisy@example.com" required />
-        </label>
-        <label>
-          Company
-          <input type="text" name="company" placeholder="DIXIELAND WIRELESS LLC" />
-        </label>
-        <label>
-          Phone number
-          <input type="tel" name="phone" placeholder="(334) 555-0100" required />
-        </label>
-        <label class="full-width">
-          Service address
-          <input type="text" name="address" placeholder="123 Main Street, Tallassee, AL" required />
-        </label>
-        {% if plan_field_config %}
-        <div class="full-width plan-choice-card">
-          <h3>Service plans</h3>
-          <p class="subtle helper-text">
-            Assign the residential, phone, and business packages tied to this account. Leave any category blank when it's
-            not part of the subscription.
-          </p>
-          <div class="field-grid">
-            {% for field in plan_field_config %}
-            <label>
-              {{ field.label }}
-              <select name="{{ field.field }}">
-                <option value="">No {{ field.category|lower }} plan</option>
-                {% for plan in field.plans %}
-                <option value="{{ plan.name }}">{{ plan.name }}{% if plan.price_cents %} ({{ plan.price_cents|currency }}/mo){% endif %}</option>
-                {% endfor %}
-              </select>
-            </label>
-            {% endfor %}
-          </div>
-          <div class="wifi-toggle admin">
-            <span class="field-label">Provide managed Wi-Fi router?</span>
-            <div class="toggle-options">
-              <label class="toggle-option">
-                <input type="radio" name="wifi_router_needed" value="yes" />
-                <span>Yes</span>
-              </label>
-              <label class="toggle-option">
-                <input type="radio" name="wifi_router_needed" value="no" checked />
-                <span>No</span>
-              </label>
-            </div>
-          </div>
-        </div>
-        {% endif %}
-        <label>
-          Driver's license number
-          <input type="text" name="driver_license_number" placeholder="AL-9876543" required />
-        </label>
-        <label>
-          Status
-          <select name="status">
-            {% for option in status_options %}
-            <option value="{{ option }}" {% if option == 'New' %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>
-          Portal password (optional)
-          <input type="password" name="password" minlength="8" placeholder="Generate a secure password" />
-        </label>
-        <label>
-          Confirm password
-          <input type="password" name="confirm_password" minlength="8" placeholder="Repeat password" />
-        </label>
-        <label class="file-input full-width">
-          <span>Upload verification photo or PDF</span>
-          <input type="file" name="verification_photo" accept=".jpg,.jpeg,.png,.heic,.heif,.pdf" />
-        </label>
-        <p class="subtle full-width helper-text">
-          Adding contact details and an ID image keeps compliance, billing, and field teams aligned for every new subscriber.
-        </p>
-        <label class="full-width">
-          Notes
-          <textarea name="notes" rows="3" placeholder="Construction schedule, network specifics, or onboarding needs."></textarea>
-        </label>
-        <button class="button primary" type="submit">Create customer</button>
-      </form>
-    </section>
-    <section class="card">
+    <section class="card table-card" id="customers">
       <header class="section-header">
         <div>
           <h2>Customer Directory</h2>
-          <p class="subtle">Track signup status, notes, and progress.</p>
+          <p class="subtle">Browse every account at a glance and jump into the full admin view with a single click.</p>
         </div>
-        <form method="get" class="filter-form" action="{{ url_for('dashboard') }}">
-          <input type="hidden" name="section" value="customers" />
-          <label>
-            <span>Status</span>
-            <select name="status" onchange="this.form.submit()">
-              <option value="">All statuses</option>
-              {% for option in status_options %}
-              <option value="{{ option }}" {% if status_filter == option %}selected{% endif %}>{{ option }}</option>
-              {% endfor %}
-            </select>
-          </label>
-          {% if status_filter %}
-          <a class="button link" href="{{ url_for('dashboard', section='customers') }}">Clear</a>
-          {% endif %}
-        </form>
+        <div class="section-actions">
+          <form method="get" class="filter-form" action="{{ url_for('dashboard') }}">
+            <input type="hidden" name="section" value="customers" />
+            <label>
+              <span>Status</span>
+              <select name="status" onchange="this.form.submit()">
+                <option value="">All statuses</option>
+                {% for option in status_options %}
+                <option value="{{ option }}" {% if status_filter == option %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            {% if status_filter %}
+            <a class="button link" href="{{ url_for('dashboard', section='customers') }}">Clear</a>
+            {% endif %}
+          </form>
+          <button class="button primary" type="button" id="open-add-customer">Add customer</button>
+        </div>
       </header>
       {% if clients %}
       <div class="table-wrapper">
@@ -507,13 +515,7 @@
           <thead>
             <tr>
               <th>Name</th>
-              <th>Email</th>
-              <th>Account #</th>
-              <th>Service</th>
-              <th>Contact &amp; Identity</th>
-              <th>Status</th>
-              <th>Notes</th>
-              <th>Actions</th>
+              <th>Service address</th>
             </tr>
           </thead>
           <tbody>
@@ -522,150 +524,17 @@
               <td>
                 <a
                   class="customer-name-link {% if focus_client_id and client.id == focus_client_id %}active{% endif %}"
-                  href="{{ url_for('dashboard', section='customers', status=status_filter, focus=client.id) }}"
+                  href="{{ url_for('admin_client_account', client_id=client.id) }}"
                 >
                   {{ client.name }}
                 </a>
-                <div class="subtle">Joined {{ client.created_at.strftime('%b %d, %Y') }}</div>
               </td>
-              <td>{{ client.email }}</td>
-              <td><code>{{ client.account_reference }}</code></td>
               <td>
-                {% if client.service_summary %}
-                {{ client.service_summary }}
+                {% if client.address %}
+                <span class="address-text">{{ client.address }}</span>
                 {% else %}
                 —
                 {% endif %}
-                <div class="subtle router-summary">
-                  {% if client.wifi_router_needed %}
-                  Router: Provided by DIXIELAND
-                  {% else %}
-                  Router: Customer supplied
-                  {% endif %}
-                </div>
-              </td>
-              <td class="contact-cell">
-                <div class="customer-contact-grid">
-                  <label>
-                    <span>Phone</span>
-                    <input
-                      type="tel"
-                      name="phone"
-                      value="{{ client.phone or '' }}"
-                      placeholder="(555) 555-0100"
-                      form="client-status-{{ client.id }}"
-                    />
-                  </label>
-                  <label class="full">
-                    <span>Service address</span>
-                    <textarea name="address" rows="2" placeholder="Enter service address" form="client-status-{{ client.id }}">{{ client.address or '' }}</textarea>
-                  </label>
-                  <label>
-                    <span>Driver's license</span>
-                    <input
-                      type="text"
-                      name="driver_license_number"
-                      value="{{ client.driver_license_number or '' }}"
-                      placeholder="AL-1234567"
-                      form="client-status-{{ client.id }}"
-                    />
-                  </label>
-                  <div class="full router-toggle">
-                    <span>Managed Wi-Fi router</span>
-                    <div class="toggle-options compact">
-                      <label class="toggle-option small">
-                        <input
-                          type="radio"
-                          name="wifi_router_needed"
-                          value="yes"
-                          form="client-status-{{ client.id }}"
-                          {% if client.wifi_router_needed %}checked{% endif %}
-                        />
-                        <span>Yes</span>
-                      </label>
-                      <label class="toggle-option small">
-                        <input
-                          type="radio"
-                          name="wifi_router_needed"
-                          value="no"
-                          form="client-status-{{ client.id }}"
-                          {% if not client.wifi_router_needed %}checked{% endif %}
-                        />
-                        <span>No</span>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-                <div class="verification-panel">
-                  {% if client.verification_photo_filename %}
-                  <div class="verification-meta">
-                    <a
-                      class="button small ghost"
-                      href="{{ url_for('client_verification_photo', client_id=client.id) }}"
-                      target="_blank"
-                      rel="noopener"
-                    >
-                      View photo
-                    </a>
-                    <span class="subtle">
-                      Updated
-                      {{ client.verification_photo_uploaded_at.strftime('%b %d, %Y') if client.verification_photo_uploaded_at else 'recently' }}
-                    </span>
-                  </div>
-                  {% else %}
-                  <p class="subtle">No verification photo on file.</p>
-                  {% endif %}
-                  <form
-                    class="inline-form verification-upload"
-                    method="post"
-                    action="{{ url_for('upload_client_verification', client_id=client.id, section='customers', status=status_filter, focus=focus_client_id) }}"
-                    enctype="multipart/form-data"
-                  >
-                    <label class="file-input small">
-                      <span>Choose file</span>
-                      <input type="file" name="verification_photo" accept=".jpg,.jpeg,.png,.heic,.heif,.pdf" required />
-                    </label>
-                    <button class="button small" type="submit">Upload</button>
-                  </form>
-                  {% if client.verification_photo_filename %}
-                  <form
-                    class="inline-form verification-remove"
-                    method="post"
-                    action="{{ url_for('upload_client_verification', client_id=client.id, section='customers', status=status_filter, focus=focus_client_id) }}"
-                    onsubmit="return confirm('Remove the stored verification photo?');"
-                  >
-                    <input type="hidden" name="action" value="remove" />
-                    <button class="button small danger" type="submit">Remove</button>
-                  </form>
-                  {% endif %}
-                </div>
-              </td>
-              <td>
-                <form
-                  id="client-status-{{ client.id }}"
-                  method="post"
-                  action="{{ url_for('update_client', client_id=client.id, section='customers', status=status_filter, focus=focus_client_id) }}"
-                >
-                  <select name="status">
-                    {% for option in status_options %}
-                    <option value="{{ option }}" {% if client.status == option %}selected{% endif %}>{{ option }}</option>
-                    {% endfor %}
-                  </select>
-                </form>
-              </td>
-              <td class="notes-cell">
-                <textarea name="notes" rows="3" form="client-status-{{ client.id }}" placeholder="Add notes">{{ client.notes or '' }}</textarea>
-              </td>
-              <td class="action-cell">
-                <button class="button small primary" type="submit" form="client-status-{{ client.id }}">Save</button>
-                <form
-                  method="post"
-                  class="inline-form"
-                  action="{{ url_for('delete_client', client_id=client.id, section='customers', status=status_filter, focus=focus_client_id) }}"
-                  onsubmit="return confirm('Remove this client?');"
-                >
-                  <button class="button small danger" type="submit">Delete</button>
-                </form>
               </td>
             </tr>
             {% endfor %}
@@ -679,54 +548,164 @@
       </div>
       {% endif %}
     </section>
-    {% elif active_section == 'portal' %}
-    <section class="card" id="portal">
-      <header class="section-header">
-        <div>
-          <h2>Portal Credentials</h2>
-          <p class="subtle">Issue and reset passwords for the customer portal.</p>
-        </div>
-      </header>
-      {% if clients %}
-      <div class="client-stack">
-        {% for client in clients %}
-        <article class="client-card">
-          <header>
-            <div>
-              <h3>{{ client.name }}</h3>
-              <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
-            </div>
-            <span class="badge subtle">{{ client.status }}</span>
-          </header>
-          <div class="client-card-body">
-            {% if client.portal_password_updated_at %}
-            <p class="subtle">Password last updated {{ client.portal_password_updated_at.strftime('%b %d, %Y %I:%M %p') }}</p>
-            {% else %}
-            <p class="alert subtle">Password not issued yet.</p>
-            {% endif %}
-            <form class="stacked-form" method="post" action="{{ url_for('set_portal_password', client_id=client.id, section='portal', status=request.args.get('status')) }}">
-              <label>
-                New password
-                <input type="password" name="password" minlength="8" placeholder="Create a secure password" required />
-              </label>
-              <label>
-                Confirm password
-                <input type="password" name="confirm_password" minlength="8" placeholder="Re-enter password" required />
-              </label>
-              <button class="button small primary" type="submit">Save password</button>
-            </form>
-            <form class="stacked-form" method="post" action="{{ url_for('reset_portal_password', client_id=client.id, section='portal', status=request.args.get('status')) }}">
-              <button class="button small" type="submit">Generate temporary password</button>
-            </form>
-            <p class="subtle">Share the login URL: <a href="{{ url_for('portal_login', _external=True) }}" target="_blank" rel="noopener">Customer Portal</a>.</p>
+    <div class="modal-backdrop" id="add-customer-modal" hidden>
+      <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="add-customer-title">
+        <header class="modal-header">
+          <div>
+            <h2 id="add-customer-title">Add Customer</h2>
+            <p class="subtle">Enroll a subscriber manually and optionally issue portal credentials.</p>
           </div>
-        </article>
-        {% endfor %}
+          <button class="modal-close" type="button" data-close aria-label="Close add customer form">&times;</button>
+        </header>
+        <form
+          class="stacked-form two-column"
+          method="post"
+          action="{{ url_for('create_client_admin', section='customers', status=request.args.get('status')) }}"
+          enctype="multipart/form-data"
+        >
+          <label>
+            Full name
+            <input type="text" name="name" placeholder="Daisy Duke" required />
+          </label>
+          <label>
+            Email
+            <input type="email" name="email" placeholder="daisy@example.com" required />
+          </label>
+          <label>
+            Company
+            <input type="text" name="company" placeholder="DIXIELAND WIRELESS LLC" />
+          </label>
+          <label>
+            Phone number
+            <input type="tel" name="phone" placeholder="(334) 555-0100" required />
+          </label>
+          <label class="full-width">
+            Service address
+            <input type="text" name="address" placeholder="123 Main Street, Tallassee, AL" required />
+          </label>
+          {% if plan_field_config %}
+          <div class="full-width plan-choice-card">
+            <h3>Service plans</h3>
+            <p class="subtle helper-text">
+              Assign the residential, phone, and business packages tied to this account. Leave any category blank when it's
+              not part of the subscription.
+            </p>
+            <div class="field-grid">
+              {% for field in plan_field_config %}
+              <label>
+                {{ field.label }}
+                <select name="{{ field.field }}">
+                  <option value="">No {{ field.category|lower }} plan</option>
+                  {% for plan in field.plans %}
+                  <option value="{{ plan.name }}">{{ plan.name }}{% if plan.price_cents %} ({{ plan.price_cents|currency }}/mo){% endif %}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              {% endfor %}
+            </div>
+            <div class="wifi-toggle admin">
+              <span class="field-label">Provide managed Wi-Fi router?</span>
+              <div class="toggle-options">
+                <label class="toggle-option">
+                  <input type="radio" name="wifi_router_needed" value="yes" />
+                  <span>Yes</span>
+                </label>
+                <label class="toggle-option">
+                  <input type="radio" name="wifi_router_needed" value="no" checked />
+                  <span>No</span>
+                </label>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+          <label>
+            Driver's license number
+            <input type="text" name="driver_license_number" placeholder="AL-9876543" required />
+          </label>
+          <label>
+            Status
+            <select name="status">
+              {% for option in status_options %}
+              <option value="{{ option }}" {% if option == 'New' %}selected{% endif %}>{{ option }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Portal password (optional)
+            <input type="password" name="password" minlength="8" placeholder="Generate a secure password" />
+          </label>
+          <label>
+            Confirm password
+            <input type="password" name="confirm_password" minlength="8" placeholder="Repeat password" />
+          </label>
+          <label class="file-input full-width">
+            <span>Upload verification photo or PDF</span>
+            <input type="file" name="verification_photo" accept=".jpg,.jpeg,.png,.heic,.heif,.pdf" />
+          </label>
+          <p class="subtle full-width helper-text">
+            Adding contact details and an ID image keeps compliance, billing, and field teams aligned for every new subscriber.
+          </p>
+          <label class="full-width">
+            Notes
+            <textarea name="notes" rows="3" placeholder="Construction schedule, network specifics, or onboarding needs."></textarea>
+          </label>
+          <div class="modal-actions">
+            <button class="button secondary" type="button" data-close>Cancel</button>
+            <button class="button primary" type="submit">Create customer</button>
+          </div>
+        </form>
       </div>
-      {% else %}
-      <p class="subtle">Add customers first to enable portal management.</p>
-      {% endif %}
-    </section>
+    </div>
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        const modal = document.getElementById('add-customer-modal');
+        const openButton = document.getElementById('open-add-customer');
+        if (!modal || !openButton) {
+          return;
+        }
+
+        const closeButtons = modal.querySelectorAll('[data-close]');
+        const nameField = modal.querySelector('input[name="name"]');
+        let previousOverflow = '';
+
+        const openModal = () => {
+          previousOverflow = document.body.style.overflow;
+          modal.removeAttribute('hidden');
+          document.body.style.overflow = 'hidden';
+          window.requestAnimationFrame(() => {
+            if (nameField) {
+              nameField.focus();
+            }
+          });
+        };
+
+        const closeModal = () => {
+          modal.setAttribute('hidden', '');
+          document.body.style.overflow = previousOverflow;
+          if (openButton) {
+            openButton.focus();
+          }
+        };
+
+        openButton.addEventListener('click', openModal);
+        closeButtons.forEach((button) => {
+          button.addEventListener('click', closeModal);
+        });
+
+        modal.addEventListener('click', (event) => {
+          if (event.target === modal) {
+            closeModal();
+          }
+        });
+
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && !modal.hasAttribute('hidden')) {
+            event.preventDefault();
+            closeModal();
+          }
+        });
+      });
+    </script>
     {% elif active_section == 'billing' %}
     <section class="card" id="billing">
       <header class="section-header">
@@ -734,21 +713,39 @@
           <h2>Billing Management</h2>
           <p class="subtle">Create and reconcile invoices for every subscriber.</p>
         </div>
+        <div class="section-actions">
+          <form method="post" action="{{ url_for('run_autopay') }}">
+            <button class="button secondary" type="submit">Run Autopay</button>
+          </form>
+        </div>
       </header>
       {% if clients %}
       <div class="client-stack">
         {% for client in clients %}
         {% set outstanding_invoices = client.invoices | selectattr('status', 'in', ['Pending', 'Overdue']) | list %}
         {% set balance_cents = outstanding_invoices | map(attribute='amount_cents') | sum %}
+        {% set default_method = client.default_payment_method() %}
         <article class="client-card">
           <header>
             <div>
-              <h3>{{ client.name }}</h3>
+              <h3>
+                <a class="customer-name-link" href="{{ url_for('admin_client_account', client_id=client.id) }}">
+                  {{ client.name }}
+                </a>
+              </h3>
               <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
             </div>
             <div class="client-metrics">
               <span><strong>{{ client.invoices|length }}</strong> invoices</span>
               <span><strong>{{ balance_cents|currency }}</strong> due</span>
+            </div>
+            <div class="client-status-pills">
+              <span class="badge {% if client.service_suspended %}danger{% else %}subtle{% endif %}">{{ client.billing_status }}</span>
+              {% if client.autopay_enabled %}
+              <span class="badge success">Autopay {{ default_method.describe() if default_method else 'active' }}</span>
+              {% else %}
+              <span class="badge warning">Autopay off</span>
+              {% endif %}
             </div>
           </header>
           <div class="client-card-body">
@@ -815,6 +812,28 @@
         </article>
         {% endfor %}
       </div>
+      {% if recent_autopay_events %}
+      <section class="autopay-log">
+        <h3>Recent autopay activity</h3>
+        <ul class="autopay-event-list">
+          {% for event in recent_autopay_events %}
+          <li>
+            <div class="event-primary">
+              <strong>{{ event.client.name if event.client else 'Account' }}</strong>
+              <span class="badge {% if event.status == 'success' %}success{% elif event.status == 'failed' %}danger{% else %}subtle{% endif %}">{{ event.status | capitalize }}</span>
+            </div>
+            <div class="event-meta">
+              <span>{{ (event.amount_cents or 0)|currency }}</span>
+              <span class="subtle">{{ event.attempted_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+            </div>
+            {% if event.message %}
+            <p class="subtle">{{ event.message }}</p>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
       {% else %}
       <p class="subtle">Customers will appear here once they have been added to the directory.</p>
       {% endif %}
@@ -827,16 +846,31 @@
           <p class="subtle">Track every antenna, router, and install detail.</p>
         </div>
       </header>
+      {% if suspended_clients %}
+      <div class="suspension-callout">
+        <strong>{{ suspended_clients|length }} account{{ 's' if suspended_clients|length != 1 else '' }} suspended for billing</strong>
+        <p class="subtle">CRM billing status changes automatically lift these holds when payments post.</p>
+      </div>
+      {% endif %}
       {% if clients %}
       <div class="client-stack">
         {% for client in clients %}
         <article class="client-card">
           <header>
             <div>
-              <h3>{{ client.name }}</h3>
+              <h3>
+                <a class="customer-name-link" href="{{ url_for('admin_client_account', client_id=client.id) }}">
+                  {{ client.name }}
+                </a>
+              </h3>
               <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
             </div>
-            <span class="badge subtle">{{ client.status }}</span>
+            <div class="client-status-pills">
+              <span class="badge subtle">{{ client.status }}</span>
+              {% if client.service_suspended %}
+              <span class="badge danger">Billing suspension</span>
+              {% endif %}
+            </div>
           </header>
           <div class="client-card-body">
             <div class="record-list">
@@ -1167,6 +1201,116 @@
         </div>
       </div>
     </section>
+    <section class="card" id="field-schedule-approvals">
+      <header class="section-header">
+        <div>
+          <h2>Technician schedule approvals</h2>
+          <p class="subtle">Approve or deny availability updates submitted by field technicians.</p>
+        </div>
+      </header>
+      {% if pending_schedule_requests %}
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Technician</th>
+              <th>Shift</th>
+              <th>Request</th>
+              <th>Submitted</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for block in pending_schedule_requests %}
+            <tr>
+              <td>
+                <strong>{{ block.technician.name if block.technician else 'Technician' }}</strong>
+                {% if block.note %}<div class="subtle">{{ block.note }}</div>{% endif %}
+              </td>
+              <td>
+                <div>{{ block.start_at.strftime('%b %d, %Y %I:%M %p') }}</div>
+                <div class="subtle">{{ block.end_at.strftime('%b %d, %Y %I:%M %p') }}</div>
+              </td>
+              <td>
+                {% if block.status == 'cancel_pending' %}
+                <span class="badge warning">Cancellation</span>
+                {% else %}
+                <span class="badge info">New availability</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if block.status == 'cancel_pending' and block.cancel_requested_at %}
+                {{ block.cancel_requested_at.strftime('%b %d, %Y %I:%M %p') }}
+                {% else %}
+                {{ block.created_at.strftime('%b %d, %Y %I:%M %p') }}
+                {% endif %}
+              </td>
+              <td class="field-actions">
+                <form
+                  id="approve-schedule-{{ block.id }}"
+                  class="inline-form"
+                  method="post"
+                  action="{{ url_for('approve_technician_schedule', block_id=block.id, section='field') }}"
+                >
+                  <input type="hidden" name="next" value="{{ url_for('dashboard', section='field') }}" />
+                  <label class="sr-only" for="approve-note-{{ block.id }}">Approval note</label>
+                  <input
+                    id="approve-note-{{ block.id }}"
+                    type="text"
+                    name="note"
+                    placeholder="Optional note"
+                  />
+                  <button class="button small primary" type="submit">Approve</button>
+                </form>
+                <form
+                  id="reject-schedule-{{ block.id }}"
+                  class="inline-form"
+                  method="post"
+                  action="{{ url_for('reject_technician_schedule', block_id=block.id, section='field') }}"
+                >
+                  <input type="hidden" name="next" value="{{ url_for('dashboard', section='field') }}" />
+                  <label class="sr-only" for="reject-note-{{ block.id }}">Rejection note</label>
+                  <input
+                    id="reject-note-{{ block.id }}"
+                    type="text"
+                    name="note"
+                    placeholder="Optional note"
+                  />
+                  <button class="button small danger" type="submit">Reject</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="subtle">No schedule updates require approval right now.</p>
+      {% endif %}
+      {% if recent_schedule_decisions %}
+      <div class="schedule-log">
+        <h3>Recent decisions</h3>
+        <ul>
+          {% for entry in recent_schedule_decisions %}
+          <li>
+            <strong>{{ entry.technician.name if entry.technician else 'Technician' }}</strong>
+            <span>
+              {% if entry.status == 'approved' %}
+              shift approved
+              {% elif entry.status == 'cancelled' %}
+              cancellation approved
+              {% elif entry.status == 'rejected' %}
+              request rejected
+              {% endif %}
+              on {{ entry.reviewed_at.strftime('%b %d, %Y %I:%M %p') if entry.reviewed_at else entry.updated_at.strftime('%b %d, %Y %I:%M %p') }}
+            </span>
+            {% if entry.review_note %}<span class="subtle">{{ entry.review_note }}</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+    </section>
     <section class="card" id="field-visits">
       <header class="section-header">
         <div>
@@ -1255,90 +1399,6 @@
           <p class="subtle">Respond to subscriber questions and document resolutions.</p>
         </div>
       </header>
-      <div class="snmp-settings-panel">
-        <div class="snmp-settings-header">
-          <h3>SNMP Relay Settings</h3>
-          {% if snmp_settings.host %}
-          <span class="status-pill status-active">Configured</span>
-          {% else %}
-          <span class="status-pill status-disabled">Not configured</span>
-          {% endif %}
-        </div>
-        <p class="subtle">
-          Provide the SNMP trap destination and identifiers used by your monitoring stack so DixieLand Wireless can
-          send server-side email notifications when appointments, tickets, and alerts change.
-        </p>
-        <form
-          class="stacked-form"
-          method="post"
-          action="{{ url_for('update_snmp_settings', section='support', status=request.args.get('status')) }}"
-        >
-          <div class="snmp-settings-grid">
-            <label>
-              Trap host
-              <input type="text" name="host" placeholder="snmp-relay.example.com" value="{{ snmp_config.host if snmp_config else '' }}" />
-            </label>
-            <label>
-              Port
-              <input type="number" name="port" min="1" max="65535" value="{{ snmp_config.port if snmp_config else 162 }}" />
-            </label>
-            <label>
-              Community string
-              <input type="text" name="community" placeholder="public" value="{{ snmp_config.community if snmp_config else 'public' }}" />
-            </label>
-            <label>
-              Enterprise OID
-              <input type="text" name="enterprise_oid" placeholder="1.3.6.1.4.1.x" value="{{ snmp_config.enterprise_oid if snmp_config else '1.3.6.1.4.1.8072.9999' }}" />
-            </label>
-            <label>
-              Admin email
-              <input type="email" name="admin_email" placeholder="ops@example.com" value="{{ snmp_config.admin_email if snmp_config else '' }}" />
-            </label>
-          </div>
-          <div class="snmp-settings-actions">
-            <button class="button secondary" type="submit">Save SNMP settings</button>
-          </div>
-        </form>
-      </div>
-      <div class="snmp-email-panel">
-        <div class="snmp-email-header">
-          <h3>SNMP Email Relay</h3>
-          {% if snmp_enabled %}
-          <span class="status-pill status-active">Enabled</span>
-          {% else %}
-          <span class="status-pill status-disabled">Disabled</span>
-          {% endif %}
-        </div>
-        <p class="subtle">
-          Trigger a server-side email by emitting an SNMP trap. Populate the recipient, subject,
-          and message body and the monitoring stack will deliver the notification.
-        </p>
-        <form class="stacked-form snmp-email-form" method="post" action="{{ url_for('send_snmp_email_admin') }}">
-          <label>
-            Recipient email
-            <input type="email" name="recipient" list="client-emails" placeholder="customer@example.com" required />
-          </label>
-          <label>
-            Subject
-            <input type="text" name="subject" placeholder="Example: Maintenance window" required />
-          </label>
-          <label>
-            Message
-            <textarea name="body" rows="4" placeholder="Share details that will help the customer." required></textarea>
-          </label>
-          <button class="button primary" type="submit">Send SNMP email</button>
-        </form>
-        <datalist id="client-emails">
-          {% for client in clients %}
-          <option value="{{ client.email }}">{{ client.name }}</option>
-          {% endfor %}
-        </datalist>
-        {% if not snmp_enabled %}
-        <p class="snmp-email-warning subtle">
-          Configure <code>SNMP_TRAP_HOST</code> or provide a <code>SNMP_EMAIL_SENDER</code> callable to activate delivery.
-        </p>
-        {% endif %}
-      </div>
       <div class="down-detector-panel">
         <div class="down-detector-header">
           <h3>Down detector redirect</h3>
@@ -1377,7 +1437,11 @@
         <article class="client-card">
           <header>
             <div>
-              <h3>{{ client.name }}</h3>
+              <h3>
+                <a class="customer-name-link" href="{{ url_for('admin_client_account', client_id=client.id) }}">
+                  {{ client.name }}
+                </a>
+              </h3>
               <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
             </div>
             <span class="badge subtle">{{ client.status }}</span>
@@ -1386,12 +1450,33 @@
             <div class="record-list">
               {% if client.tickets %}
               {% for ticket in client.tickets | sort(attribute='created_at', reverse=True) %}
-              <form class="record-row ticket-row" method="post" action="{{ url_for('update_ticket', ticket_id=ticket.id, section='support', status=request.args.get('status')) }}">
+              <form
+                class="record-row ticket-row"
+                method="post"
+                action="{{ url_for('update_ticket', ticket_id=ticket.id, section='support', status=request.args.get('status')) }}"
+                enctype="multipart/form-data"
+              >
                 <div class="ticket-meta">
                   <strong>{{ ticket.subject }}</strong>
-                  <span class="subtle">Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+                  <span class="subtle">Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }} · Priority {{ ticket.priority }}</span>
                 </div>
                 <p class="ticket-message">{{ ticket.message }}</p>
+                {% if ticket.attachments %}
+                <div class="ticket-attachments">
+                  <p class="subtle">Photos provided:</p>
+                  <div class="ticket-attachment-strip">
+                    {% for attachment in ticket.attachments %}
+                    <a href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
+                      <img
+                        src="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}"
+                        alt="Ticket attachment {{ loop.index }}"
+                        loading="lazy"
+                      />
+                    </a>
+                    {% endfor %}
+                  </div>
+                </div>
+                {% endif %}
                 <label>
                   Status
                   <select name="status">
@@ -1401,8 +1486,21 @@
                   </select>
                 </label>
                 <label>
+                  Priority
+                  <select name="priority">
+                    {% for option in ticket_priority_options %}
+                    <option value="{{ option }}" {% if ticket.priority == option %}selected{% endif %}>{{ option }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label>
                   Resolution notes
                   <textarea name="resolution_notes" rows="3" placeholder="Document updates shared with the client.">{{ ticket.resolution_notes or '' }}</textarea>
+                </label>
+                <label>
+                  Add photos
+                  <input type="file" name="attachments" accept="image/*" multiple />
+                  <span class="subtle">Optional: include additional documentation.</span>
                 </label>
                 <div class="record-actions">
                   <button class="button small primary" type="submit">Update</button>
@@ -1423,6 +1521,216 @@
       {% else %}
       <p class="subtle">Once tickets arrive they'll appear organized here for easy follow-up.</p>
       {% endif %}
+    </section>
+    {% elif active_section == 'notifications' %}
+    <section class="card" id="notifications">
+      <header class="section-header">
+        <div>
+          <h2>Notification Delivery</h2>
+          <p class="subtle">Manage Microsoft 365 email, automated alerts, and SNMP fallbacks from one console.</p>
+        </div>
+      </header>
+      <div class="notification-grid">
+        <article class="notification-card">
+          <header class="notification-card-header">
+            <div>
+              <h3>Office 365 Email</h3>
+              <p class="subtle">Secure SMTP delivery for installs, billing, and customer updates.</p>
+            </div>
+            {% if office365_ready %}
+            <span class="status-pill status-active">Connected</span>
+            {% else %}
+            <span class="status-pill status-disabled">Needs setup</span>
+            {% endif %}
+          </header>
+          <form class="stacked-form" method="post" action="{{ url_for('configure_office365_notifications') }}">
+            <div class="notification-form-grid">
+              <label>
+                From name
+                <input type="text" name="from_name" placeholder="DixieLand Wireless" value="{{ notification_config.from_name if notification_config and notification_config.from_name else '' }}" />
+              </label>
+              <label>
+                From email
+                <input type="email" name="from_email" placeholder="noreply@dixielandwireless.com" value="{{ notification_config.from_email if notification_config and notification_config.from_email else '' }}" />
+              </label>
+              <label>
+                Reply-to name
+                <input
+                  type="text"
+                  name="reply_to_name"
+                  placeholder="Support Team"
+                  value="{{ notification_config.reply_to_name if notification_config and notification_config.reply_to_name else '' }}"
+                />
+              </label>
+              <label>
+                Reply-to email
+                <input
+                  type="email"
+                  name="reply_to_email"
+                  placeholder="support@dixielandwireless.com"
+                  value="{{ notification_config.reply_to_email if notification_config and notification_config.reply_to_email else '' }}"
+                />
+              </label>
+              <label>
+                SMTP username
+                <input type="email" name="smtp_username" placeholder="notifications@dixielandwireless.com" value="{{ notification_config.smtp_username if notification_config and notification_config.smtp_username else '' }}" />
+              </label>
+              <label>
+                SMTP password
+                <input type="password" name="smtp_password" placeholder="••••••••" />
+                <span class="subtle">Leave blank to keep the current password.</span>
+              </label>
+              <div class="notification-clear-toggle">
+                <input type="checkbox" id="reset-smtp-password" name="reset_smtp_password" />
+                <label for="reset-smtp-password">Clear saved password</label>
+              </div>
+              <label>
+                SMTP host
+                <input type="text" name="smtp_host" placeholder="smtp.office365.com" value="{{ notification_config.smtp_host if notification_config and notification_config.smtp_host else 'smtp.office365.com' }}" />
+              </label>
+              <label>
+                SMTP port
+                <input type="number" name="smtp_port" min="1" max="65535" value="{{ notification_config.smtp_port if notification_config and notification_config.smtp_port else 587 }}" />
+              </label>
+              <label class="checkbox-field">
+                <input type="checkbox" name="use_tls" {% if notification_config and notification_config.use_tls %}checked{% endif %} />
+                <span>Use STARTTLS encryption</span>
+              </label>
+              <label>
+                Tenant ID (optional)
+                <input type="text" name="tenant_id" placeholder="00000000-0000-0000-0000-000000000000" value="{{ notification_config.tenant_id if notification_config and notification_config.tenant_id else '' }}" />
+              </label>
+              <label>
+                Client ID (optional)
+                <input type="text" name="client_id" placeholder="Azure app registration ID" value="{{ notification_config.client_id if notification_config and notification_config.client_id else '' }}" />
+              </label>
+              <label>
+                Client secret (optional)
+                <input type="password" name="client_secret" placeholder="••••••••" />
+                <span class="subtle">Store the Microsoft Graph secret if you relay mail via delegated app access.</span>
+              </label>
+              <div class="notification-clear-toggle">
+                <input type="checkbox" id="reset-client-secret" name="reset_client_secret" />
+                <label for="reset-client-secret">Clear saved secret</label>
+              </div>
+              <label>
+                List-Unsubscribe URL
+                <input
+                  type="url"
+                  name="list_unsubscribe_url"
+                  placeholder="https://dixielandwireless.com/unsubscribe"
+                  value="{{ notification_config.list_unsubscribe_url if notification_config and notification_config.list_unsubscribe_url else '' }}"
+                />
+                <span class="subtle">Adds one-click unsubscribe headers for mailbox providers.</span>
+              </label>
+              <label>
+                List-Unsubscribe email
+                <input
+                  type="email"
+                  name="list_unsubscribe_mailto"
+                  placeholder="unsubscribe@dixielandwireless.com"
+                  value="{{ notification_config.list_unsubscribe_mailto if notification_config and notification_config.list_unsubscribe_mailto else '' }}"
+                />
+                <span class="subtle">Include a monitored inbox to improve deliverability.</span>
+              </label>
+            </div>
+            <div class="notification-actions">
+              <button class="button primary" type="submit">Save Office 365 settings</button>
+              {% if notification_config and notification_config.updated_at %}
+              <span class="subtle">Updated {{ notification_config.updated_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+              {% endif %}
+            </div>
+          </form>
+        </article>
+        <article class="notification-card">
+          <header class="notification-card-header">
+            <div>
+              <h3>Notification Preferences</h3>
+              <p class="subtle">Control which automated messages are dispatched to customers and technicians.</p>
+            </div>
+          </header>
+          <form class="stacked-form compact" method="post" action="{{ url_for('update_notification_preferences') }}">
+            <label class="checkbox-field">
+              <input type="checkbox" name="notify_installs" {% if notification_config and notification_config.notify_install_activity %}checked{% endif %} />
+              <span>Alert technicians about new and updated field jobs</span>
+            </label>
+            <label class="checkbox-field">
+              <input type="checkbox" name="notify_customers" {% if notification_config and notification_config.notify_customer_activity %}checked{% endif %} />
+              <span>Email customers when appointments or account activity changes</span>
+            </label>
+            <div class="notification-actions">
+              <button class="button secondary" type="submit">Save preferences</button>
+            </div>
+          </form>
+          <div class="notification-test-panel">
+            <h4>Send a test email</h4>
+            <p class="subtle">Verify the configuration by delivering a one-off notification using the active channel.</p>
+            <form class="stacked-form" method="post" action="{{ url_for('send_snmp_email_admin') }}">
+              <label>
+                Recipient
+                <input type="email" name="recipient" list="notification-recipient-suggestions" placeholder="customer@example.com" required />
+              </label>
+              <label>
+                Subject
+                <input type="text" name="subject" placeholder="Network maintenance window" required />
+              </label>
+              <label>
+                Message
+                <textarea name="body" rows="3" placeholder="Include details you'd like to confirm." required></textarea>
+              </label>
+              <button class="button primary" type="submit">Send test notification</button>
+            </form>
+            <datalist id="notification-recipient-suggestions">
+              {% for client in clients %}
+              <option value="{{ client.email }}">{{ client.name }}</option>
+              {% endfor %}
+            </datalist>
+          </div>
+        </article>
+        <article class="notification-card">
+          <header class="notification-card-header">
+            <div>
+              <h3>SNMP Fallback</h3>
+              <p class="subtle">Optional trap-based relay for legacy monitoring stacks.</p>
+            </div>
+            {% if snmp_settings.host %}
+            <span class="status-pill status-active">Configured</span>
+            {% else %}
+            <span class="status-pill status-disabled">Not configured</span>
+            {% endif %}
+          </header>
+          <form class="stacked-form compact" method="post" action="{{ url_for('update_snmp_settings') }}">
+            <div class="snmp-settings-grid">
+              <label>
+                Trap host
+                <input type="text" name="host" placeholder="snmp-relay.example.com" value="{{ snmp_config.host if snmp_config and snmp_config.host else '' }}" />
+              </label>
+              <label>
+                Port
+                <input type="number" name="port" min="1" max="65535" value="{{ snmp_config.port if snmp_config and snmp_config.port else 162 }}" />
+              </label>
+              <label>
+                Community string
+                <input type="text" name="community" placeholder="public" value="{{ snmp_config.community if snmp_config and snmp_config.community else 'public' }}" />
+              </label>
+              <label>
+                Enterprise OID
+                <input type="text" name="enterprise_oid" placeholder="1.3.6.1.4.1.x" value="{{ snmp_config.enterprise_oid if snmp_config and snmp_config.enterprise_oid else '1.3.6.1.4.1.8072.9999' }}" />
+              </label>
+              <label>
+                Admin email
+                <input type="email" name="admin_email" placeholder="ops@example.com" value="{{ snmp_config.admin_email if snmp_config and snmp_config.admin_email else '' }}" />
+              </label>
+            </div>
+            <div class="notification-actions">
+              <button class="button secondary" type="submit">Save SNMP settings</button>
+            </div>
+          </form>
+          {% if not snmp_enabled %}
+          <p class="subtle snmp-email-warning">Provide a trap host or custom sender to enable SNMP delivery.</p>
+          {% endif %}
+        </article>
+      </div>
     </section>
     {% elif active_section == 'plans' %}
     <section class="card" id="plans">
@@ -1591,6 +1899,59 @@
           <p class="subtle">Upload the latest logos, favicons, and wordmarks for DIXIELAND WIRELESS LLC.</p>
         </div>
       </header>
+      <div class="branding-theme-panel">
+        <article class="branding-theme-card">
+          <header>
+            <h3>Site background</h3>
+            <p>Pick the primary background color for the public site and dashboard.</p>
+          </header>
+          <div
+            class="branding-theme-preview{% if site_theme.background_image_filename %} has-image{% endif %}"
+            style="background: {{ site_theme.background_color }}; color: {{ site_theme.text_color }};"
+            aria-hidden="true"
+          >
+            {% if site_theme.background_image_filename %}
+            <img
+              class="branding-theme-preview-image"
+              src="{{ url_for('theme_background') }}"
+              alt=""
+              role="presentation"
+            />
+            {% endif %}
+            <span class="branding-theme-preview-label">Preview</span>
+            <span class="branding-theme-preview-text">DIXIELAND WIRELESS LLC</span>
+          </div>
+          <form
+            class="stacked-form"
+            method="post"
+            action="{{ url_for('update_site_theme') }}"
+            enctype="multipart/form-data"
+          >
+            <label>
+              Background color
+              <input type="color" name="background_color" value="{{ site_theme.background_color }}" aria-describedby="theme-color-help" required />
+            </label>
+            <p class="helper-text" id="theme-color-help">Text automatically adjusts to {{ site_theme.text_color }} for readability.</p>
+            <label class="file-input">
+              <span>Background photo</span>
+              <input type="file" name="background_photo" accept="image/*" />
+            </label>
+            <p class="helper-text">
+              {% if site_theme.background_image_filename %}
+              Currently using {{ site_theme.background_image_original or 'the uploaded photo' }}. Upload a new image to replace it.
+              {% else %}
+              Optional: upload a high-resolution photo to cover the site background.
+              {% endif %}
+            </p>
+            <div class="form-actions branding-theme-actions">
+              <button class="button secondary" type="submit">Save background settings</button>
+              {% if site_theme.background_image_filename %}
+              <button class="button link" type="submit" name="remove_background_photo" value="1">Remove photo</button>
+              {% endif %}
+            </div>
+          </form>
+        </article>
+      </div>
       <div class="branding-grid">
         {% for key, metadata in branding_asset_types.items() %}
         {% set asset = branding_assets.get(key) %}
@@ -1619,6 +1980,183 @@
           </form>
         </article>
         {% endfor %}
+      </div>
+    </section>
+    {% elif active_section == 'story' %}
+    <section class="card story-card" id="story">
+      <header class="section-header">
+        <div>
+          <h2>Team &amp; Trust</h2>
+          <p class="subtle">Keep the public site in sync with your people and the businesses that rely on your network.</p>
+        </div>
+      </header>
+      <div class="story-grid">
+        <article class="story-panel">
+          <header class="story-panel-header">
+            <h3>Meet the team</h3>
+            <p class="subtle">Add names, titles, bios, and headshots for the About page.</p>
+          </header>
+          <form
+            class="stacked-form story-create-form"
+            method="post"
+            action="{{ url_for('create_team_member_admin') }}"
+            enctype="multipart/form-data"
+          >
+            <label>
+              Full name
+              <input type="text" name="name" placeholder="Example: Jordan Williams" required />
+            </label>
+            <label>
+              Title
+              <input type="text" name="title" placeholder="Network Operations Manager" />
+            </label>
+            <label>
+              About
+              <textarea
+                name="bio"
+                rows="4"
+                placeholder="Share a quick introduction, experience, or favorite part about serving customers."
+              ></textarea>
+            </label>
+            <label class="file-field">
+              Headshot
+              <input type="file" name="photo" accept="image/*" />
+            </label>
+            <button class="button primary" type="submit">Add team member</button>
+          </form>
+          <div class="story-list">
+            {% if team_members %}
+            {% for member in team_members %}
+            <article class="story-item">
+              <div class="story-item-media">
+                {% if member.photo_filename %}
+                <img
+                  src="{{ url_for('team_member_photo', member_id=member.id) }}"
+                  alt="{{ member.name }} headshot"
+                />
+                {% else %}
+                <div class="story-item-placeholder" aria-hidden="true">{{ member.name[:1] }}</div>
+                {% endif %}
+              </div>
+              <form
+                class="stacked-form story-item-form"
+                method="post"
+                action="{{ url_for('update_team_member_admin', member_id=member.id) }}"
+                enctype="multipart/form-data"
+              >
+                <label>
+                  Full name
+                  <input type="text" name="name" value="{{ member.name }}" required />
+                </label>
+                <label>
+                  Title
+                  <input type="text" name="title" value="{{ member.title or '' }}" />
+                </label>
+                <label>
+                  About
+                  <textarea name="bio" rows="4">{{ member.bio or '' }}</textarea>
+                </label>
+                <label class="file-field">
+                  Replace photo
+                  <input type="file" name="photo" accept="image/*" />
+                </label>
+                <div class="form-actions">
+                  <button class="button small primary" type="submit">Save changes</button>
+                  <button
+                    class="button small danger"
+                    type="submit"
+                    formaction="{{ url_for('delete_team_member_admin', member_id=member.id) }}"
+                    formmethod="post"
+                    onclick="return confirm('Remove {{ member.name }} from the team?');"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </form>
+            </article>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">No team members yet. Add your leadership and installers to build trust.</p>
+            {% endif %}
+          </div>
+        </article>
+        <article class="story-panel">
+          <header class="story-panel-header">
+            <h3>Businesses that trust us</h3>
+            <p class="subtle">Showcase partners on the homepage with optional logo links.</p>
+          </header>
+          <form
+            class="stacked-form story-create-form"
+            method="post"
+            action="{{ url_for('create_trusted_business_admin') }}"
+            enctype="multipart/form-data"
+          >
+            <label>
+              Business name
+              <input type="text" name="name" placeholder="Example: Main Street Market" required />
+            </label>
+            <label>
+              Website URL
+              <input type="url" name="website_url" placeholder="https://example.com" />
+            </label>
+            <label class="file-field">
+              Logo
+              <input type="file" name="logo" accept="image/*,.svg" />
+            </label>
+            <button class="button primary" type="submit">Add business</button>
+          </form>
+          <div class="story-list">
+            {% if trusted_businesses %}
+            {% for business in trusted_businesses %}
+            <article class="story-item">
+              <div class="story-item-media">
+                {% if business.logo_filename %}
+                <img
+                  src="{{ url_for('trusted_business_logo', business_id=business.id) }}"
+                  alt="{{ business.name }} logo"
+                />
+                {% else %}
+                <div class="story-item-placeholder" aria-hidden="true">{{ business.name[:1] }}</div>
+                {% endif %}
+              </div>
+              <form
+                class="stacked-form story-item-form"
+                method="post"
+                action="{{ url_for('update_trusted_business_admin', business_id=business.id) }}"
+                enctype="multipart/form-data"
+              >
+                <label>
+                  Business name
+                  <input type="text" name="name" value="{{ business.name }}" required />
+                </label>
+                <label>
+                  Website URL
+                  <input type="url" name="website_url" value="{{ business.website_url or '' }}" />
+                </label>
+                <label class="file-field">
+                  Replace logo
+                  <input type="file" name="logo" accept="image/*,.svg" />
+                </label>
+                <div class="form-actions">
+                  <button class="button small primary" type="submit">Save changes</button>
+                  <button
+                    class="button small danger"
+                    type="submit"
+                    formaction="{{ url_for('delete_trusted_business_admin', business_id=business.id) }}"
+                    formmethod="post"
+                    onclick="return confirm('Remove {{ business.name }} from the homepage?');"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </form>
+            </article>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">Add the companies you serve to highlight community partnerships.</p>
+            {% endif %}
+          </div>
+        </article>
       </div>
     </section>
     {% elif active_section == 'blog' %}
@@ -1708,6 +2246,289 @@
         {% else %}
         <p class="subtle">No posts yet. Draft your first update to keep subscribers informed.</p>
         {% endif %}
+      </div>
+    </section>
+    {% elif active_section == 'security' %}
+    <section class="card security-card" id="security">
+      <header class="section-header">
+        <div>
+          <h2>HTTPS &amp; Certificates</h2>
+          <p class="subtle">Issue Let's Encrypt certificates so the dashboard serves securely on port 443.</p>
+        </div>
+      </header>
+      <div class="security-grid">
+        <article class="security-panel">
+          <h3>Portal administrators</h3>
+          <p class="subtle">Control who can access the admin dashboard and manage customer data.</p>
+          {% if admin_users %}
+          <div class="admin-users-table-wrapper">
+            <table class="admin-users-table">
+              <thead>
+                <tr>
+                  <th scope="col">Username</th>
+                  <th scope="col">Email</th>
+                  <th scope="col">Added</th>
+                  <th scope="col">Last login</th>
+                  <th scope="col" class="actions">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for admin in admin_users %}
+                {% set is_current_admin = current_admin_id and admin.id == current_admin_id %}
+                <tr>
+                  <td>{{ admin.username }}</td>
+                  <td>{{ admin.email or '—' }}</td>
+                  <td>{{ admin.created_at.strftime('%b %d, %Y') }}</td>
+                  <td>
+                    {% if admin.last_login_at %}
+                    {{ admin.last_login_at.strftime('%b %d, %Y %I:%M %p') }}
+                    {% else %}
+                    Never
+                    {% endif %}
+                  </td>
+                  <td class="actions">
+                    {% if admin_users|length > 1 %}
+                    <form
+                      method="post"
+                      action="{{ url_for('delete_admin_user', admin_id=admin.id) }}"
+                      onsubmit="return confirm('Remove this administrator?');"
+                    >
+                      <button
+                        class="button small danger"
+                        type="submit"
+                        {% if is_current_admin %}disabled title="You cannot remove the account currently signed in."{% endif %}
+                      >
+                        Remove
+                      </button>
+                    </form>
+                    {% else %}
+                    <span class="subtle">Add another admin to enable removal.</span>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="subtle">Add your first administrator to secure the portal.</p>
+          {% endif %}
+          <form class="stacked-form" method="post" action="{{ url_for('create_admin_user') }}">
+            <div class="dual-inputs">
+              <label>
+                Username
+                <input type="text" name="username" placeholder="ops-admin" required />
+              </label>
+              <label>
+                Email
+                <input type="email" name="email" placeholder="ops@example.com" />
+              </label>
+            </div>
+            <div class="dual-inputs">
+              <label>
+                Password
+                <input type="password" name="password" minlength="8" required />
+              </label>
+              <label>
+                Confirm password
+                <input type="password" name="confirm_password" minlength="8" required />
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="button secondary" type="submit">Add administrator</button>
+            </div>
+          </form>
+        </article>
+        <article class="security-panel">
+          <div class="tls-status-header">
+            <h3>Stripe payments</h3>
+            {% set stripe_status = 'Disabled' %}
+            {% set stripe_status_class = 'status-disabled' %}
+            {% if stripe_ready %}
+            {% set stripe_status = 'Active' %}
+            {% set stripe_status_class = 'status-active' %}
+            {% endif %}
+            <span class="status-pill {{ stripe_status_class }}">{{ stripe_status }}</span>
+          </div>
+          <p class="subtle">Connect your Stripe account to power autopay, customer payments, and refunds.</p>
+          <dl class="tls-metadata">
+            <div>
+              <dt>Secret key</dt>
+              <dd>
+                {% if stripe_config and stripe_config.secret_key %}
+                <code>{{ stripe_config.secret_key }}</code>
+                {% else %}
+                Not set
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Publishable key</dt>
+              <dd>
+                {% if stripe_config and stripe_config.publishable_key %}
+                <code>{{ stripe_config.publishable_key }}</code>
+                {% else %}
+                Not set
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Webhook secret</dt>
+              <dd>
+                {% if stripe_config and stripe_config.webhook_secret %}
+                <code>{{ stripe_config.webhook_secret }}</code>
+                {% else %}
+                Not set
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Last updated</dt>
+              <dd>
+                {% if stripe_config and stripe_config.updated_at %}
+                {{ stripe_config.updated_at.strftime('%b %d, %Y %I:%M %p') }}
+                {% else %}
+                Never
+                {% endif %}
+              </dd>
+            </div>
+          </dl>
+          <form class="stacked-form" method="post" action="{{ url_for('configure_stripe_settings') }}">
+            <label>
+              Secret key
+              <input
+                type="text"
+                name="secret_key"
+                value="{{ stripe_config.secret_key if stripe_config and stripe_config.secret_key else '' }}"
+                placeholder="sk_live_..."
+                autocomplete="off"
+              />
+            </label>
+            <label>
+              Publishable key
+              <input
+                type="text"
+                name="publishable_key"
+                value="{{ stripe_config.publishable_key if stripe_config and stripe_config.publishable_key else '' }}"
+                placeholder="pk_live_..."
+                autocomplete="off"
+              />
+            </label>
+            <label>
+              Webhook secret
+              <input
+                type="text"
+                name="webhook_secret"
+                value="{{ stripe_config.webhook_secret if stripe_config and stripe_config.webhook_secret else '' }}"
+                placeholder="whsec_..."
+                autocomplete="off"
+              />
+            </label>
+            <div class="form-actions">
+              <button class="button secondary" type="submit">Save Stripe settings</button>
+            </div>
+            <p class="subtle">Leave fields blank to disable Stripe-powered payments until you're ready.</p>
+          </form>
+        </article>
+        <article class="security-panel">
+          <div class="tls-status-header">
+            <h3>Certificate status</h3>
+            {% set tls_status = tls_config.status if tls_config else 'pending' %}
+            {% set status_label = 'Pending' %}
+            {% set status_class = 'status-pending' %}
+            {% if tls_status == 'active' and tls_certificate_ready %}
+            {% set status_label = 'Active' %}
+            {% set status_class = 'status-active' %}
+            {% elif tls_status == 'error' %}
+            {% set status_label = 'Error' %}
+            {% set status_class = 'status-disabled' %}
+            {% endif %}
+            <span class="status-pill {{ status_class }}">{{ status_label }}</span>
+          </div>
+          <dl class="tls-metadata">
+            <div>
+              <dt>Domain</dt>
+              <dd>{{ tls_config.domain if tls_config and tls_config.domain else 'Not configured' }}</dd>
+            </div>
+            <div>
+              <dt>Contact email</dt>
+              <dd>{{ tls_config.contact_email if tls_config and tls_config.contact_email else 'Not configured' }}</dd>
+            </div>
+            <div>
+              <dt>Auto renew</dt>
+              <dd>{{ 'Enabled' if tls_config and tls_config.auto_renew else 'Manual' }}</dd>
+            </div>
+            <div>
+              <dt>Last provisioned</dt>
+              <dd>
+                {% if tls_config and tls_config.last_provisioned_at %}
+                {{ tls_config.last_provisioned_at.strftime('%b %d, %Y %I:%M %p') }}
+                {% else %}
+                Never
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Certificate path</dt>
+              <dd>
+                {% if tls_config and tls_config.certificate_path %}
+                <code>{{ tls_config.certificate_path }}</code>
+                {% else %}
+                Pending
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Private key path</dt>
+              <dd>
+                {% if tls_config and tls_config.private_key_path %}
+                <code>{{ tls_config.private_key_path }}</code>
+                {% else %}
+                Pending
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Challenge folder</dt>
+              <dd><code>{{ (tls_config.challenge_path if tls_config and tls_config.challenge_path else tls_challenge_folder) }}</code></dd>
+            </div>
+          </dl>
+          <p class="subtle tls-hint">The application listens on HTTP port 80 and automatically upgrades to HTTPS on port 443 when a valid certificate is available.</p>
+          {% if tls_certificate_ready %}
+          <p class="subtle success-text">Restart the Flask service to begin serving traffic over HTTPS.</p>
+          {% else %}
+          <p class="subtle">When you request a certificate we answer challenges from <code>/.well-known/acme-challenge/</code>.</p>
+          {% endif %}
+          {% if tls_config and tls_config.last_error %}
+          <p class="alert subtle">Last error: {{ tls_config.last_error }}</p>
+          {% endif %}
+        </article>
+        <article class="security-panel">
+          <h3>Provision certificate</h3>
+          <form class="stacked-form" method="post" action="{{ url_for('configure_tls') }}">
+            <label>
+              Domain name
+              <input type="text" name="domain" placeholder="secure.example.com" value="{{ tls_config.domain if tls_config else '' }}" required />
+            </label>
+            <label>
+              Contact email
+              <input type="email" name="contact_email" placeholder="you@example.com" value="{{ tls_config.contact_email if tls_config else '' }}" required />
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" name="auto_renew" {% if tls_config and tls_config.auto_renew %}checked{% endif %} />
+              <span>Automatically renew with the same settings</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" name="use_staging" {% if tls_config and tls_config.use_staging %}checked{% endif %} />
+              <span>Use Let's Encrypt staging (testing)</span>
+            </label>
+            <div class="form-actions dual-action">
+              <button class="button secondary" type="submit" name="action" value="save">Save settings</button>
+              <button class="button primary" type="submit" name="action" value="provision">Request certificate</button>
+            </div>
+            <p class="subtle">Ensure port 80 is reachable and forward port 443 to this service so browsers load the dashboard at <code>https://{{ tls_config.domain or 'your-domain' }}</code>.</p>
+          </form>
+        </article>
       </div>
     </section>
     {% elif active_section == 'legal' %}
