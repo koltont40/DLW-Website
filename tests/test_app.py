@@ -3,9 +3,11 @@ from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from html import escape
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 
+import app as app_module
 from app import (
     AdminUser,
     BrandingAsset,
@@ -36,6 +38,101 @@ from app import (
     utcnow,
 )
 from werkzeug.security import generate_password_hash
+
+
+class StripeStub:
+    class Customer:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(id="cus_test")
+
+        @staticmethod
+        def modify(customer_id, **kwargs):
+            return SimpleNamespace(id=customer_id)
+
+    class PaymentMethod:
+        @staticmethod
+        def retrieve(payment_method_id):
+            return SimpleNamespace(
+                type="card",
+                card=SimpleNamespace(
+                    brand="Visa",
+                    last4="4242",
+                    exp_month=12,
+                    exp_year=date.today().year + 2,
+                ),
+                billing_details=SimpleNamespace(
+                    name="Test User",
+                    address=SimpleNamespace(postal_code="12345"),
+                ),
+                customer=None,
+            )
+
+        @staticmethod
+        def attach(payment_method_id, customer=None):
+            return SimpleNamespace(id=payment_method_id, customer=customer)
+
+    class PaymentIntent:
+        created: list[dict] = []
+
+        @classmethod
+        def create(cls, **kwargs):
+            cls.created.append(kwargs)
+            return SimpleNamespace(
+                id=f"pi_{len(cls.created)}",
+                client_secret="pi_secret",
+                charges=SimpleNamespace(data=[]),
+                metadata=kwargs.get("metadata", {}),
+            )
+
+        @staticmethod
+        def retrieve(intent_id):
+            return SimpleNamespace(id=intent_id, status="requires_payment_method")
+
+        @staticmethod
+        def confirm(intent_id, payment_method=None):
+            return SimpleNamespace(
+                id=intent_id,
+                status="succeeded",
+                charges=SimpleNamespace(data=[]),
+                metadata={},
+            )
+
+    class SetupIntent:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(client_secret="seti_secret", payment_method="pm_new")
+
+    class Refund:
+        @staticmethod
+        def create(**kwargs):
+            return SimpleNamespace(id="re_123")
+
+    class Event:
+        next_event = None
+
+        @classmethod
+        def construct_from(cls, payload, api_key):
+            return cls.next_event
+
+    class Webhook:
+        @staticmethod
+        def construct_event(payload, sig_header, secret):
+            raise NotImplementedError
+
+    http_client = SimpleNamespace(RequestsClient=lambda: None)
+    api_key = None
+    default_http_client = None
+
+
+def install_stripe_stub(flask_app, monkeypatch, stub=None):
+    stub = stub or StripeStub()
+    monkeypatch.setattr(app_module, "stripe", stub, raising=False)
+    monkeypatch.setattr(app_module, "StripeError", Exception, raising=False)
+    monkeypatch.setattr(app_module, "SignatureVerificationError", Exception, raising=False)
+    flask_app.config["STRIPE_SECRET_KEY"] = "sk_test"
+    flask_app.config["STRIPE_PUBLISHABLE_KEY"] = "pk_test"
+    return stub
 
 
 TEST_ADMIN_USERNAME = "sys-admin"
@@ -802,7 +899,8 @@ def test_admin_adds_invoice_from_account_view(app, client):
         assert invoices[0].amount_cents == 7999
 
 
-def test_autopay_run_pays_due_invoices(app, client):
+def test_autopay_run_submits_payment_intents(app, client, monkeypatch):
+    install_stripe_stub(app, monkeypatch)
     login_admin(client)
 
     with app.app_context():
@@ -822,7 +920,7 @@ def test_autopay_run_pays_due_invoices(app, client):
             last4="1111",
             exp_month=12,
             exp_year=date.today().year + 1,
-            token="tok-success",
+            token="pm_success",
             is_default=True,
         )
         invoice = Invoice(
@@ -842,17 +940,19 @@ def test_autopay_run_pays_due_invoices(app, client):
 
     with app.app_context():
         invoice = Invoice.query.filter_by(client_id=customer_id).one()
-        assert invoice.status == "Paid"
-        assert invoice.paid_via.startswith("Autopay")
+        assert invoice.status == "Pending"
+        assert invoice.autopay_status == "Processing"
+        assert invoice.stripe_payment_intent_id is not None
+        assert invoice.paid_at is None
         customer = Client.query.get(customer_id)
-        assert customer.billing_status == "Good Standing"
-        assert customer.service_suspended is False
+        assert customer.billing_status in {"Good Standing", "Pending"}
         events = AutopayEvent.query.filter_by(client_id=customer_id).all()
         assert len(events) == 1
-        assert events[0].status == "success"
+        assert events[0].status == "pending"
 
 
-def test_autopay_run_suspends_when_no_method(app, client):
+def test_autopay_run_suspends_when_no_method(app, client, monkeypatch):
+    install_stripe_stub(app, monkeypatch)
     login_admin(client)
 
     with app.app_context():
@@ -888,6 +988,124 @@ def test_autopay_run_suspends_when_no_method(app, client):
         assert customer.billing_status == "Delinquent"
         events = AutopayEvent.query.filter_by(client_id=customer_id).all()
         assert any(event.status == "failed" for event in events)
+
+
+def test_stripe_webhook_marks_invoice_paid(app, client, monkeypatch):
+    stub = install_stripe_stub(app, monkeypatch)
+
+    with app.app_context():
+        customer = Client(
+            name="Webhook Client",
+            email="webhook@example.com",
+            status="Active",
+            autopay_enabled=True,
+        )
+        db.session.add(customer)
+        db.session.commit()
+
+        method = PaymentMethod(
+            client_id=customer.id,
+            nickname="Autopay",
+            brand="Visa",
+            last4="4242",
+            exp_month=1,
+            exp_year=date.today().year + 2,
+            token="pm_webhook",
+            is_default=True,
+        )
+        invoice = Invoice(
+            client_id=customer.id,
+            description="Monthly service",
+            amount_cents=7500,
+            status="Pending",
+            due_date=date.today(),
+            autopay_status="Processing",
+            stripe_payment_intent_id="pi_webhook",
+        )
+        db.session.add_all([method, invoice])
+        db.session.commit()
+        invoice_id = invoice.id
+
+    event_payload = SimpleNamespace(
+        type="payment_intent.succeeded",
+        id="evt_1",
+        data=SimpleNamespace(
+            object=SimpleNamespace(
+                id="pi_webhook",
+                metadata={
+                    "invoice_id": str(invoice_id),
+                    "autopay": "true",
+                },
+                payment_method="pm_webhook",
+                charges=SimpleNamespace(data=[SimpleNamespace(id="ch_123")]),
+            )
+        ),
+    )
+    stub.Event.next_event = event_payload
+
+    response = client.post(
+        "/stripe/webhook",
+        data="{}",
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        invoice = Invoice.query.get(invoice_id)
+        assert invoice.status == "Paid"
+        assert invoice.autopay_status == "Paid"
+        assert invoice.paid_via.startswith("Stripe")
+        assert invoice.stripe_charge_id == "ch_123"
+        events = AutopayEvent.query.filter_by(client_id=invoice.client_id).all()
+        assert events
+        assert events[0].status == "success"
+
+
+def test_admin_can_refund_paid_invoice(app, client, monkeypatch):
+    install_stripe_stub(app, monkeypatch)
+    login_admin(client)
+
+    with app.app_context():
+        customer = Client(
+            name="Refund Client",
+            email="refund@example.com",
+            status="Active",
+        )
+        db.session.add(customer)
+        db.session.commit()
+
+        customer_id = customer.id
+
+        invoice = Invoice(
+            client_id=customer.id,
+            description="Service",
+            amount_cents=3000,
+            status="Paid",
+            paid_at=utcnow(),
+            paid_via="Stripe",
+            autopay_status="Paid",
+            stripe_payment_intent_id="pi_refund",
+            stripe_charge_id="ch_refund",
+        )
+        db.session.add(invoice)
+        db.session.commit()
+        invoice_id = invoice.id
+
+    response = client.post(
+        f"/invoices/{invoice_id}/refund",
+        data={"next": f"/dashboard/customers/{customer_id}"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"Refund initiated" in response.data
+
+    with app.app_context():
+        invoice = Invoice.query.get(invoice_id)
+        assert invoice.status == "Refunded"
+        assert invoice.autopay_status == "Refunded"
+        events = AutopayEvent.query.filter_by(invoice_id=invoice_id).all()
+        assert events
+        assert any(event.status == "refunded" for event in events)
 
 
 def test_admin_adds_equipment_from_account_view(app, client):

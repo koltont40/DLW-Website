@@ -1,7 +1,7 @@
 import base64
 import binascii
 import errno
-import hashlib
+import json
 import mimetypes
 import os
 import re
@@ -18,12 +18,23 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote_plus
 
+try:  # pragma: no cover - import guard for optional dependency
+    import stripe
+except ImportError:  # pragma: no cover - stripe is required in production
+    stripe = None
+    StripeError = Exception
+    SignatureVerificationError = Exception
+else:  # pragma: no cover - executed when stripe is installed
+    StripeError = stripe.error.StripeError
+    SignatureVerificationError = stripe.error.SignatureVerificationError
+
 from dotenv import load_dotenv
 from flask import (
     Flask,
     abort,
     flash,
     g,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -46,6 +57,10 @@ load_dotenv()
 db = SQLAlchemy()
 
 _billing_schema_checked = False
+_stripe_schema_checked = False
+
+STRIPE_DEFAULT_CURRENCY = "usd"
+STRIPE_AUTOPAY_METADATA_FLAG = "autopay"
 
 SITE_SHELL_CACHE_KEY = "_site_shell_cache"
 SITE_SHELL_CACHE_SECONDS_DEFAULT = 15.0
@@ -90,6 +105,19 @@ def generate_unique_slug(title: str, existing_id: int | None = None) -> str:
 
         slug = f"{base_slug}-{suffix}"
         suffix += 1
+
+
+def stripe_active(app: Flask | None = None) -> bool:
+    app = app or current_app
+    if app is None or stripe is None:
+        return False
+    return bool(app.config.get("STRIPE_SECRET_KEY"))
+
+
+def init_stripe(app: Flask) -> None:
+    if stripe_active(app):
+        stripe.api_key = app.config["STRIPE_SECRET_KEY"]
+        stripe.default_http_client = stripe.http_client.RequestsClient()
 
 
 def normalize_phone_number(raw: str | None) -> tuple[str | None, str | None]:
@@ -357,18 +385,13 @@ def delete_trusted_business_logo(app: Flask, business: "TrustedBusiness") -> Non
     business.updated_at = utcnow()
 
 
-def generate_payment_token(client_id: int, digits: str) -> str:
-    seed = f"{client_id}:{digits}:{secrets.token_hex(8)}".encode()
-    return hashlib.sha256(seed).hexdigest()
-
-
 def recalculate_client_billing_state(client: "Client") -> None:
     ensure_billing_schema_once()
 
     outstanding = [
         invoice
         for invoice in client.invoices
-        if invoice.status not in {"Paid", "Cancelled"}
+        if invoice.status not in {"Paid", "Cancelled", "Refunded"}
     ]
     today = date.today()
     has_overdue = any(
@@ -378,7 +401,7 @@ def recalculate_client_billing_state(client: "Client") -> None:
     )
     failed_autopay = any(
         invoice.autopay_status
-        and invoice.autopay_status not in {"Paid", "Manual"}
+        and invoice.autopay_status not in {"Paid", "Manual", "Processing", "Refunded"}
         for invoice in outstanding
     )
 
@@ -409,6 +432,8 @@ def record_autopay_event(
     status: str,
     message: str | None,
     amount_cents: int,
+    stripe_payment_intent_id: str | None = None,
+    stripe_event_id: str | None = None,
 ) -> "AutopayEvent":
     event = AutopayEvent(
         client_id=client.id,
@@ -417,9 +442,376 @@ def record_autopay_event(
         status=status,
         message=message,
         amount_cents=amount_cents,
+        stripe_payment_intent_id=stripe_payment_intent_id,
+        stripe_event_id=stripe_event_id,
     )
     db.session.add(event)
     return event
+
+
+def ensure_stripe_customer(client: "Client") -> str | None:
+    if not stripe_active():
+        return None
+
+    if client.stripe_customer_id:
+        return client.stripe_customer_id
+
+    metadata = {
+        "client_id": str(client.id) if client.id else None,
+        "account_reference": client.account_reference,
+    }
+    metadata = {k: v for k, v in metadata.items() if v is not None}
+
+    customer = stripe.Customer.create(
+        name=client.name,
+        email=client.email,
+        phone=client.phone,
+        metadata=metadata,
+    )
+    client.stripe_customer_id = customer.id
+    db.session.flush()
+    return customer.id
+
+
+def _stripe_card_details(payment_method: object) -> dict[str, object]:
+    if not payment_method or getattr(payment_method, "type", None) != "card":
+        return {}
+    card = getattr(payment_method, "card", None) or {}
+    billing_details = getattr(payment_method, "billing_details", None) or {}
+    address = getattr(billing_details, "address", None) or {}
+    return {
+        "brand": getattr(card, "brand", "Card").title(),
+        "last4": getattr(card, "last4", "????"),
+        "exp_month": getattr(card, "exp_month", 1),
+        "exp_year": getattr(card, "exp_year", datetime.now().year),
+        "billing_zip": getattr(address, "postal_code", None),
+        "cardholder_name": getattr(billing_details, "name", None),
+    }
+
+
+def sync_stripe_payment_method(
+    client: "Client",
+    stripe_payment_method_id: str,
+    *,
+    set_default: bool = False,
+) -> "PaymentMethod":
+    if not stripe_active():
+        raise RuntimeError("Stripe is not configured")
+
+    customer_id = ensure_stripe_customer(client)
+    assert customer_id is not None
+
+    payment_method = stripe.PaymentMethod.retrieve(stripe_payment_method_id)
+    if getattr(payment_method, "customer", None) != customer_id:
+        stripe.PaymentMethod.attach(stripe_payment_method_id, customer=customer_id)
+
+    details = _stripe_card_details(payment_method)
+
+    existing = PaymentMethod.query.filter(
+        or_(
+            PaymentMethod.stripe_payment_method_id == stripe_payment_method_id,
+            PaymentMethod.token == stripe_payment_method_id,
+        )
+    ).first()
+
+    if existing is None:
+        existing = PaymentMethod(client_id=client.id)
+
+    existing.nickname = existing.nickname or details.get("brand")
+    existing.brand = details.get("brand") or existing.brand or "Card"
+    existing.last4 = details.get("last4", existing.last4 or "0000")
+    existing.exp_month = details.get("exp_month", existing.exp_month or 1)
+    existing.exp_year = details.get("exp_year", existing.exp_year or datetime.now().year)
+    existing.billing_zip = details.get("billing_zip") or existing.billing_zip
+    existing.cardholder_name = details.get("cardholder_name") or existing.cardholder_name
+    existing.token = stripe_payment_method_id
+    existing.stripe_payment_method_id = stripe_payment_method_id
+
+    if set_default or not client.default_payment_method():
+        for other in client.payment_methods:
+            other.is_default = False
+        existing.is_default = True
+        stripe.Customer.modify(
+            customer_id,
+            invoice_settings={"default_payment_method": stripe_payment_method_id},
+        )
+    else:
+        existing.is_default = existing.is_default
+
+    db.session.add(existing)
+    db.session.flush()
+    return existing
+
+
+def ensure_invoice_payment_intent(
+    invoice: "Invoice",
+    *,
+    autopay: bool,
+    client: "Client",
+    payment_method_id: str | None = None,
+) -> "stripe.PaymentIntent | None":
+    if not stripe_active():
+        return None
+
+    customer_id = ensure_stripe_customer(client)
+    if customer_id is None:
+        return None
+
+    metadata = {
+        "invoice_id": str(invoice.id),
+        "client_id": str(client.id),
+        STRIPE_AUTOPAY_METADATA_FLAG: "true" if autopay else "false",
+    }
+
+    description = f"Invoice {invoice.id} - {invoice.description}"[:220]
+
+    if invoice.stripe_payment_intent_id:
+        payment_intent = stripe.PaymentIntent.retrieve(invoice.stripe_payment_intent_id)
+        if getattr(payment_intent, "status", "") in {"succeeded", "processing"}:
+            return payment_intent
+        if getattr(payment_intent, "status", "") == "requires_payment_method" and payment_method_id:
+            stripe.PaymentIntent.modify(
+                payment_intent.id,
+                payment_method=payment_method_id,
+                metadata=metadata,
+                description=description,
+            )
+            if autopay:
+                payment_intent = stripe.PaymentIntent.confirm(
+                    payment_intent.id, payment_method=payment_method_id
+                )
+            return payment_intent
+        if getattr(payment_intent, "status", "") == "requires_confirmation" and autopay:
+            payment_intent = stripe.PaymentIntent.confirm(
+                payment_intent.id, payment_method=payment_method_id
+            )
+            return payment_intent
+        if getattr(payment_intent, "status", "") == "canceled":
+            invoice.stripe_payment_intent_id = None
+
+    params: dict[str, object] = {
+        "amount": invoice.amount_cents,
+        "currency": STRIPE_DEFAULT_CURRENCY,
+        "customer": customer_id,
+        "description": description,
+        "metadata": metadata,
+    }
+
+    if autopay:
+        if payment_method_id:
+            params["payment_method"] = payment_method_id
+        params["off_session"] = True
+        params["confirm"] = True
+    else:
+        params["automatic_payment_methods"] = {"enabled": True}
+        if payment_method_id:
+            params["payment_method"] = payment_method_id
+
+    payment_intent = stripe.PaymentIntent.create(**params)
+    invoice.stripe_payment_intent_id = payment_intent.id
+    return payment_intent
+
+
+def describe_stripe_error(error: StripeError) -> str:
+    message = getattr(error, "user_message", None) or getattr(error, "message", None)
+    if message:
+        return message
+    return "An unexpected payment processor error occurred."
+
+
+def _metadata_dict(stripe_object: object) -> dict[str, str]:
+    metadata = getattr(stripe_object, "metadata", None) or {}
+    try:
+        return dict(metadata)
+    except TypeError:
+        try:
+            return dict(metadata.to_dict())  # type: ignore[attr-defined]
+        except AttributeError:
+            return {}
+
+
+def _find_invoice_for_intent(intent: object) -> "Invoice | None":
+    metadata = _metadata_dict(intent)
+    invoice_id = metadata.get("invoice_id")
+    if not invoice_id:
+        payment_intent_id = getattr(intent, "id", None)
+        if payment_intent_id:
+            return Invoice.query.filter_by(
+                stripe_payment_intent_id=payment_intent_id
+            ).first()
+        return None
+    try:
+        invoice_id_int = int(invoice_id)
+    except (TypeError, ValueError):
+        return None
+    return Invoice.query.get(invoice_id_int)
+
+
+def _resolve_payment_method_record(
+    client: "Client", payment_method_id: str | None
+) -> "PaymentMethod | None":
+    if not payment_method_id:
+        return None
+    existing = PaymentMethod.query.filter(
+        or_(
+            PaymentMethod.token == payment_method_id,
+            PaymentMethod.stripe_payment_method_id == payment_method_id,
+        )
+    ).first()
+    if existing:
+        return existing
+    try:
+        return sync_stripe_payment_method(
+            client,
+            payment_method_id,
+            set_default=False,
+        )
+    except StripeError:
+        return None
+
+
+def handle_stripe_event(event: object) -> bool:
+    event_type = getattr(event, "type", "")
+    data_object = getattr(getattr(event, "data", None), "object", None)
+    if not data_object:
+        return False
+
+    if event_type == "payment_intent.succeeded":
+        return _handle_payment_intent_succeeded(event, data_object)
+    if event_type == "payment_intent.payment_failed":
+        return _handle_payment_intent_failed(event, data_object)
+    if event_type == "setup_intent.succeeded":
+        return _handle_setup_intent_succeeded(event, data_object)
+    if event_type in {"charge.refunded", "charge.refund.updated"}:
+        return _handle_charge_refunded(event, data_object)
+
+    return False
+
+
+def _handle_payment_intent_succeeded(event: object, intent: object) -> bool:
+    invoice = _find_invoice_for_intent(intent)
+    if invoice is None:
+        return False
+
+    client = invoice.client
+    metadata = _metadata_dict(intent)
+    autopay_flag = metadata.get(STRIPE_AUTOPAY_METADATA_FLAG) == "true"
+    payment_method_id = getattr(intent, "payment_method", None)
+    payment_method = _resolve_payment_method_record(client, payment_method_id)
+
+    invoice.status = "Paid"
+    invoice.paid_at = utcnow()
+    invoice.paid_via = (
+        f"Stripe {payment_method.describe()}"
+        if payment_method
+        else "Stripe"
+    )
+    invoice.autopay_status = "Paid" if autopay_flag else "Manual"
+    invoice.stripe_payment_intent_id = getattr(intent, "id", invoice.stripe_payment_intent_id)
+
+    charges = getattr(getattr(intent, "charges", None), "data", None) or []
+    if charges:
+        charge = charges[0]
+        invoice.stripe_charge_id = getattr(charge, "id", invoice.stripe_charge_id)
+
+    if autopay_flag:
+        record_autopay_event(
+            client=client,
+            invoice=invoice,
+            payment_method=payment_method,
+            status="success",
+            message="Stripe confirmed autopay",
+            amount_cents=invoice.amount_cents,
+            stripe_payment_intent_id=getattr(intent, "id", None),
+            stripe_event_id=getattr(event, "id", None),
+        )
+
+    recalculate_client_billing_state(client)
+    return True
+
+
+def _handle_payment_intent_failed(event: object, intent: object) -> bool:
+    invoice = _find_invoice_for_intent(intent)
+    if invoice is None:
+        return False
+
+    metadata = _metadata_dict(intent)
+    autopay_flag = metadata.get(STRIPE_AUTOPAY_METADATA_FLAG) == "true"
+    if not autopay_flag:
+        return False
+
+    client = invoice.client
+    payment_method_id = getattr(intent, "payment_method", None)
+    payment_method = _resolve_payment_method_record(client, payment_method_id)
+    last_error = getattr(intent, "last_payment_error", None)
+    message = getattr(last_error, "message", None) or "Autopay failed"
+
+    invoice.autopay_attempted_at = utcnow()
+    invoice.autopay_status = "Failed"
+
+    record_autopay_event(
+        client=client,
+        invoice=invoice,
+        payment_method=payment_method,
+        status="failed",
+        message=message,
+        amount_cents=invoice.amount_cents,
+        stripe_payment_intent_id=getattr(intent, "id", None),
+        stripe_event_id=getattr(event, "id", None),
+    )
+    recalculate_client_billing_state(client)
+    return True
+
+
+def _handle_setup_intent_succeeded(event: object, setup_intent: object) -> bool:
+    payment_method_id = getattr(setup_intent, "payment_method", None)
+    if not payment_method_id:
+        return False
+
+    metadata = _metadata_dict(setup_intent)
+    client_id = metadata.get("client_id")
+    client: Client | None = None
+    if client_id:
+        try:
+            client = Client.query.get(int(client_id))
+        except (TypeError, ValueError):
+            client = None
+    if client is None:
+        customer_id = getattr(setup_intent, "customer", None)
+        if customer_id:
+            client = Client.query.filter_by(stripe_customer_id=customer_id).first()
+
+    if client is None:
+        return False
+
+    _resolve_payment_method_record(client, payment_method_id)
+    return True
+
+
+def _handle_charge_refunded(event: object, charge: object) -> bool:
+    charge_id = getattr(charge, "id", None)
+    if not charge_id:
+        return False
+
+    invoice = Invoice.query.filter_by(stripe_charge_id=charge_id).first()
+    if invoice is None:
+        return False
+
+    invoice.status = "Refunded"
+    invoice.autopay_status = "Refunded"
+    invoice.stripe_refund_id = getattr(charge, "latest_refund", invoice.stripe_refund_id)
+    record_autopay_event(
+        client=invoice.client,
+        invoice=invoice,
+        payment_method=None,
+        status="refunded",
+        message="Stripe issued a refund",
+        amount_cents=invoice.amount_cents,
+        stripe_payment_intent_id=invoice.stripe_payment_intent_id,
+        stripe_event_id=getattr(event, "id", None),
+    )
+    recalculate_client_billing_state(invoice.client)
+    return True
 
 
 class Client(db.Model):
@@ -450,6 +842,7 @@ class Client(db.Model):
     verification_photo_filename = db.Column(db.String(255))
     verification_photo_uploaded_at = db.Column(db.DateTime(timezone=True))
     autopay_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    stripe_customer_id = db.Column(db.String(64), unique=True)
     billing_status = db.Column(db.String(40), nullable=False, default="Good Standing")
     billing_status_updated_at = db.Column(
         db.DateTime(timezone=True), nullable=False, default=utcnow
@@ -798,6 +1191,9 @@ class Invoice(db.Model):
     paid_via = db.Column(db.String(120))
     autopay_attempted_at = db.Column(db.DateTime(timezone=True))
     autopay_status = db.Column(db.String(40))
+    stripe_payment_intent_id = db.Column(db.String(64))
+    stripe_charge_id = db.Column(db.String(64))
+    stripe_refund_id = db.Column(db.String(64))
 
     client = db.relationship("Client", back_populates="invoices")
     autopay_events = db.relationship(
@@ -916,6 +1312,7 @@ class PaymentMethod(db.Model):
     exp_month = db.Column(db.Integer, nullable=False)
     exp_year = db.Column(db.Integer, nullable=False)
     token = db.Column(db.String(128), nullable=False, unique=True)
+    stripe_payment_method_id = db.Column(db.String(64), unique=True)
     billing_zip = db.Column(db.String(12))
     cardholder_name = db.Column(db.String(120))
     is_default = db.Column(db.Boolean, nullable=False, default=False)
@@ -945,6 +1342,8 @@ class AutopayEvent(db.Model):
     message = db.Column(db.String(255))
     attempted_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
     amount_cents = db.Column(db.Integer, nullable=False, default=0)
+    stripe_payment_intent_id = db.Column(db.String(64))
+    stripe_event_id = db.Column(db.String(64))
 
     client = db.relationship("Client", back_populates="autopay_events")
     invoice = db.relationship("Invoice", back_populates="autopay_events")
@@ -1204,6 +1603,9 @@ def create_app(test_config: dict | None = None) -> Flask:
             "CONTACT_EMAIL", "info@dixielandwireless.com"
         ),
         "CONTACT_PHONE": os.environ.get("CONTACT_PHONE", "2053343969"),
+        "STRIPE_SECRET_KEY": os.environ.get("STRIPE_SECRET_KEY"),
+        "STRIPE_PUBLISHABLE_KEY": os.environ.get("STRIPE_PUBLISHABLE_KEY"),
+        "STRIPE_WEBHOOK_SECRET": os.environ.get("STRIPE_WEBHOOK_SECRET"),
         "SITE_SHELL_CACHE_SECONDS": float(
             os.environ.get(
                 "SITE_SHELL_CACHE_SECONDS", SITE_SHELL_CACHE_SECONDS_DEFAULT
@@ -1231,6 +1633,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         app.config.update(test_config)
 
     db.init_app(app)
+    init_stripe(app)
 
     register_routes(app)
 
@@ -1812,18 +2215,67 @@ def ensure_invoice_payment_fields() -> None:
                 connection.execute(text(stmt))
 
 
+def ensure_stripe_schema_once() -> None:
+    global _stripe_schema_checked
+
+    if _stripe_schema_checked:
+        return
+
+    ensure_stripe_billing_columns()
+
+    _stripe_schema_checked = True
+
+
+def ensure_stripe_billing_columns() -> None:
+    inspector = inspect(db.engine)
+    table_column_map = {
+        "clients": {
+            "stripe_customer_id": "ALTER TABLE clients ADD COLUMN stripe_customer_id VARCHAR(64)"
+        },
+        "payment_methods": {
+            "stripe_payment_method_id": "ALTER TABLE payment_methods ADD COLUMN stripe_payment_method_id VARCHAR(64)"
+        },
+        "invoices": {
+            "stripe_payment_intent_id": "ALTER TABLE invoices ADD COLUMN stripe_payment_intent_id VARCHAR(64)",
+            "stripe_charge_id": "ALTER TABLE invoices ADD COLUMN stripe_charge_id VARCHAR(64)",
+            "stripe_refund_id": "ALTER TABLE invoices ADD COLUMN stripe_refund_id VARCHAR(64)",
+        },
+        "autopay_events": {
+            "stripe_payment_intent_id": "ALTER TABLE autopay_events ADD COLUMN stripe_payment_intent_id VARCHAR(64)",
+            "stripe_event_id": "ALTER TABLE autopay_events ADD COLUMN stripe_event_id VARCHAR(64)",
+        },
+    }
+
+    statements: list[str] = []
+    for table, alterations in table_column_map.items():
+        try:
+            columns = {column["name"] for column in inspector.get_columns(table)}
+        except NoSuchTableError:
+            continue
+
+        for column_name, statement in alterations.items():
+            if column_name not in columns:
+                statements.append(statement)
+
+    if not statements:
+        return
+
+    with db.engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
 def ensure_billing_schema_once() -> None:
     """Ensure autopay-related columns exist without re-running repeatedly."""
 
     global _billing_schema_checked
 
-    if _billing_schema_checked:
-        return
+    if not _billing_schema_checked:
+        ensure_client_billing_fields()
+        ensure_invoice_payment_fields()
+        _billing_schema_checked = True
 
-    ensure_client_billing_fields()
-    ensure_invoice_payment_fields()
-
-    _billing_schema_checked = True
+    ensure_stripe_schema_once()
 
 
 def ensure_site_theme_background_fields() -> None:
@@ -2908,6 +3360,190 @@ def register_routes(app: Flask) -> None:
             open_ticket_count=open_ticket_count,
             selected_services=selected_services,
             ticket_priority_options=TICKET_PRIORITY_OPTIONS,
+            payment_methods=client.payment_methods,
+            stripe_publishable_key=current_app.config.get("STRIPE_PUBLISHABLE_KEY"),
+            stripe_ready=stripe_active(),
+        )
+
+    @app.post("/portal/payment-methods")
+    @client_login_required
+    def portal_add_payment_method(client: Client):
+        if not stripe_active():
+            return (
+                jsonify({"error": "Card management requires Stripe configuration."}),
+                400,
+            )
+
+        payload = request.get_json(silent=True) or {}
+        payment_method_id = (
+            payload.get("payment_method_id")
+            or request.form.get("payment_method_id", "").strip()
+        )
+        set_default_flag = payload.get("set_default") or request.form.get("set_default")
+        set_default = bool(set_default_flag) or not client.payment_methods
+
+        if not payment_method_id:
+            return jsonify({"error": "Missing Stripe payment method id."}), 400
+
+        try:
+            method = sync_stripe_payment_method(
+                client,
+                payment_method_id,
+                set_default=set_default,
+            )
+        except StripeError as error:
+            db.session.rollback()
+            return jsonify({"error": describe_stripe_error(error)}), 400
+
+        db.session.commit()
+
+        return (
+            jsonify(
+                {
+                    "status": "ok",
+                    "method": {
+                        "id": method.id,
+                        "brand": method.brand,
+                        "last4": method.last4,
+                        "exp_month": method.exp_month,
+                        "exp_year": method.exp_year,
+                        "cardholder_name": method.cardholder_name,
+                        "is_default": method.is_default,
+                    },
+                }
+            ),
+            200,
+        )
+
+    @app.get("/portal/payment-methods/setup-intent")
+    @client_login_required
+    def portal_setup_intent(client: Client):
+        if not stripe_active():
+            return (
+                jsonify({"error": "Stripe is not configured."}),
+                400,
+            )
+
+        customer_id = ensure_stripe_customer(client)
+        if customer_id is None:
+            return (
+                jsonify({"error": "Unable to prepare Stripe customer."}),
+                400,
+            )
+
+        setup_intent = stripe.SetupIntent.create(
+            customer=customer_id,
+            usage="off_session",
+            payment_method_types=["card"],
+            metadata={"client_id": str(client.id)},
+        )
+
+        return jsonify({"client_secret": setup_intent.client_secret})
+
+    @app.post("/portal/autopay")
+    @client_login_required
+    def portal_autopay(client: Client):
+        action = (request.form.get("action") or "enable").strip().lower()
+
+        if action == "disable":
+            client.autopay_enabled = False
+            if stripe_active():
+                try:
+                    customer_id = ensure_stripe_customer(client)
+                    if customer_id:
+                        stripe.Customer.modify(
+                            customer_id,
+                            invoice_settings={"default_payment_method": None},
+                        )
+                except StripeError:
+                    pass
+            db.session.commit()
+            flash("Autopay has been disabled. Future invoices must be paid manually.", "info")
+            return redirect(url_for("portal_dashboard"))
+
+        if not stripe_active():
+            flash("Autopay is unavailable until Stripe is configured.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        method_id = request.form.get("payment_method_id", type=int)
+        if method_id:
+            method = PaymentMethod.query.filter_by(
+                id=method_id, client_id=client.id
+            ).first()
+        else:
+            method = client.default_payment_method()
+
+        if method is None or not method.token or not method.token.startswith("pm_"):
+            flash("Save a Stripe card before enabling autopay.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        for other in client.payment_methods:
+            other.is_default = other.id == method.id
+        client.autopay_enabled = True
+
+        try:
+            customer_id = ensure_stripe_customer(client)
+            if customer_id:
+                stripe.Customer.modify(
+                    customer_id,
+                    invoice_settings={"default_payment_method": method.token},
+                )
+        except StripeError as error:
+            db.session.rollback()
+            flash(
+                f"Stripe could not enable autopay: {describe_stripe_error(error)}",
+                "danger",
+            )
+            return redirect(url_for("portal_dashboard"))
+
+        db.session.commit()
+        flash("Autopay is now enabled. Upcoming invoices will charge your saved card.", "success")
+        return redirect(url_for("portal_dashboard"))
+
+    @app.get("/portal/invoices/<int:invoice_id>/pay")
+    @client_login_required
+    def portal_pay_invoice(client: Client, invoice_id: int):
+        invoice = (
+            Invoice.query.filter_by(id=invoice_id, client_id=client.id).first()
+        )
+        if invoice is None:
+            flash("We couldn't find that invoice.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        if invoice.status == "Paid":
+            flash("This invoice has already been paid.", "info")
+            return redirect(url_for("portal_dashboard"))
+
+        if not stripe_active():
+            flash("Online payments are unavailable right now. Please contact support.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        try:
+            payment_intent = ensure_invoice_payment_intent(
+                invoice,
+                autopay=False,
+                client=client,
+            )
+        except StripeError as error:
+            db.session.rollback()
+            flash(
+                f"We couldn't start the payment: {describe_stripe_error(error)}",
+                "danger",
+            )
+            return redirect(url_for("portal_dashboard"))
+
+        if payment_intent is None:
+            flash("Payment processing is offline at the moment.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        db.session.commit()
+
+        return render_template(
+            "portal_payment.html",
+            client=client,
+            invoice=invoice,
+            payment_intent_client_secret=payment_intent.client_secret,
+            stripe_publishable_key=current_app.config.get("STRIPE_PUBLISHABLE_KEY"),
         )
 
     @app.post("/portal/tickets")
@@ -4078,6 +4714,8 @@ def register_routes(app: Flask) -> None:
             autopay_activity=autopay_activity,
             latest_acknowledgement=latest_acknowledgement,
             current_year=current_year,
+            stripe_ready=stripe_active(),
+            stripe_publishable_key=current_app.config.get("STRIPE_PUBLISHABLE_KEY"),
         )
 
     @app.post("/documents/upload")
@@ -4401,53 +5039,40 @@ def register_routes(app: Flask) -> None:
     @login_required
     def add_payment_method(client_id: int):
         client = Client.query.get_or_404(client_id)
-        card_number_raw = request.form.get("card_number", "")
-        digits = normalize_card_number(card_number_raw)
-        if len(digits) < 12 or len(digits) > 19:
-            flash("Enter a valid card number before saving the payment method.", "danger")
+        if not stripe_active():
+            flash(
+                "Configure Stripe API keys before adding payment methods.",
+                "danger",
+            )
+            return _redirect_back_to_dashboard("billing", focus=client.id)
+
+        stripe_payment_method_id = (
+            request.form.get("stripe_payment_method_id", "").strip()
+        )
+        nickname = request.form.get("nickname", "").strip() or None
+        set_default = bool(request.form.get("set_default")) or not client.payment_methods
+
+        if not stripe_payment_method_id:
+            flash("Provide a Stripe payment method identifier.", "danger")
             return _redirect_back_to_dashboard("billing", focus=client.id)
 
         try:
-            exp_month = int(request.form.get("exp_month", ""))
-            exp_year = int(request.form.get("exp_year", ""))
-        except (TypeError, ValueError):
-            flash("Provide a valid expiration month and year.", "danger")
+            payment_method = sync_stripe_payment_method(
+                client,
+                stripe_payment_method_id,
+                set_default=set_default,
+            )
+        except StripeError as error:
+            flash(
+                f"Unable to save the payment method: {describe_stripe_error(error)}",
+                "danger",
+            )
+            db.session.rollback()
             return _redirect_back_to_dashboard("billing", focus=client.id)
 
-        if not 1 <= exp_month <= 12:
-            flash("Expiration month must be between 1 and 12.", "danger")
-            return _redirect_back_to_dashboard("billing", focus=client.id)
+        if nickname:
+            payment_method.nickname = nickname
 
-        current_year = utcnow().year
-        current_month = utcnow().month
-        if exp_year < current_year or (exp_year == current_year and exp_month < current_month):
-            flash("The card appears to be expired.", "danger")
-            return _redirect_back_to_dashboard("billing", focus=client.id)
-
-        brand = request.form.get("brand", "").strip() or "Card"
-        cardholder_name = request.form.get("cardholder_name", "").strip() or None
-        billing_zip = request.form.get("billing_zip", "").strip() or None
-        nickname = request.form.get("nickname", "").strip() or None
-
-        token = generate_payment_token(client.id, digits)
-        set_default = bool(request.form.get("set_default")) or not client.payment_methods
-        if set_default:
-            for method in client.payment_methods:
-                method.is_default = False
-
-        payment_method = PaymentMethod(
-            client_id=client.id,
-            nickname=nickname or None,
-            brand=brand,
-            last4=digits[-4:],
-            exp_month=exp_month,
-            exp_year=exp_year,
-            token=token,
-            billing_zip=billing_zip or None,
-            cardholder_name=cardholder_name or None,
-            is_default=set_default,
-        )
-        db.session.add(payment_method)
         db.session.commit()
 
         flash(f"Saved {payment_method.describe()} for {client.name}.", "success")
@@ -4464,6 +5089,19 @@ def register_routes(app: Flask) -> None:
         client = method.client
         for other in client.payment_methods:
             other.is_default = other.id == method.id
+        if stripe_active() and method.token:
+            try:
+                customer_id = ensure_stripe_customer(client)
+                if customer_id:
+                    stripe.Customer.modify(
+                        customer_id,
+                        invoice_settings={"default_payment_method": method.token},
+                    )
+            except StripeError as error:
+                flash(
+                    f"Stripe update failed: {describe_stripe_error(error)}",
+                    "warning",
+                )
         db.session.commit()
 
         flash(f"{method.describe()} is now the default payment method.", "success")
@@ -4478,6 +5116,15 @@ def register_routes(app: Flask) -> None:
     def delete_payment_method(method_id: int):
         method = PaymentMethod.query.get_or_404(method_id)
         client = method.client
+        stripe_id = method.token or method.stripe_payment_method_id
+        if stripe_active() and stripe_id:
+            try:
+                stripe.PaymentMethod.detach(stripe_id)
+            except StripeError as error:
+                flash(
+                    f"Stripe detach failed: {describe_stripe_error(error)}",
+                    "warning",
+                )
         db.session.delete(method)
         db.session.flush()
 
@@ -4485,6 +5132,17 @@ def register_routes(app: Flask) -> None:
         if client.autopay_enabled and not client.default_payment_method():
             client.autopay_enabled = False
             autopay_disabled = True
+
+        if autopay_disabled and stripe_active():
+            try:
+                customer_id = ensure_stripe_customer(client)
+                if customer_id:
+                    stripe.Customer.modify(
+                        customer_id,
+                        invoice_settings={"default_payment_method": None},
+                    )
+            except StripeError:
+                pass
 
         db.session.commit()
 
@@ -4513,6 +5171,10 @@ def register_routes(app: Flask) -> None:
                 return redirect(next_url)
             return redirect(url_for("admin_client_account", client_id=client.id))
 
+        if not stripe_active():
+            flash("Enable Stripe before turning on autopay.", "danger")
+            return redirect(url_for("admin_client_account", client_id=client.id))
+
         method_id = request.form.get("payment_method_id", type=int)
         if method_id:
             method = PaymentMethod.query.filter_by(id=method_id, client_id=client.id).first()
@@ -4526,9 +5188,31 @@ def register_routes(app: Flask) -> None:
             flash("Add a payment method before enabling autopay.", "danger")
             return redirect(url_for("admin_client_account", client_id=client.id))
 
+        if not method.token or not method.token.startswith("pm_"):
+            flash(
+                "Autopay requires a Stripe card on file. Ask the customer to update their card.",
+                "danger",
+            )
+            return redirect(url_for("admin_client_account", client_id=client.id))
+
         for other in client.payment_methods:
             other.is_default = other.id == method.id
         client.autopay_enabled = True
+        try:
+            customer_id = ensure_stripe_customer(client)
+            if customer_id:
+                stripe.Customer.modify(
+                    customer_id,
+                    invoice_settings={"default_payment_method": method.token},
+                )
+        except StripeError as error:
+            db.session.rollback()
+            flash(
+                f"Stripe rejected the autopay update: {describe_stripe_error(error)}",
+                "danger",
+            )
+            return redirect(url_for("admin_client_account", client_id=client.id))
+
         db.session.commit()
 
         flash(f"Autopay enabled using {method.describe()}.", "success")
@@ -4541,10 +5225,17 @@ def register_routes(app: Flask) -> None:
     @app.post("/autopay/run")
     @login_required
     def run_autopay():
+        if not stripe_active():
+            flash(
+                "Stripe is not configured, so autopay cannot process charges.",
+                "warning",
+            )
+            return _redirect_back_to_dashboard("billing")
+
         today = date.today()
         autopay_clients = Client.query.filter_by(autopay_enabled=True).all()
         processed_accounts = 0
-        successful_charges = 0
+        submitted_charges = 0
         failed_charges = 0
         skipped_accounts = 0
 
@@ -4572,7 +5263,11 @@ def register_routes(app: Flask) -> None:
 
             processed_accounts += 1
 
-            if default_method is None:
+            if (
+                default_method is None
+                or not default_method.token
+                or not default_method.token.startswith("pm_")
+            ):
                 for invoice in due_invoices:
                     invoice.autopay_attempted_at = utcnow()
                     invoice.autopay_status = "Missing Method"
@@ -4588,22 +5283,62 @@ def register_routes(app: Flask) -> None:
                 recalculate_client_billing_state(client)
                 continue
 
+            try:
+                sync_stripe_payment_method(client, default_method.token, set_default=True)
+            except StripeError as error:
+                for invoice in due_invoices:
+                    invoice.autopay_attempted_at = utcnow()
+                    invoice.autopay_status = "Failed"
+                    record_autopay_event(
+                        client=client,
+                        invoice=invoice,
+                        payment_method=default_method,
+                        status="failed",
+                        message=f"Autopay failed to sync card: {describe_stripe_error(error)}",
+                        amount_cents=invoice.amount_cents,
+                    )
+                    failed_charges += 1
+                recalculate_client_billing_state(client)
+                continue
+
             for invoice in due_invoices:
-                charge_time = utcnow()
-                invoice.status = "Paid"
-                invoice.paid_at = charge_time
-                invoice.paid_via = f"Autopay {default_method.describe()}"
-                invoice.autopay_attempted_at = charge_time
-                invoice.autopay_status = "Paid"
+                try:
+                    payment_intent = ensure_invoice_payment_intent(
+                        invoice,
+                        autopay=True,
+                        client=client,
+                        payment_method_id=default_method.token,
+                    )
+                except StripeError as error:
+                    invoice.autopay_attempted_at = utcnow()
+                    invoice.autopay_status = "Failed"
+                    record_autopay_event(
+                        client=client,
+                        invoice=invoice,
+                        payment_method=default_method,
+                        status="failed",
+                        message=describe_stripe_error(error),
+                        amount_cents=invoice.amount_cents,
+                    )
+                    failed_charges += 1
+                    continue
+
+                invoice.autopay_attempted_at = utcnow()
+                if payment_intent is None:
+                    invoice.autopay_status = "Manual"
+                    continue
+
+                invoice.autopay_status = "Processing"
                 record_autopay_event(
                     client=client,
                     invoice=invoice,
                     payment_method=default_method,
-                    status="success",
-                    message=f"Charged via autopay {default_method.describe()}",
+                    status="pending",
+                    message="Submitted to Stripe for processing",
                     amount_cents=invoice.amount_cents,
+                    stripe_payment_intent_id=payment_intent.id,
                 )
-                successful_charges += 1
+                submitted_charges += 1
 
             recalculate_client_billing_state(client)
 
@@ -4613,8 +5348,8 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         summary = (
-            f"Autopay processed {processed_accounts} accounts with "
-            f"{successful_charges} successful charges"
+            f"Autopay processed {processed_accounts} accounts and submitted "
+            f"{submitted_charges} payments to Stripe"
         )
         if failed_charges:
             summary += f" and {failed_charges} failures"
@@ -4623,6 +5358,36 @@ def register_routes(app: Flask) -> None:
 
         flash(summary + ".", "info" if failed_charges == 0 else "warning")
         return _redirect_back_to_dashboard("billing")
+
+    @app.post("/stripe/webhook")
+    def stripe_webhook():
+        if not stripe_active():
+            return jsonify({"status": "disabled"}), 200
+
+        payload = request.data
+        sig_header = request.headers.get("Stripe-Signature")
+        webhook_secret = current_app.config.get("STRIPE_WEBHOOK_SECRET")
+
+        try:
+            if webhook_secret:
+                event = stripe.Webhook.construct_event(
+                    payload, sig_header, webhook_secret
+                )
+            else:
+                json_payload = json.loads(payload.decode("utf-8"))
+                event = stripe.Event.construct_from(json_payload, stripe.api_key)
+        except (ValueError, SignatureVerificationError, StripeError) as error:
+            return jsonify({"error": str(error)}), 400
+
+        handled = handle_stripe_event(event)
+        if handled:
+            db.session.commit()
+            invalidate_dashboard_overview_cache()
+            invalidate_site_shell_cache()
+            return jsonify({"status": "ok"}), 200
+
+        db.session.rollback()
+        return jsonify({"status": "ignored"}), 200
 
     @app.post("/clients/<int:client_id>/invoices")
     @login_required
@@ -4743,6 +5508,44 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
         flash("Invoice removed.", "info")
         return _redirect_back_to_dashboard("billing")
+
+    @app.post("/invoices/<int:invoice_id>/refund")
+    @login_required
+    def refund_invoice(invoice_id: int):
+        invoice = Invoice.query.get_or_404(invoice_id)
+        if not stripe_active() or not invoice.stripe_payment_intent_id:
+            flash("Refunds require a completed Stripe payment.", "danger")
+            return _redirect_back_to_dashboard("billing", focus=invoice.client_id)
+
+        try:
+            refund = stripe.Refund.create(
+                payment_intent=invoice.stripe_payment_intent_id,
+                amount=invoice.amount_cents,
+            )
+        except StripeError as error:
+            flash(
+                f"Unable to issue the refund: {describe_stripe_error(error)}",
+                "danger",
+            )
+            return _redirect_back_to_dashboard("billing", focus=invoice.client_id)
+
+        invoice.status = "Refunded"
+        invoice.autopay_status = "Refunded"
+        invoice.stripe_refund_id = getattr(refund, "id", invoice.stripe_refund_id)
+        record_autopay_event(
+            client=invoice.client,
+            invoice=invoice,
+            payment_method=None,
+            status="refunded",
+            message="Refund issued via Stripe",
+            amount_cents=invoice.amount_cents,
+            stripe_payment_intent_id=invoice.stripe_payment_intent_id,
+        )
+        recalculate_client_billing_state(invoice.client)
+        db.session.commit()
+
+        flash("Refund initiated with Stripe.", "success")
+        return _redirect_back_to_dashboard("billing", focus=invoice.client_id)
 
     @app.post("/clients/<int:client_id>/equipment")
     @login_required

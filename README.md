@@ -88,6 +88,9 @@ After signing in you can add or remove additional administrators from **Dashboar
 | `HTTPS_PORT` | Optional secondary HTTPS port (in addition to port 443) | unset |
 | `CONTACT_EMAIL` | Primary support/contact email surfaced throughout the site | `info@dixielandwireless.com` |
 | `CONTACT_PHONE` | Support phone number shown on public pages and navigation | `2053343969` |
+| `STRIPE_SECRET_KEY` | Server-side API key for payment processing, autopay, and refunds | unset (Stripe disabled) |
+| `STRIPE_PUBLISHABLE_KEY` | Publishable key used by Stripe.js in the client portal | unset |
+| `STRIPE_WEBHOOK_SECRET` | Signing secret for validating Stripe webhooks | unset |
 | `SNMP_TRAP_HOST` | Hostname/IP for SNMP trap delivery | unset (disabled) |
 | `SNMP_TRAP_PORT` | UDP port for SNMP trap delivery | `162` |
 | `SNMP_COMMUNITY` | SNMP community string | `public` |
@@ -104,6 +107,15 @@ When `SNMP_TRAP_HOST` is provided the application emits SNMP traps for appointme
 Administrators can also compose ad-hoc SNMP-backed emails from the Support section of the dashboard to broadcast outage updates or reminders.
 
 During automated testing you can override the trap sender by assigning a callable to `app.config["SNMP_EMAIL_SENDER"]`.
+
+### Stripe Payments & Autopay
+
+Stripe powers secure card storage, customer-initiated payments, dashboard refunds, and automated autopay runs. Provide your Stripe credentials before launching production instances:
+
+1. Create API keys from the Stripe dashboard and export `STRIPE_SECRET_KEY` and `STRIPE_PUBLISHABLE_KEY` in the environment where the app runs.
+2. Configure a webhook endpoint that points to `/stripe/webhook` and assign its signing secret to `STRIPE_WEBHOOK_SECRET` so events are verified.
+3. Ask customers to add cards or toggle autopay from the client portal. Administrators can still paste a Stripe payment method ID (for example `pm_123...`) if they create one from the Stripe dashboard.
+4. When autopay runs the app confirms off-session charges through Stripe and records outcomes through the webhook. Successful manual payments and refunds also flow through the same webhook channel, keeping invoice statuses in sync automatically.
 
 ## Development Notes
 

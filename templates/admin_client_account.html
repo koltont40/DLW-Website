@@ -473,40 +473,23 @@
             <p class="subtle">No payment methods on file.</p>
             {% endif %}
           </div>
+          {% if stripe_ready %}
           <form class="stacked-form autopay-add-form" method="post" action="{{ url_for('add_payment_method', client_id=client.id) }}">
             <input type="hidden" name="next" value="{{ account_url }}" />
             <label>
-              Card number
-              <input type="text" name="card_number" inputmode="numeric" pattern="[0-9 ]{12,19}" placeholder="4242 4242 4242 4242" required />
-            </label>
-            <div class="field-row">
-              <label>
-                Exp month
-                <input type="number" name="exp_month" min="1" max="12" required />
-              </label>
-              <label>
-                Exp year
-                <input type="number" name="exp_year" min="{{ current_year }}" required />
-              </label>
-            </div>
-            <label>
-              Brand
-              <input type="text" name="brand" placeholder="Visa" required />
-            </label>
-            <label>
-              Cardholder
-              <input type="text" name="cardholder_name" placeholder="Customer name" />
-            </label>
-            <label>
-              Billing ZIP
-              <input type="text" name="billing_zip" placeholder="36083" />
+              Stripe payment method ID
+              <input type="text" name="stripe_payment_method_id" placeholder="pm_12345" required />
             </label>
             <label class="checkbox-inline">
               <input type="checkbox" name="set_default" {% if not payment_methods %}checked{% endif %} />
               Set as default for autopay
             </label>
-            <button class="button small primary" type="submit">Add payment method</button>
+            <button class="button small primary" type="submit">Attach payment method</button>
+            <p class="form-help">Admins can paste a payment method ID from Stripe or ask the customer to add a card through the portal.</p>
           </form>
+          {% else %}
+          <p class="subtle">Configure Stripe to attach payment methods or direct the customer to the portal.</p>
+          {% endif %}
           <form class="stacked-form autopay-toggle" method="post" action="{{ url_for('configure_autopay', client_id=client.id) }}">
             <input type="hidden" name="next" value="{{ account_url }}" />
             {% if client.autopay_enabled %}

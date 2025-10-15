@@ -2373,6 +2373,11 @@ a.trusted-logo:hover {
   color: var(--muted);
 }
 
+.status-refunded {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+}
+
 .client-portal-column .stacked-form {
   padding: 1rem;
   border: 1px dashed #cbd5e1;
@@ -2463,6 +2468,104 @@ a.trusted-logo:hover {
   flex-direction: column;
   gap: 1.25rem;
   scroll-margin-top: 110px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.portal-billing-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  align-items: start;
+}
+
+.portal-autopay-card,
+.portal-invoice-card {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.portal-payment-methods {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.portal-payment-methods .method-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.portal-card-controls {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.portal-card-form {
+  border: 1px dashed var(--border);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: rgba(56, 189, 248, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.portal-card-element {
+  padding: 0.75rem;
+  border-radius: 0.65rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+}
+
+.portal-autopay-form .button {
+  align-self: flex-start;
+}
+
+.portal-payment-form {
+  gap: 1rem;
+}
+
+.portal-payment-element {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.portal-payment-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.portal-payment-wrapper h1 {
+  margin-bottom: 0.25rem;
+}
+
+.portal-payment-wrapper .button-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+@media (max-width: 900px) {
+  .portal-billing-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .portal-profile-grid {

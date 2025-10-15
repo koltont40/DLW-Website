@@ -107,34 +107,107 @@
           <p class="subtle">Stay current on invoices, payments, and due dates.</p>
         </div>
       </header>
-      {% if invoices %}
-      <div class="table-wrapper">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Description</th>
-              <th>Amount</th>
-              <th>Due date</th>
-              <th>Status</th>
-              <th>Updated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for invoice in invoices %}
-            <tr>
-              <td>{{ invoice.description }}</td>
-              <td>{{ invoice.amount_cents|currency }}</td>
-              <td>{{ invoice.due_date|date_or_dash }}</td>
-              <td><span class="status-pill status-{{ invoice.status|lower|replace(' ', '-') }}">{{ invoice.status }}</span></td>
-              <td>{{ invoice.updated_at.strftime('%b %d, %Y') }}</td>
-            </tr>
+      <div class="portal-billing-grid">
+        <div class="portal-autopay-card">
+          <h3>Saved cards &amp; autopay</h3>
+          {% set default_method = client.default_payment_method() %}
+          {% if client.autopay_enabled and default_method %}
+          <p class="subtle">Autopay charges {{ default_method.describe() }} when invoices are due.</p>
+          {% else %}
+          <p class="subtle">Add a card and enable autopay to keep service active automatically.</p>
+          {% endif %}
+          <ul class="portal-payment-methods">
+            {% for method in payment_methods %}
+            <li>
+              <div class="method-row">
+                <div>
+                  <strong>{{ method.describe() }}</strong>
+                  <p class="subtle">Expires {{ "%02d"|format(method.exp_month) }}/{{ method.exp_year }}</p>
+                </div>
+                {% if method.is_default %}
+                <span class="badge success">Default</span>
+                {% endif %}
+              </div>
+            </li>
+            {% else %}
+            <li class="subtle">No cards saved yet.</li>
             {% endfor %}
-          </tbody>
-        </table>
+          </ul>
+          {% if stripe_ready and stripe_publishable_key %}
+          <div class="portal-card-controls">
+            <button class="button small primary" type="button" id="portal-add-card">Add card</button>
+          </div>
+          <div class="portal-card-form hidden" id="portal-card-form">
+            <div id="portal-card-element" class="portal-card-element"></div>
+            <p class="form-help" id="portal-card-errors"></p>
+            <div class="button-row">
+              <button class="button small primary" type="button" id="portal-save-card">Save card</button>
+              <button class="button small secondary" type="button" id="portal-cancel-card">Cancel</button>
+            </div>
+          </div>
+          {% elif not stripe_ready %}
+          <p class="subtle">Contact support to update saved payment methods.</p>
+          {% endif %}
+          <form class="stacked-form portal-autopay-form" method="post" action="{{ url_for('portal_autopay') }}">
+            {% if client.autopay_enabled %}
+            <button class="button small danger" type="submit" name="action" value="disable">Disable autopay</button>
+            {% else %}
+            {% if payment_methods %}
+            <label>
+              Use card
+              <select name="payment_method_id">
+                {% for method in payment_methods %}
+                <option value="{{ method.id }}" {% if method.is_default %}selected{% endif %}>{{ method.describe() }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="button small primary" type="submit">Enable autopay</button>
+            {% else %}
+            <p class="subtle">Add a card to enable autopay.</p>
+            <button class="button small primary" type="submit" disabled>Enable autopay</button>
+            {% endif %}
+            {% endif %}
+          </form>
+        </div>
+        <div class="portal-invoice-card">
+          {% if invoices %}
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Description</th>
+                  <th>Amount</th>
+                  <th>Due date</th>
+                  <th>Status</th>
+                  <th>Updated</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for invoice in invoices %}
+                <tr>
+                  <td>{{ invoice.description }}</td>
+                  <td>{{ invoice.amount_cents|currency }}</td>
+                  <td>{{ invoice.due_date|date_or_dash }}</td>
+                  <td><span class="status-pill status-{{ invoice.status|lower|replace(' ', '-') }}">{{ invoice.status }}</span></td>
+                  <td>{{ invoice.updated_at.strftime('%b %d, %Y') }}</td>
+                  <td>
+                    {% if invoice.status not in ['Paid', 'Cancelled', 'Refunded'] and stripe_ready and stripe_publishable_key %}
+                    <a class="button small primary" href="{{ url_for('portal_pay_invoice', invoice_id=invoice.id) }}">Pay</a>
+                    {% else %}
+                    <span class="subtle">—</span>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="subtle">Invoices will appear here once billing begins.</p>
+          {% endif %}
+        </div>
       </div>
-      {% else %}
-      <p class="subtle">Invoices will appear here once billing begins.</p>
-      {% endif %}
     </section>
 
     <section class="card portal-section" id="equipment">
@@ -331,4 +404,102 @@
     </section>
   </div>
 </div>
+{% if stripe_ready and stripe_publishable_key %}
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+  (() => {
+    const publishableKey = "{{ stripe_publishable_key }}";
+    if (!publishableKey) {
+      return;
+    }
+    const addButton = document.getElementById("portal-add-card");
+    const formWrapper = document.getElementById("portal-card-form");
+    const saveButton = document.getElementById("portal-save-card");
+    const cancelButton = document.getElementById("portal-cancel-card");
+    const errorField = document.getElementById("portal-card-errors");
+    const cardContainer = document.getElementById("portal-card-element");
+    if (!addButton || !formWrapper || !saveButton || !cancelButton || !cardContainer) {
+      return;
+    }
+
+    const stripe = Stripe(publishableKey);
+    const elements = stripe.elements();
+    const cardElement = elements.create("card");
+    let setupSecret = null;
+    let mounted = false;
+
+    const openForm = async () => {
+      formWrapper.classList.remove("hidden");
+      errorField.textContent = "";
+      if (!mounted) {
+        cardElement.mount("#portal-card-element");
+        mounted = true;
+      }
+      const response = await fetch("{{ url_for('portal_setup_intent') }}", {
+        headers: { "Accept": "application/json" },
+      });
+      const data = await response.json();
+      if (data.error) {
+        errorField.textContent = data.error;
+        return;
+      }
+      setupSecret = data.client_secret;
+    };
+
+    const closeForm = () => {
+      formWrapper.classList.add("hidden");
+      setupSecret = null;
+      cardElement.clear();
+      errorField.textContent = "";
+    };
+
+    addButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      openForm();
+    });
+
+    cancelButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      closeForm();
+    });
+
+    saveButton.addEventListener("click", async (event) => {
+      event.preventDefault();
+      if (!setupSecret) {
+        return;
+      }
+      saveButton.disabled = true;
+      errorField.textContent = "";
+      const { error, setupIntent } = await stripe.confirmCardSetup(setupSecret, {
+        payment_method: {
+          card: cardElement,
+        },
+      });
+      if (error) {
+        errorField.textContent = error.message || "Unable to save card.";
+        saveButton.disabled = false;
+        return;
+      }
+      const response = await fetch("{{ url_for('portal_add_payment_method') }}", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          payment_method_id: setupIntent.payment_method,
+          set_default: true,
+        }),
+      });
+      const result = await response.json();
+      saveButton.disabled = false;
+      if (result.error) {
+        errorField.textContent = result.error;
+        return;
+      }
+      window.location.reload();
+    });
+  })();
+</script>
+{% endif %}
 {% endblock %}
