@@ -2347,3 +2347,56 @@ def test_technician_captures_install_acknowledgement(app, client):
         assert acknowledgement.technician_id == technician_id
         signature_path = Path(app.config["INSTALL_SIGNATURE_FOLDER"]) / acknowledgement.signature_filename
         assert signature_path.exists()
+
+def test_technician_appointment_page_shows_availability_calendar(app, client):
+    with app.app_context():
+        technician = Technician(
+            name="Calendar Tech",
+            email="calendar-tech@example.com",
+            password_hash=generate_password_hash("CalendarPass123!"),
+            is_active=True,
+        )
+        db.session.add(technician)
+        db.session.commit()
+
+        subscriber = Client(
+            name="Calendar Client",
+            email="calendar-client@example.com",
+            status="Active",
+        )
+        db.session.add(subscriber)
+        db.session.commit()
+
+        appointment_time = (
+            utcnow().replace(minute=0, second=0, microsecond=0) + timedelta(days=1)
+        )
+        appointment = Appointment(
+            client_id=subscriber.id,
+            technician_id=technician.id,
+            title="Pole mount install",
+            status="Scheduled",
+            scheduled_for=appointment_time,
+        )
+        block = TechnicianSchedule(
+            technician_id=technician.id,
+            start_at=appointment_time.replace(hour=9),
+            end_at=appointment_time.replace(hour=12),
+            note="Morning availability",
+        )
+        db.session.add_all([appointment, block])
+        db.session.commit()
+        appointment_id = appointment.id
+
+    login_response = login_technician(
+        client,
+        email="calendar-tech@example.com",
+        password="CalendarPass123!",
+    )
+    assert login_response.status_code == 200
+
+    response = client.get(f"/tech/appointments/{appointment_id}")
+    assert response.status_code == 200
+    assert b"Availability calendar" in response.data
+    assert b"Morning availability" in response.data
+    assert b"Pole mount install" in response.data
+

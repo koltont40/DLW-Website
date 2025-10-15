@@ -4069,6 +4069,18 @@ def register_routes(app: Flask) -> None:
             Appointment.query.filter_by(id=appointment_id, technician_id=technician.id)
             .first_or_404()
         )
+        now = utcnow()
+
+        def _coerce_utc(dt: datetime | None) -> datetime:
+            if dt is None:
+                return now
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
+
+        def _format_time(dt: datetime) -> str:
+            return dt.strftime("%I:%M %p").lstrip("0")
+
         required_categories = get_required_install_photo_categories()
         photo_category_choices = get_install_photo_category_choices()
         photos = (
@@ -4098,6 +4110,95 @@ def register_routes(app: Flask) -> None:
                 .first()
             )
 
+        appointment_start = _coerce_utc(appointment.scheduled_for)
+        display_tz = appointment.scheduled_for.tzinfo or UTC
+        calendar_start = appointment_start.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        calendar_start -= timedelta(days=calendar_start.weekday())
+        calendar_days = 14
+        calendar_end = calendar_start + timedelta(days=calendar_days)
+
+        schedule_blocks = (
+            TechnicianSchedule.query.filter_by(technician_id=technician.id)
+            .order_by(TechnicianSchedule.start_at.asc())
+            .all()
+        )
+        relevant_schedule = [
+            block
+            for block in schedule_blocks
+            if _coerce_utc(block.end_at) >= calendar_start
+            and _coerce_utc(block.start_at) < calendar_end
+        ]
+
+        technician_appointments = (
+            Appointment.query.filter_by(technician_id=technician.id)
+            .order_by(Appointment.scheduled_for.asc())
+            .all()
+        )
+        relevant_appointments = [
+            visit
+            for visit in technician_appointments
+            if calendar_start <= _coerce_utc(visit.scheduled_for) < calendar_end
+        ]
+
+        today_display_date = now.astimezone(display_tz).date()
+        appointment_display_date = appointment_start.astimezone(display_tz).date()
+        availability_days: list[dict[str, object]] = []
+        for offset in range(calendar_days):
+            day_start_utc = calendar_start + timedelta(days=offset)
+            day_end_utc = day_start_utc + timedelta(days=1)
+            day_display = day_start_utc.astimezone(display_tz)
+            day_blocks: list[dict[str, str]] = []
+            for block in relevant_schedule:
+                block_start_utc = _coerce_utc(block.start_at)
+                block_end_utc = _coerce_utc(block.end_at)
+                if block_end_utc <= day_start_utc or block_start_utc >= day_end_utc:
+                    continue
+                start_display = block_start_utc.astimezone(display_tz)
+                end_display = block_end_utc.astimezone(display_tz)
+                day_blocks.append(
+                    {
+                        "time_range": f"{_format_time(start_display)} – {_format_time(end_display)}",
+                        "note": block.note or "",
+                    }
+                )
+
+            day_appointments: list[dict[str, object]] = []
+            for visit in relevant_appointments:
+                visit_start_utc = _coerce_utc(visit.scheduled_for)
+                if not (day_start_utc <= visit_start_utc < day_end_utc):
+                    continue
+                visit_display = visit_start_utc.astimezone(display_tz)
+                day_appointments.append(
+                    {
+                        "time": _format_time(visit_display),
+                        "title": visit.title,
+                        "client": visit.client.name if visit.client else "",
+                        "status": visit.status,
+                        "link": url_for(
+                            "tech_appointment_detail", appointment_id=visit.id
+                        ),
+                        "is_current": visit.id == appointment.id,
+                    }
+                )
+
+            availability_days.append(
+                {
+                    "date": day_display,
+                    "is_today": day_display.date() == today_display_date,
+                    "is_appointment_day": day_display.date()
+                    == appointment_display_date,
+                    "blocks": day_blocks,
+                    "appointments": day_appointments,
+                }
+            )
+
+        availability_weeks = [
+            availability_days[i : i + 7]
+            for i in range(0, len(availability_days), 7)
+        ]
+
         legal_documents = {
             key: Document.query.filter_by(doc_type=key).first()
             for key in ("aup", "privacy", "tos")
@@ -4114,6 +4215,7 @@ def register_routes(app: Flask) -> None:
             required_categories=required_categories,
             acknowledgement=acknowledgement,
             legal_documents=legal_documents,
+            availability_weeks=availability_weeks,
         )
 
     @app.post("/tech/clients/<int:client_id>/photos")

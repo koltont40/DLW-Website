@@ -43,6 +43,63 @@
   <section class="tech-section">
     <header class="tech-section-header">
       <div>
+        <h2>Availability calendar</h2>
+        <p class="subtle">Review your shifts and assignments for the next two weeks.</p>
+      </div>
+    </header>
+    <div class="tech-availability">
+      {% for week in availability_weeks %}
+      <div class="availability-week">
+        {% for day in week %}
+        <article class="availability-day{% if day.is_today %} today{% endif %}{% if day.is_appointment_day %} selected{% endif %}">
+          <header class="availability-day-header">
+            <span class="day-name">{{ day.date.strftime('%a') }}</span>
+            <span class="day-date">{{ day.date.strftime('%b %d') }}</span>
+          </header>
+          <div class="availability-content">
+            {% if day.blocks %}
+            <div class="availability-group">
+              <h3>Availability</h3>
+              <ul class="availability-list">
+                {% for block in day.blocks %}
+                <li class="availability-item">
+                  <span class="time-range">{{ block.time_range }}</span>
+                  {% if block.note %}<span class="note subtle">{{ block.note }}</span>{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+            {% if day.appointments %}
+            <div class="availability-group jobs">
+              <h3>Jobs</h3>
+              <ul class="availability-list">
+                {% for job in day.appointments %}
+                <li class="availability-item{% if job.is_current %} current{% endif %}">
+                  <div class="job-header">
+                    <span class="time-range">{{ job.time }}</span>
+                    {% if job.status %}<span class="status subtle">{{ job.status }}</span>{% endif %}
+                  </div>
+                  <a class="job-link" href="{{ job.link }}">{{ job.title }}</a>
+                  {% if job.client %}<span class="subtle job-client">{{ job.client }}</span>{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+            {% if not day.blocks and not day.appointments %}
+            <p class="subtle availability-empty">No availability published.</p>
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  <section class="tech-section">
+    <header class="tech-section-header">
+      <div>
         <h2>Upload documentation</h2>
         <p class="subtle">Capture clear photos for each required category before closing the job.</p>
       </div>

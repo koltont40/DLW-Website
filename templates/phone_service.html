@@ -9,7 +9,7 @@
       our WISP service. Manage numbers, voicemail, and billing from the same secure customer portal.
     </p>
     <div class="hero-actions">
-      <a class="button primary" href="{{ url_for('signup') }}">Start service</a>
+      <a class="button primary" href="{{ url_for('signup') }}">Sign Up Now</a>
       <a class="button secondary" href="{{ url_for('portal_login') }}">Customer login</a>
       <a class="button ghost" href="mailto:{{ contact_email }}">Talk with sales</a>
     </div>
@@ -69,7 +69,7 @@
       </ul>
       {% endif %}
       <footer class="plan-footer">
-        <a class="button secondary" href="{{ url_for('signup') }}?plan={{ plan.name | urlencode }}">Select plan</a>
+        <a class="button secondary" href="{{ url_for('signup') }}?plan={{ plan.name | urlencode }}">Sign Up for this plan</a>
       </footer>
     </article>
     {% endfor %}
