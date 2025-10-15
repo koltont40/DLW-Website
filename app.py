@@ -2163,6 +2163,10 @@ def ensure_client_billing_fields() -> None:
         statements.append(
             "ALTER TABLE clients ADD COLUMN suspension_reason VARCHAR(255)"
         )
+    if "stripe_customer_id" not in columns:
+        statements.append(
+            "ALTER TABLE clients ADD COLUMN stripe_customer_id VARCHAR(64)"
+        )
 
     if statements:
         with db.engine.begin() as connection:
