@@ -35,6 +35,7 @@ require_python_module() {
 
 require_command python3 python3
 require_command pip3 python3-pip
+require_command certbot certbot
 
 if command -v python3 >/dev/null 2>&1; then
   if ! python3 -m venv --help >/dev/null 2>&1; then
@@ -67,15 +68,20 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-python -c "from app import init_db; init_db()"
-
-export FLASK_APP=app
-export FLASK_RUN_HOST=0.0.0.0
-export FLASK_RUN_PORT=${PORT:-8000}
+python3 -c "from app import init_db; init_db()"
 
 echo
-echo "Launching the development server on http://$FLASK_RUN_HOST:$FLASK_RUN_PORT"
-echo "Admin login -> Username: ${ADMIN_USERNAME:-admin} | Password: ${ADMIN_PASSWORD:-admin123}"
+echo "Launching the application on ports 80 (HTTP) and 443 (HTTPS when certificates exist)."
+echo "If you encounter a permission error binding to port 80, rerun this script with sudo or grant Python the cap_net_bind_service capability."
+if [ -n "${ADMIN_USERNAME:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ]; then
+  echo "Configured admin login -> Username: ${ADMIN_USERNAME} (password provided via ADMIN_PASSWORD)"
+else
+  cat <<'INFO'
+No administrator credentials are configured yet.
+Set ADMIN_USERNAME and ADMIN_PASSWORD (and optionally ADMIN_EMAIL) before launch to seed the first admin account,
+or create an administrator manually using 'python -c "from app import create_app, db, AdminUser; ..."' after initialization.
+INFO
+fi
 echo "Press CTRL+C to stop the server."
 
-exec flask run
+exec python3 app.py

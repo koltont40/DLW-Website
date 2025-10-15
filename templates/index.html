@@ -3,7 +3,7 @@
 {% block content %}
 <section class="hero">
   <div class="hero-grid">
-    <div>
+    <div class="hero-message">
       <h1>Wireless Internet &amp; Phone Built for Rural Communities</h1>
       <p class="lead">
         DIXIELAND WIRELESS LLC connects homes and businesses with dependable high-speed WISP coverage and clear VoIP phone
@@ -42,6 +42,43 @@
       <h3>Community Commitment</h3>
       <p>We reinvest in local infrastructure to expand coverage and improve speeds for every customer we add.</p>
     </article>
+  </div>
+</section>
+
+<section class="trusted">
+  <div class="trusted-card card">
+    <header class="trusted-header">
+      <h2>Businesses that trust us</h2>
+      <p class="subtle">Local organizations rely on DIXIELAND WIRELESS LLC to stay connected every day.</p>
+    </header>
+    <div class="trusted-grid">
+      {% if trusted_businesses %}
+      {% for business in trusted_businesses %}
+      <article class="trusted-item">
+        {% if business.website_url %}
+        <a class="trusted-logo" href="{{ business.website_url }}" target="_blank" rel="noopener">
+          {% if business.logo_filename %}
+          <img src="{{ url_for('trusted_business_logo', business_id=business.id) }}" alt="{{ business.name }} logo" />
+          {% else %}
+          <span class="trusted-initial" aria-hidden="true">{{ business.name[:1] }}</span>
+          {% endif %}
+        </a>
+        {% else %}
+        <div class="trusted-logo">
+          {% if business.logo_filename %}
+          <img src="{{ url_for('trusted_business_logo', business_id=business.id) }}" alt="{{ business.name }} logo" />
+          {% else %}
+          <span class="trusted-initial" aria-hidden="true">{{ business.name[:1] }}</span>
+          {% endif %}
+        </div>
+        {% endif %}
+        <span class="trusted-name">{{ business.name }}</span>
+      </article>
+      {% endfor %}
+      {% else %}
+      <p class="subtle">Showcase the businesses you support by adding them in the admin dashboard.</p>
+      {% endif %}
+    </div>
   </div>
 </section>
 
