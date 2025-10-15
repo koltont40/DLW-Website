@@ -4333,6 +4333,69 @@ a.trusted-logo:hover {
   margin: 0;
 }
 
+.tech-schedule-form {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  align-items: end;
+}
+
+.tech-schedule-form .form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.form-field-note input[type="text"] {
+  min-width: 220px;
+}
+
+.schedule-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.tech-schedule {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.tech-schedule-column h3 {
+  margin: 0 0 0.75rem;
+}
+
+.schedule-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.schedule-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.schedule-item.past {
+  opacity: 0.8;
+}
+
+.schedule-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
 .tech-visit-grid {
   display: grid;
   gap: 1.5rem;
@@ -4352,6 +4415,14 @@ a.trusted-logo:hover {
 
 .tech-visit-card.visit-complete {
   background: linear-gradient(145deg, rgba(34, 197, 94, 0.18), rgba(26, 16, 48, 0.9));
+}
+
+.tech-visit-card.visit-upcoming {
+  background: linear-gradient(145deg, rgba(59, 130, 246, 0.18), rgba(26, 16, 48, 0.88));
+}
+
+.tech-visit-card.visit-past {
+  background: linear-gradient(145deg, rgba(148, 163, 184, 0.22), rgba(15, 23, 42, 0.9));
 }
 
 .visit-time {

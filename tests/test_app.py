@@ -22,6 +22,7 @@ from app import (
     ServicePlan,
     SNMPConfig,
     Technician,
+    TechnicianSchedule,
     DownDetectorConfig,
     TLSConfig,
     NavigationItem,
@@ -198,6 +199,14 @@ def login_admin(client, follow_redirects: bool = True):
     return client.post(
         "/login",
         data={"username": TEST_ADMIN_USERNAME, "password": TEST_ADMIN_PASSWORD},
+        follow_redirects=follow_redirects,
+    )
+
+
+def login_technician(client, email: str, password: str, follow_redirects: bool = True):
+    return client.post(
+        "/tech/login",
+        data={"email": email, "password": password},
         follow_redirects=follow_redirects,
     )
 
@@ -1308,6 +1317,113 @@ def test_admin_schedules_appointment_from_account_view(app, client):
         assert appointments[0].technician_id == technician_id
 
 
+def test_technician_manages_schedule_and_views_jobs(app, client):
+    with app.app_context():
+        technician = Technician(
+            name="Schedule Tech",
+            email="schedule-tech@example.com",
+            password_hash=generate_password_hash("TechSchedule123!"),
+            is_active=True,
+        )
+        db.session.add(technician)
+        db.session.commit()
+        technician_id = technician.id
+
+        now = utcnow()
+        today_client = Client(
+            name="Today Client",
+            email="today-client@example.com",
+            status="Active",
+        )
+        future_client = Client(
+            name="Future Client",
+            email="future-client@example.com",
+            status="Active",
+        )
+        past_client = Client(
+            name="Past Client",
+            email="past-client@example.com",
+            status="Active",
+        )
+        db.session.add_all([today_client, future_client, past_client])
+        db.session.commit()
+
+        today_time = now.replace(hour=10, minute=0, second=0, microsecond=0)
+        future_time = now + timedelta(days=2)
+        past_time = now - timedelta(days=2)
+
+        appointments = [
+            Appointment(
+                client_id=today_client.id,
+                technician_id=technician_id,
+                title="Install gateway",
+                scheduled_for=today_time,
+            ),
+            Appointment(
+                client_id=future_client.id,
+                technician_id=technician_id,
+                title="Tower inspection",
+                scheduled_for=future_time,
+            ),
+            Appointment(
+                client_id=past_client.id,
+                technician_id=technician_id,
+                title="Service follow-up",
+                scheduled_for=past_time,
+            ),
+        ]
+        db.session.add_all(appointments)
+        db.session.commit()
+
+    login_response = login_technician(
+        client,
+        email="schedule-tech@example.com",
+        password="TechSchedule123!",
+    )
+    assert login_response.status_code == 200
+    assert b"Today's jobs" in login_response.data
+    assert b"Upcoming jobs" in login_response.data
+    assert b"Completed jobs" in login_response.data
+    assert b"Today Client" in login_response.data
+    assert b"Future Client" in login_response.data
+    assert b"Past Client" in login_response.data
+
+    schedule_date = (utcnow() + timedelta(days=3)).date().isoformat()
+    schedule_response = client.post(
+        "/tech/schedule",
+        data={
+            "date": schedule_date,
+            "start_time": "09:00",
+            "end_time": "17:00",
+            "note": "Warehouse coverage",
+        },
+        follow_redirects=True,
+    )
+    assert schedule_response.status_code == 200
+    assert b"Schedule saved" in schedule_response.data
+    assert b"Warehouse coverage" in schedule_response.data
+
+    with app.app_context():
+        schedule_blocks = TechnicianSchedule.query.filter_by(
+            technician_id=technician_id
+        ).all()
+        assert len(schedule_blocks) == 1
+        block = schedule_blocks[0]
+        assert block.end_at > block.start_at
+        assert block.note == "Warehouse coverage"
+        block_id = block.id
+
+    delete_response = client.post(
+        f"/tech/schedule/{block_id}/delete",
+        follow_redirects=True,
+    )
+    assert delete_response.status_code == 200
+    assert b"Schedule entry removed" in delete_response.data
+
+    with app.app_context():
+        assert TechnicianSchedule.query.filter_by(id=block_id).first() is None
+
+
 def test_admin_customer_account_view_requires_login(client):
     response = client.get("/dashboard/customers/1", follow_redirects=False)
 
@@ -2105,7 +2221,8 @@ def test_technician_portal_login_and_dashboard(app, client):
 
     assert response.status_code == 200
     assert b"Welcome, Taylor Reed" in response.data
-    assert b"Upcoming visits" in response.data
+    assert b"Today's jobs" in response.data
+    assert b"Upcoming jobs" in response.data
 
 
 def test_technician_uploads_install_photo(app, client):

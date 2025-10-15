@@ -1280,9 +1280,37 @@ class Technician(db.Model):
         back_populates="technician",
         cascade="all, delete-orphan",
     )
+    schedule_blocks = db.relationship(
+        "TechnicianSchedule",
+        back_populates="technician",
+        cascade="all, delete-orphan",
+        order_by="TechnicianSchedule.start_at",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Technician {self.email}>"
+
+
+class TechnicianSchedule(db.Model):
+    __tablename__ = "technician_schedule"
+
+    id = db.Column(db.Integer, primary_key=True)
+    technician_id = db.Column(db.Integer, db.ForeignKey("technicians.id"), nullable=False)
+    start_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    end_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    note = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    technician = db.relationship("Technician", back_populates="schedule_blocks")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return (
+            f"<TechnicianSchedule technician={self.technician_id} "
+            f"start={self.start_at:%Y-%m-%d %H:%M}>"
+        )
 
 
 class InstallPhotoRequirement(db.Model):
@@ -3854,13 +3882,61 @@ def register_routes(app: Flask) -> None:
                 scheduled = scheduled.replace(tzinfo=UTC)
             return scheduled
 
-        upcoming = [
-            ap for ap in appointments if _scheduled_for(ap) >= now - timedelta(hours=12)
-        ]
-        recent = [
-            ap for ap in appointments if _scheduled_for(ap) < now
-        ]
-        recent = sorted(recent, key=lambda ap: _scheduled_for(ap), reverse=True)[:5]
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_end = today_start + timedelta(days=1)
+
+        today_appointments: list[Appointment] = []
+        future_appointments: list[Appointment] = []
+        past_appointments: list[Appointment] = []
+
+        for appointment in appointments:
+            scheduled_at = _scheduled_for(appointment)
+            if scheduled_at < today_start:
+                past_appointments.append(appointment)
+            elif scheduled_at >= today_end:
+                future_appointments.append(appointment)
+            else:
+                today_appointments.append(appointment)
+
+        today_appointments = sorted(today_appointments, key=_scheduled_for)
+        future_appointments = sorted(future_appointments, key=_scheduled_for)
+        past_appointments = sorted(
+            past_appointments, key=_scheduled_for, reverse=True
+        )
+        recent = past_appointments[:5]
+        displayed_past = past_appointments[:10]
+
+        upcoming_combined = today_appointments + future_appointments
+
+        schedule_blocks = (
+            TechnicianSchedule.query.filter_by(technician_id=technician.id)
+            .order_by(TechnicianSchedule.start_at.asc())
+            .all()
+        )
+        grace_cutoff = now - timedelta(hours=1)
+
+        def _with_utc(dt: datetime) -> datetime:
+            if dt is None:
+                return now
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=UTC)
+            return dt
+
+        upcoming_schedule: list[TechnicianSchedule] = []
+        past_schedule_blocks: list[TechnicianSchedule] = []
+        for block in schedule_blocks:
+            block_end = _with_utc(block.end_at)
+            if block_end >= grace_cutoff:
+                upcoming_schedule.append(block)
+            else:
+                past_schedule_blocks.append(block)
+
+        upcoming_schedule.sort(key=lambda block: _with_utc(block.start_at))
+        past_schedule = sorted(
+            past_schedule_blocks,
+            key=lambda block: _with_utc(block.start_at),
+            reverse=True,
+        )[:5]
 
         required_categories = get_required_install_photo_categories()
         photo_category_choices = get_install_photo_category_choices()
@@ -3912,7 +3988,10 @@ def register_routes(app: Flask) -> None:
         return render_template(
             "tech_dashboard.html",
             technician=technician,
-            upcoming_appointments=upcoming,
+            today_appointments=today_appointments,
+            future_appointments=future_appointments,
+            past_appointments=displayed_past,
+            upcoming_appointments=upcoming_combined,
             recent_appointments=recent,
             missing_requirements=missing_requirements,
             photo_map=photo_map,
@@ -3920,7 +3999,68 @@ def register_routes(app: Flask) -> None:
             required_categories=required_categories,
             recent_uploads=recent_uploads,
             acknowledgements_map=acknowledgements_map,
+            upcoming_schedule=upcoming_schedule,
+            past_schedule=past_schedule,
         )
+
+    @app.post("/tech/schedule")
+    @technician_login_required
+    def create_technician_schedule(technician: Technician):
+        date_raw = request.form.get("date", "").strip()
+        start_time_raw = request.form.get("start_time", "").strip()
+        end_time_raw = request.form.get("end_time", "").strip()
+        note = request.form.get("note", "").strip() or None
+
+        if not (date_raw and start_time_raw and end_time_raw):
+            flash("Select a schedule date, start time, and end time.", "danger")
+            return redirect(url_for("tech_dashboard"))
+
+        try:
+            start_at = datetime.strptime(
+                f"{date_raw} {start_time_raw}", "%Y-%m-%d %H:%M"
+            ).replace(tzinfo=UTC)
+            end_at = datetime.strptime(
+                f"{date_raw} {end_time_raw}", "%Y-%m-%d %H:%M"
+            ).replace(tzinfo=UTC)
+        except ValueError:
+            flash("Enter a valid schedule date and time.", "danger")
+            return redirect(url_for("tech_dashboard"))
+
+        if end_at <= start_at:
+            flash("End time must be after the start time.", "danger")
+            return redirect(url_for("tech_dashboard"))
+
+        schedule_block = TechnicianSchedule(
+            technician_id=technician.id,
+            start_at=start_at,
+            end_at=end_at,
+            note=note,
+        )
+        db.session.add(schedule_block)
+        db.session.commit()
+
+        flash("Schedule saved to your calendar.", "success")
+        return redirect(url_for("tech_dashboard"))
+
+    @app.post("/tech/schedule/<int:block_id>/delete")
+    @technician_login_required
+    def delete_technician_schedule(technician: Technician, block_id: int):
+        schedule_block = (
+            TechnicianSchedule.query.filter_by(
+                id=block_id, technician_id=technician.id
+            )
+            .order_by(TechnicianSchedule.start_at.desc())
+            .first()
+        )
+        if schedule_block is None:
+            flash("Schedule entry not found.", "danger")
+            return redirect(url_for("tech_dashboard"))
+
+        db.session.delete(schedule_block)
+        db.session.commit()
+
+        flash("Schedule entry removed.", "info")
+        return redirect(url_for("tech_dashboard"))
 
     @app.route("/tech/appointments/<int:appointment_id>")
     @technician_login_required
