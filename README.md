@@ -22,12 +22,12 @@ This project provides a self-hosted client onboarding, billing, and support port
 - **Phone Service Landing** – Share hosted voice benefits and plan details on a dedicated page that links straight into signup and the customer portal.
 - **Configurable Contact Details** – Set a single contact email that powers navigation links, portal reminders, and signup confirmations.
 - **Blog Publishing** – Draft, publish, and manage updates from the admin dashboard that surface on the public blog.
-- **One-Command Install** – Run `./install.sh` on Ubuntu 24.04 to provision dependencies, initialize the SQLite database, and start the development server.
+- **One-Command Install** – Run `./install.sh` on Ubuntu 24.04 to provision dependencies, initialize the SQLite database, and start the development server (use `sudo` if you need permission to bind to ports 80/443).
 
 ## Quick Start (Ubuntu 24.04)
 
 ```bash
-sudo apt update && sudo apt install -y python3 python3-venv python3-pip
+sudo apt update && sudo apt install -y python3 python3-venv python3-pip certbot
 ./install.sh
 ```
 
@@ -43,14 +43,13 @@ When new releases are published you can stay up to date without rerunning the in
 
 The helper script verifies you have `git` available, fetches the latest commits for your current branch, rebases your local copy, and refreshes dependencies inside the existing virtual environment. If you have local changes you will be prompted to commit or stash them before continuing.
 
-### Default Admin Credentials
+### Creating the First Administrator
 
-- **Username:** `admin`
-- **Password:** `admin123`
-
-Change these by setting the `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment variables before launching the app.
+Set the `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and optional `ADMIN_EMAIL` environment variables before the first launch to auto-create your initial administrator. If those values are omitted the database will be initialized without an admin account—sign in via another trusted path (for example, `flask shell`) to create one manually before exposing the dashboard.
 
 Each client can be issued a customer-portal password from the admin dashboard. Generate a temporary password or set a custom credential, then share it securely with the subscriber.
+
+After signing in you can add or remove additional administrators from **Dashboard → Security** so multiple staff members can manage the portal.
 
 ## Project Structure
 
@@ -82,10 +81,16 @@ Each client can be issued a customer-portal password from the admin dashboard. G
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `SECRET_KEY` | Flask session secret | Randomly generated if unset |
-| `ADMIN_USERNAME` | Dashboard login username | `admin` |
-| `ADMIN_PASSWORD` | Dashboard login password | `admin123` |
-| `PORT` | Server port | `8000` |
-| `CONTACT_EMAIL` | Primary support/contact email surfaced throughout the site | `hello@example.com` |
+| `ADMIN_USERNAME` | Dashboard login username used to seed the first admin | unset (required to auto-create an admin) |
+| `ADMIN_PASSWORD` | Dashboard login password used to seed the first admin | unset (required to auto-create an admin) |
+| `ADMIN_EMAIL` | Optional email to assign to the seeded administrator | unset |
+| `PORT` | Optional secondary HTTP port (in addition to port 80) | unset |
+| `HTTPS_PORT` | Optional secondary HTTPS port (in addition to port 443) | unset |
+| `CONTACT_EMAIL` | Primary support/contact email surfaced throughout the site | `info@dixielandwireless.com` |
+| `CONTACT_PHONE` | Support phone number shown on public pages and navigation | `2053343969` |
+| `STRIPE_SECRET_KEY` | Server-side API key for payment processing, autopay, and refunds | unset (Stripe disabled) |
+| `STRIPE_PUBLISHABLE_KEY` | Publishable key used by Stripe.js in the client portal | unset |
+| `STRIPE_WEBHOOK_SECRET` | Signing secret for validating Stripe webhooks | unset |
 | `SNMP_TRAP_HOST` | Hostname/IP for SNMP trap delivery | unset (disabled) |
 | `SNMP_TRAP_PORT` | UDP port for SNMP trap delivery | `162` |
 | `SNMP_COMMUNITY` | SNMP community string | `public` |
@@ -102,6 +107,15 @@ When `SNMP_TRAP_HOST` is provided the application emits SNMP traps for appointme
 Administrators can also compose ad-hoc SNMP-backed emails from the Support section of the dashboard to broadcast outage updates or reminders.
 
 During automated testing you can override the trap sender by assigning a callable to `app.config["SNMP_EMAIL_SENDER"]`.
+
+### Stripe Payments & Autopay
+
+Stripe powers secure card storage, customer-initiated payments, dashboard refunds, and automated autopay runs. Provide your Stripe credentials before launching production instances:
+
+1. Create API keys from the Stripe dashboard and export `STRIPE_SECRET_KEY` and `STRIPE_PUBLISHABLE_KEY` in the environment where the app runs.
+2. Configure a webhook endpoint that points to `/stripe/webhook` and assign its signing secret to `STRIPE_WEBHOOK_SECRET` so events are verified.
+3. Ask customers to add cards or toggle autopay from the client portal. Administrators can still paste a Stripe payment method ID (for example `pm_123...`) if they create one from the Stripe dashboard.
+4. When autopay runs the app confirms off-session charges through Stripe and records outcomes through the webhook. Successful manual payments and refunds also flow through the same webhook channel, keeping invoice statuses in sync automatically.
 
 ## Development Notes
 
