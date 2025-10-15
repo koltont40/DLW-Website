@@ -2447,6 +2447,25 @@ def test_admin_can_update_notification_preferences(app, client):
         config = NotificationConfig.query.first()
         assert config.notify_install_activity is True
         assert config.notify_customer_activity is False
+        assert config.notify_all_account_activity is False
+
+    response = client.post(
+        "/dashboard/notifications/preferences",
+        data={
+            "notify_installs": "on",
+            "notify_customers": "on",
+            "notify_all_activity": "on",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        config = NotificationConfig.query.first()
+        assert config.notify_install_activity is True
+        assert config.notify_customer_activity is True
+        assert config.notify_all_account_activity is True
 
 
 def test_technician_portal_login_and_dashboard(app, client):
