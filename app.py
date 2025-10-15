@@ -71,6 +71,49 @@ SITE_SHELL_CACHE_SECONDS_DEFAULT = 15.0
 DASHBOARD_OVERVIEW_CACHE_KEY = "_dashboard_overview_cache"
 DASHBOARD_OVERVIEW_CACHE_SECONDS_DEFAULT = 10.0
 
+FILE_TRANSFER_SURFACES: dict[str, str] = {
+    "acme-challenge": "Let's Encrypt HTTP challenge files",
+    "signup-verification": "Customer signup verification uploads",
+    "client-verification": "Customer verification documents",
+    "support-ticket-attachments": "Support ticket photo attachments",
+    "install-photo": "Technician installation photos",
+    "install-signature": "Technician install acknowledgements",
+    "legal-documents": "Published legal policy documents",
+    "branding-assets": "Branding asset uploads",
+    "theme-background": "Site background images",
+    "team-member-photo": "Team member profile photos",
+    "trusted-business-logo": "Trusted business logos",
+}
+
+
+def _allowed_file_surfaces() -> set[str]:
+    allowed = current_app.config.get("ALLOWED_FILE_TRANSFER_SURFACES")
+    if allowed is None:
+        allowed = set(FILE_TRANSFER_SURFACES.keys())
+        current_app.config["ALLOWED_FILE_TRANSFER_SURFACES"] = allowed
+    return allowed
+
+
+def ensure_file_surface_enabled(surface: str) -> None:
+    if surface not in _allowed_file_surfaces():
+        current_app.logger.warning(
+            "Blocked file transfer for disabled surface '%s' on %s %s",
+            surface,
+            request.method,
+            request.path,
+        )
+        abort(403)
+
+
+def send_site_file(
+    surface: str,
+    directory: str | Path,
+    filename: str,
+    **send_kwargs,
+):
+    ensure_file_surface_enabled(surface)
+    return send_from_directory(str(directory), filename, **send_kwargs)
+
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
@@ -1767,6 +1810,10 @@ def create_app(test_config: dict | None = None) -> Flask:
     }
 
     app.config.update(default_config)
+    if "ALLOWED_FILE_TRANSFER_SURFACES" not in app.config:
+        app.config["ALLOWED_FILE_TRANSFER_SURFACES"] = set(
+            FILE_TRANSFER_SURFACES.keys()
+        )
 
     if test_config:
         app.config.update(test_config)
@@ -3408,7 +3455,7 @@ def register_routes(app: Flask) -> None:
         file_path = challenge_dir / token
         if not file_path.exists():
             abort(404)
-        return send_from_directory(challenge_dir, token)
+        return send_site_file("acme-challenge", challenge_dir, token)
 
     @app.route("/")
     def index():
@@ -3512,6 +3559,7 @@ def register_routes(app: Flask) -> None:
     def signup():
         selected_plan = request.args.get("plan", "").strip()
         if request.method == "POST":
+            ensure_file_surface_enabled("signup-verification")
             name = request.form.get("name", "").strip()
             email = request.form.get("email", "").strip().lower()
             company = request.form.get("company", "").strip()
@@ -3951,6 +3999,9 @@ def register_routes(app: Flask) -> None:
             for file in request.files.getlist("attachments")
             if file and getattr(file, "filename", "")
         ]
+
+        if uploaded_files:
+            ensure_file_surface_enabled("support-ticket-attachments")
 
         for file in uploaded_files:
             if not allowed_ticket_attachment(file.filename):
@@ -4676,6 +4727,7 @@ def register_routes(app: Flask) -> None:
             flash("Choose a supported photo category.", "danger")
             return redirect(url_for("tech_appointment_detail", appointment_id=appointment.id))
 
+        ensure_file_surface_enabled("install-photo")
         file = request.files.get("photo")
         if not file or not file.filename:
             flash("Choose a photo to upload.", "danger")
@@ -4804,9 +4856,10 @@ def register_routes(app: Flask) -> None:
         if not file_path.exists():
             abort(404)
 
-        directory = str(file_path.parent)
         mimetype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-        return send_from_directory(directory, file_path.name, mimetype=mimetype)
+        return send_site_file(
+            "install-photo", file_path.parent, file_path.name, mimetype=mimetype
+        )
 
     @app.get("/install-signatures/<int:ack_id>")
     def serve_install_signature(ack_id: int):
@@ -4828,8 +4881,9 @@ def register_routes(app: Flask) -> None:
         if not file_path.exists():
             abort(404)
 
-        return send_from_directory(
-            str(file_path.parent),
+        return send_site_file(
+            "install-signature",
+            file_path.parent,
             file_path.name,
             mimetype="image/png",
         )
@@ -4853,10 +4907,10 @@ def register_routes(app: Flask) -> None:
         if not file_path.exists():
             abort(404)
 
-        directory = str(file_path.parent)
         mimetype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-        return send_from_directory(
-            directory,
+        return send_site_file(
+            "support-ticket-attachments",
+            file_path.parent,
             file_path.name,
             mimetype=mimetype,
             download_name=attachment.original_filename,
@@ -4883,9 +4937,13 @@ def register_routes(app: Flask) -> None:
         if not file_path.exists():
             abort(404)
 
-        directory = str(file_path.parent)
         mimetype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-        return send_from_directory(directory, file_path.name, mimetype=mimetype)
+        return send_site_file(
+            "client-verification",
+            file_path.parent,
+            file_path.name,
+            mimetype=mimetype,
+        )
 
     @app.route("/legal")
     def legal():
@@ -5579,6 +5637,7 @@ def register_routes(app: Flask) -> None:
     @app.post("/documents/upload")
     @login_required
     def upload_document():
+        ensure_file_surface_enabled("legal-documents")
         doc_type = request.form.get("doc_type", "")
         file = request.files.get("document")
 
@@ -5631,8 +5690,9 @@ def register_routes(app: Flask) -> None:
         extension = file_path.suffix.lower().lstrip(".")
         mimetype = DOCUMENT_MIME_TYPES.get(extension, "application/octet-stream")
 
-        return send_from_directory(
-            str(upload_folder),
+        return send_site_file(
+            "legal-documents",
+            upload_folder,
             document.stored_filename,
             mimetype=mimetype,
             as_attachment=False,
@@ -5643,8 +5703,9 @@ def register_routes(app: Flask) -> None:
     def download_document(doc_type: str):
         document, upload_folder, _ = _resolve_document(doc_type)
 
-        return send_from_directory(
-            str(upload_folder),
+        return send_site_file(
+            "legal-documents",
+            upload_folder,
             document.stored_filename,
             as_attachment=True,
             download_name=document.original_filename,
@@ -5863,6 +5924,8 @@ def register_routes(app: Flask) -> None:
             flash("Passwords do not match. Please try again.", "danger")
             return _redirect_back_to_dashboard("customers")
 
+        if verification_file and verification_file.filename:
+            ensure_file_surface_enabled("client-verification")
         if verification_file and verification_file.filename and not allowed_verification_file(
             verification_file.filename
         ):
@@ -5964,6 +6027,7 @@ def register_routes(app: Flask) -> None:
             flash("Choose a verification file to upload.", "danger")
             return _redirect_back_to_dashboard("customers")
 
+        ensure_file_surface_enabled("client-verification")
         if not allowed_verification_file(file.filename):
             flash("Upload a JPG, PNG, HEIC, or PDF file for verification.", "danger")
             return _redirect_back_to_dashboard("customers")
@@ -6946,6 +7010,9 @@ def register_routes(app: Flask) -> None:
             if file and getattr(file, "filename", "")
         ]
 
+        if uploaded_files:
+            ensure_file_surface_enabled("support-ticket-attachments")
+
         for file in uploaded_files:
             if not allowed_ticket_attachment(file.filename):
                 flash(
@@ -7530,6 +7597,7 @@ def register_routes(app: Flask) -> None:
         photo_removed = False
 
         if photo_file and photo_file.filename:
+            ensure_file_surface_enabled("theme-background")
             filename = secure_filename(photo_file.filename)
             extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
             if extension not in ALLOWED_BRANDING_EXTENSIONS:
@@ -7587,6 +7655,7 @@ def register_routes(app: Flask) -> None:
     @app.post("/branding/upload")
     @login_required
     def upload_branding():
+        ensure_file_surface_enabled("branding-assets")
         asset_type = request.form.get("asset_type", "")
         file = request.files.get("asset")
 
@@ -7648,8 +7717,9 @@ def register_routes(app: Flask) -> None:
         if not file_path.exists():
             abort(404)
 
-        return send_from_directory(
-            str(upload_folder),
+        return send_site_file(
+            "branding-assets",
+            upload_folder,
             asset_record.stored_filename,
             as_attachment=False,
             download_name=asset_record.original_filename,
@@ -7666,8 +7736,9 @@ def register_routes(app: Flask) -> None:
         if not file_path.exists():
             abort(404)
 
-        return send_from_directory(
-            str(upload_folder),
+        return send_site_file(
+            "theme-background",
+            upload_folder,
             theme.background_image_filename,
             as_attachment=False,
             download_name=theme.background_image_original or "background",
@@ -7763,6 +7834,7 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         if photo and photo.filename:
+            ensure_file_surface_enabled("team-member-photo")
             try:
                 store_team_member_photo(app, member, photo)
             except ValueError as exc:
@@ -7795,6 +7867,7 @@ def register_routes(app: Flask) -> None:
         member.bio = bio or None
 
         if photo and photo.filename:
+            ensure_file_surface_enabled("team-member-photo")
             try:
                 store_team_member_photo(app, member, photo)
             except ValueError as exc:
@@ -7829,8 +7902,9 @@ def register_routes(app: Flask) -> None:
         if not file_path.exists():
             abort(404)
 
-        return send_from_directory(
-            str(upload_folder),
+        return send_site_file(
+            "team-member-photo",
+            upload_folder,
             member.photo_filename,
             as_attachment=False,
             download_name=member.photo_original or "team-member",
@@ -7860,6 +7934,7 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
 
         if logo and logo.filename:
+            ensure_file_surface_enabled("trusted-business-logo")
             try:
                 store_trusted_business_logo(app, business, logo)
             except ValueError as exc:
@@ -7890,6 +7965,7 @@ def register_routes(app: Flask) -> None:
         business.website_url = website_url
 
         if logo and logo.filename:
+            ensure_file_surface_enabled("trusted-business-logo")
             try:
                 store_trusted_business_logo(app, business, logo)
             except ValueError as exc:
@@ -7924,8 +8000,9 @@ def register_routes(app: Flask) -> None:
         if not file_path.exists():
             abort(404)
 
-        return send_from_directory(
-            str(upload_folder),
+        return send_site_file(
+            "trusted-business-logo",
+            upload_folder,
             business.logo_filename,
             as_attachment=False,
             download_name=business.logo_original or "trusted-business",

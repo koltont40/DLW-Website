@@ -1573,6 +1573,54 @@ def test_admin_can_upload_and_download_documents(app, client):
     assert "attachment" not in content_disposition.lower()
 
 
+def test_document_upload_blocked_when_surface_disabled(app, client):
+    login_admin(client)
+
+    app.config["ALLOWED_FILE_TRANSFER_SURFACES"] = {
+        surface
+        for surface in app.config["ALLOWED_FILE_TRANSFER_SURFACES"]
+        if surface != "legal-documents"
+    }
+
+    response = client.post(
+        "/documents/upload",
+        data={
+            "doc_type": "aup",
+            "document": (BytesIO(b"policy"), "aup.pdf"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+
+
+def test_document_download_blocked_when_surface_disabled(app, client):
+    login_admin(client)
+
+    with app.app_context():
+        upload_folder = Path(app.config["LEGAL_UPLOAD_FOLDER"])
+        upload_folder.mkdir(parents=True, exist_ok=True)
+        stored_filename = "aup.pdf"
+        (upload_folder / stored_filename).write_bytes(b"policy")
+        document = Document(
+            doc_type="aup",
+            original_filename="aup.pdf",
+            stored_filename=stored_filename,
+        )
+        db.session.add(document)
+        db.session.commit()
+
+    app.config["ALLOWED_FILE_TRANSFER_SURFACES"] = {
+        surface
+        for surface in app.config["ALLOWED_FILE_TRANSFER_SURFACES"]
+        if surface != "legal-documents"
+    }
+
+    response = client.get("/documents/aup")
+    assert response.status_code == 403
+
+
 def test_admin_can_add_navigation_item(app, client):
     login_admin(client)
 

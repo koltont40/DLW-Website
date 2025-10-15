@@ -97,6 +97,10 @@ After signing in you can add or remove additional administrators from **Dashboar
 | `SNMP_ENTERPRISE_OID` | Enterprise OID prefix for emitted traps | `1.3.6.1.4.1.8072.9999` |
 | `SNMP_ADMIN_EMAIL` | Operations email to notify on client responses | unset |
 
+### File Transfer Security
+
+Uploaded photos, documents, and other assets are now gated by an allowlist so files can only move through features that have a matching UI surface (for example, install photos, team profiles, or legal policy downloads). Administrators can further restrict transfers by editing `app.config["ALLOWED_FILE_TRANSFER_SURFACES"]` during startup to include only the surfaces they want to keep enabled.
+
 ### Microsoft 365 Email
 
 Head to **Dashboard → Notifications** to enter your Microsoft 365 SMTP credentials. The dashboard stores the sender name, from address, username, and password securely in the database and will use them for all automated customer and technician alerts. Leave the password fields blank to keep existing secrets, or check the accompanying "Clear" boxes to remove stored credentials. Once a valid username, password, and sender email are provided the status pill will show **Connected** and install notices, billing updates, and portal activity will send directly through Office 365. Configure the optional reply-to contact and List-Unsubscribe URL/mailbox to add the deliverability headers mailbox providers expect—this greatly reduces the chance that automated emails land in spam.
