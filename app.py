@@ -1645,6 +1645,7 @@ class NotificationConfig(db.Model):
     list_unsubscribe_mailto = db.Column(db.String(500))
     notify_install_activity = db.Column(db.Boolean, nullable=False, default=True)
     notify_customer_activity = db.Column(db.Boolean, nullable=False, default=True)
+    notify_all_account_activity = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = db.Column(
         db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
@@ -2678,6 +2679,10 @@ def ensure_notification_configuration() -> NotificationConfig:
         statements.append(
             "ALTER TABLE notification_config ADD COLUMN list_unsubscribe_mailto VARCHAR(500)"
         )
+    if "notify_all_account_activity" not in columns:
+        statements.append(
+            "ALTER TABLE notification_config ADD COLUMN notify_all_account_activity BOOLEAN NOT NULL DEFAULT 1"
+        )
 
     if statements and not table_missing:
         with db.engine.begin() as connection:
@@ -2835,7 +2840,7 @@ def should_send_notification(category: str) -> bool:
         return config.notify_install_activity
     if normalized == "customer":
         return config.notify_customer_activity
-    return True
+    return config.notify_all_account_activity
 
 
 def login_required(func):
@@ -7176,6 +7181,9 @@ def register_routes(app: Flask) -> None:
 
         config.notify_install_activity = request.form.get("notify_installs") == "on"
         config.notify_customer_activity = request.form.get("notify_customers") == "on"
+        config.notify_all_account_activity = (
+            request.form.get("notify_all_activity") == "on"
+        )
         config.updated_at = utcnow()
 
         db.session.commit()

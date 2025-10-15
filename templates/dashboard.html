@@ -1658,6 +1658,10 @@
               <input type="checkbox" name="notify_customers" {% if notification_config and notification_config.notify_customer_activity %}checked{% endif %} />
               <span>Email customers when appointments or account activity changes</span>
             </label>
+            <label class="checkbox-field">
+              <input type="checkbox" name="notify_all_activity" {% if notification_config and notification_config.notify_all_account_activity %}checked{% endif %} />
+              <span>Notify customers about any change to their account details or services</span>
+            </label>
             <div class="notification-actions">
               <button class="button secondary" type="submit">Save preferences</button>
             </div>
