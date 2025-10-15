@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Pay Invoice | DIXIELAND WIRELESS LLC{% endblock %}
+{% set page_surface_class = 'page-surface narrow' %}
+{% block content %}
+<div class="portal-payment-wrapper">
+  <h1>Pay Invoice</h1>
+  <p class="subtle">Invoice {{ invoice.description }} for {{ invoice.amount_cents|currency }}.</p>
+  <form id="portal-payment-form" class="stacked-form portal-payment-form">
+    <div id="portal-payment-element" class="portal-payment-element"></div>
+    <p class="form-help" id="portal-payment-errors"></p>
+    <div class="button-row">
+      <button class="button primary" type="submit" id="portal-payment-submit">Pay {{ invoice.amount_cents|currency }}</button>
+      <a class="button secondary" href="{{ url_for('portal_dashboard') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+  (() => {
+    const publishableKey = "{{ stripe_publishable_key }}";
+    const clientSecret = "{{ payment_intent_client_secret }}";
+    if (!publishableKey || !clientSecret) {
+      return;
+    }
+    const stripe = Stripe(publishableKey);
+    const elements = stripe.elements({ clientSecret });
+    const paymentElement = elements.create("payment");
+    paymentElement.mount("#portal-payment-element");
+    const form = document.getElementById("portal-payment-form");
+    const submitButton = document.getElementById("portal-payment-submit");
+    const errorField = document.getElementById("portal-payment-errors");
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      submitButton.disabled = true;
+      errorField.textContent = "";
+      const { error } = await stripe.confirmPayment({
+        elements,
+        confirmParams: {
+          return_url: "{{ url_for('portal_dashboard', _external=True) }}",
+        },
+      });
+      if (error) {
+        errorField.textContent = error.message || "Payment could not be completed.";
+        submitButton.disabled = false;
+      }
+    });
+  })();
+</script>
+{% endblock %}
