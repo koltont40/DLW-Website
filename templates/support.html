@@ -40,7 +40,16 @@
     <ul class="support-contact-list">
       <li><strong>Email:</strong> <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></li>
       <li><strong>Portal:</strong> <a href="{{ url_for('portal_login') }}">Secure client login</a></li>
-      <li><strong>Phone:</strong> (555) 010-1155</li>
+      {% if contact_phone_display %}
+      <li>
+        <strong>Phone:</strong>
+        {% if contact_phone_href %}
+        <a href="{{ contact_phone_href }}">{{ contact_phone_display }}</a>
+        {% else %}
+        {{ contact_phone_display }}
+        {% endif %}
+      </li>
+      {% endif %}
     </ul>
     <p class="subtle">Field technicians are available for emergencies 24/7.</p>
   </article>
