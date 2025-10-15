@@ -255,6 +255,100 @@ def normalize_card_number(card_number: str) -> str:
     return re.sub(r"[^0-9]", "", card_number or "")
 
 
+def store_team_member_photo(app: Flask, member: "TeamMember", file) -> None:
+    if not file or not file.filename:
+        return
+
+    extension = Path(file.filename).suffix.lower()
+    if extension not in ALLOWED_TEAM_PHOTO_EXTENSIONS:
+        allowed = ", ".join(sorted(ext.lstrip(".") for ext in ALLOWED_TEAM_PHOTO_EXTENSIONS))
+        raise ValueError(f"Team member photos must be one of: {allowed}.")
+
+    upload_folder = Path(app.config["TEAM_UPLOAD_FOLDER"])
+    upload_folder.mkdir(parents=True, exist_ok=True)
+
+    timestamp = utcnow().strftime("%Y%m%d%H%M%S")
+    stored_filename = f"member_{member.id}_{timestamp}{extension}"
+    file_path = upload_folder / stored_filename
+    file.save(file_path)
+
+    if member.photo_filename:
+        previous_path = upload_folder / member.photo_filename
+        try:
+            if previous_path.exists():
+                previous_path.unlink()
+        except OSError:
+            pass
+
+    member.photo_filename = stored_filename
+    member.photo_original = file.filename or stored_filename
+    member.updated_at = utcnow()
+
+
+def delete_team_member_photo(app: Flask, member: "TeamMember") -> None:
+    if not member.photo_filename:
+        return
+
+    upload_folder = Path(app.config["TEAM_UPLOAD_FOLDER"])
+    file_path = upload_folder / member.photo_filename
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError:
+        pass
+
+    member.photo_filename = None
+    member.photo_original = None
+    member.updated_at = utcnow()
+
+
+def store_trusted_business_logo(app: Flask, business: "TrustedBusiness", file) -> None:
+    if not file or not file.filename:
+        return
+
+    extension = Path(file.filename).suffix.lower()
+    if extension not in ALLOWED_TRUSTED_LOGO_EXTENSIONS:
+        allowed = ", ".join(sorted(ext.lstrip(".") for ext in ALLOWED_TRUSTED_LOGO_EXTENSIONS))
+        raise ValueError(f"Trusted business logos must be one of: {allowed}.")
+
+    upload_folder = Path(app.config["TRUSTED_BUSINESS_UPLOAD_FOLDER"])
+    upload_folder.mkdir(parents=True, exist_ok=True)
+
+    timestamp = utcnow().strftime("%Y%m%d%H%M%S")
+    stored_filename = f"business_{business.id}_{timestamp}{extension}"
+    file_path = upload_folder / stored_filename
+    file.save(file_path)
+
+    if business.logo_filename:
+        previous_path = upload_folder / business.logo_filename
+        try:
+            if previous_path.exists():
+                previous_path.unlink()
+        except OSError:
+            pass
+
+    business.logo_filename = stored_filename
+    business.logo_original = file.filename or stored_filename
+    business.updated_at = utcnow()
+
+
+def delete_trusted_business_logo(app: Flask, business: "TrustedBusiness") -> None:
+    if not business.logo_filename:
+        return
+
+    upload_folder = Path(app.config["TRUSTED_BUSINESS_UPLOAD_FOLDER"])
+    file_path = upload_folder / business.logo_filename
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError:
+        pass
+
+    business.logo_filename = None
+    business.logo_original = None
+    business.updated_at = utcnow()
+
+
 def generate_payment_token(client_id: int, digits: str) -> str:
     seed = f"{client_id}:{digits}:{secrets.token_hex(8)}".encode()
     return hashlib.sha256(seed).hexdigest()
@@ -570,6 +664,8 @@ ALLOWED_TICKET_ATTACHMENT_EXTENSIONS = {
     ".heic",
     ".heif",
 }
+ALLOWED_TEAM_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+ALLOWED_TRUSTED_LOGO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".svg"}
 
 
 def get_default_navigation_items() -> list[tuple[str, str, bool]]:
@@ -1022,6 +1118,42 @@ class BlogPost(db.Model):
         return f"<BlogPost {self.slug}>"
 
 
+class TeamMember(db.Model):
+    __tablename__ = "team_members"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    title = db.Column(db.String(160))
+    photo_filename = db.Column(db.String(255))
+    photo_original = db.Column(db.String(255))
+    position = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<TeamMember {self.name}>"
+
+
+class TrustedBusiness(db.Model):
+    __tablename__ = "trusted_businesses"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(160), nullable=False)
+    website_url = db.Column(db.String(500))
+    logo_filename = db.Column(db.String(255))
+    logo_original = db.Column(db.String(255))
+    position = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<TrustedBusiness {self.name}>"
+
+
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, instance_relative_config=True)
 
@@ -1049,6 +1181,8 @@ def create_app(test_config: dict | None = None) -> Flask:
         "LEGAL_UPLOAD_FOLDER": str(instance_path / "legal"),
         "BRANDING_UPLOAD_FOLDER": str(instance_path / "branding"),
         "THEME_UPLOAD_FOLDER": str(instance_path / "theme"),
+        "TEAM_UPLOAD_FOLDER": str(instance_path / "team"),
+        "TRUSTED_BUSINESS_UPLOAD_FOLDER": str(instance_path / "trusted_businesses"),
         "INSTALL_PHOTOS_FOLDER": str(instance_path / "install_photos"),
         "INSTALL_SIGNATURE_FOLDER": str(instance_path / "install_signatures"),
         "CLIENT_VERIFICATION_FOLDER": str(instance_path / "verification"),
@@ -1085,6 +1219,8 @@ def create_app(test_config: dict | None = None) -> Flask:
             "LEGAL_UPLOAD_FOLDER",
             "BRANDING_UPLOAD_FOLDER",
             "THEME_UPLOAD_FOLDER",
+            "TEAM_UPLOAD_FOLDER",
+            "TRUSTED_BUSINESS_UPLOAD_FOLDER",
             "INSTALL_PHOTOS_FOLDER",
             "INSTALL_SIGNATURE_FOLDER",
             "CLIENT_VERIFICATION_FOLDER",
@@ -2015,7 +2151,16 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/")
     def index():
-        return render_template("index.html")
+        trusted_businesses = (
+            TrustedBusiness.query.order_by(
+                TrustedBusiness.position.asc(), TrustedBusiness.id.asc()
+            )
+            .limit(12)
+            .all()
+        )
+        return render_template(
+            "index.html", trusted_businesses=trusted_businesses
+        )
 
     @app.route("/services")
     def service_plans():
@@ -2034,7 +2179,11 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/about")
     def about():
-        return render_template("about.html")
+        team_members = (
+            TeamMember.query.order_by(TeamMember.position.asc(), TeamMember.id.asc())
+            .all()
+        )
+        return render_template("about.html", team_members=team_members)
 
     @app.route("/support")
     def support():
@@ -2937,6 +3086,7 @@ def register_routes(app: Flask) -> None:
             "plans",
             "field",
             "security",
+            "story",
         }
         if active_section not in valid_sections:
             active_section = "overview"
@@ -2963,6 +3113,8 @@ def register_routes(app: Flask) -> None:
         admin_users: list[AdminUser] = []
         recent_autopay_events: list[AutopayEvent] = []
         suspended_clients: list[Client] = []
+        team_members: list[TeamMember] = []
+        trusted_businesses: list[TrustedBusiness] = []
         if active_section in {
             "customers",
             "billing",
@@ -2984,6 +3136,18 @@ def register_routes(app: Flask) -> None:
 
         if active_section in {"network", "field"} and clients:
             suspended_clients = [client for client in clients if client.service_suspended]
+
+        if active_section == "story":
+            team_members = (
+                TeamMember.query.order_by(TeamMember.position.asc(), TeamMember.id.asc())
+                .all()
+            )
+            trusted_businesses = (
+                TrustedBusiness.query.order_by(
+                    TrustedBusiness.position.asc(), TrustedBusiness.id.asc()
+                )
+                .all()
+            )
 
         if active_section == "customers" and focus_client_id:
             selected_client = Client.query.get(focus_client_id)
@@ -3333,6 +3497,8 @@ def register_routes(app: Flask) -> None:
             admin_users=admin_users,
             current_admin_id=session.get("admin_user_id"),
             site_theme=site_theme,
+            team_members=team_members,
+            trusted_businesses=trusted_businesses,
             recent_autopay_events=recent_autopay_events,
             suspended_clients=suspended_clients,
         )
@@ -5209,6 +5375,192 @@ def register_routes(app: Flask) -> None:
 
         flash("Blog post updated.", "success")
         return redirect(url_for("dashboard", section="blog"))
+
+    @app.post("/team-members")
+    @login_required
+    def create_team_member_admin():
+        name = request.form.get("name", "").strip()
+        title = request.form.get("title", "").strip()
+        photo = request.files.get("photo")
+
+        if not name:
+            flash("Provide a name for the team member.", "danger")
+            return redirect(url_for("dashboard", section="story"))
+
+        next_position = (
+            db.session.query(db.func.max(TeamMember.position)).scalar() or 0
+        ) + 1
+
+        member = TeamMember(name=name, title=title or None, position=next_position)
+        db.session.add(member)
+        db.session.commit()
+
+        if photo and photo.filename:
+            try:
+                store_team_member_photo(app, member, photo)
+            except ValueError as exc:
+                db.session.delete(member)
+                db.session.commit()
+                flash(str(exc), "danger")
+                return redirect(url_for("dashboard", section="story"))
+            else:
+                db.session.commit()
+
+        flash(f"Added {member.name} to the team.", "success")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.post("/team-members/<int:member_id>")
+    @login_required
+    def update_team_member_admin(member_id: int):
+        member = TeamMember.query.get_or_404(member_id)
+
+        name = request.form.get("name", "").strip()
+        title = request.form.get("title", "").strip()
+        photo = request.files.get("photo")
+
+        if not name:
+            flash("Team member name is required.", "danger")
+            return redirect(url_for("dashboard", section="story"))
+
+        member.name = name
+        member.title = title or None
+
+        if photo and photo.filename:
+            try:
+                store_team_member_photo(app, member, photo)
+            except ValueError as exc:
+                db.session.rollback()
+                flash(str(exc), "danger")
+                return redirect(url_for("dashboard", section="story"))
+
+        db.session.commit()
+        flash(f"Updated details for {member.name}.", "success")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.post("/team-members/<int:member_id>/delete")
+    @login_required
+    def delete_team_member_admin(member_id: int):
+        member = TeamMember.query.get_or_404(member_id)
+
+        delete_team_member_photo(app, member)
+        db.session.delete(member)
+        db.session.commit()
+
+        flash("Team member removed.", "info")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.get("/team-members/<int:member_id>/photo")
+    def team_member_photo(member_id: int):
+        member = TeamMember.query.get_or_404(member_id)
+        if not member.photo_filename:
+            abort(404)
+
+        upload_folder = Path(app.config["TEAM_UPLOAD_FOLDER"])
+        file_path = upload_folder / member.photo_filename
+        if not file_path.exists():
+            abort(404)
+
+        return send_from_directory(
+            str(upload_folder),
+            member.photo_filename,
+            as_attachment=False,
+            download_name=member.photo_original or "team-member",
+        )
+
+    @app.post("/trusted-businesses")
+    @login_required
+    def create_trusted_business_admin():
+        name = request.form.get("name", "").strip()
+        website_url = request.form.get("website_url", "").strip() or None
+        logo = request.files.get("logo")
+
+        if not name:
+            flash("Provide a business name to showcase.", "danger")
+            return redirect(url_for("dashboard", section="story"))
+
+        next_position = (
+            db.session.query(db.func.max(TrustedBusiness.position)).scalar() or 0
+        ) + 1
+
+        business = TrustedBusiness(
+            name=name,
+            website_url=website_url,
+            position=next_position,
+        )
+        db.session.add(business)
+        db.session.commit()
+
+        if logo and logo.filename:
+            try:
+                store_trusted_business_logo(app, business, logo)
+            except ValueError as exc:
+                db.session.delete(business)
+                db.session.commit()
+                flash(str(exc), "danger")
+                return redirect(url_for("dashboard", section="story"))
+            else:
+                db.session.commit()
+
+        flash(f"Added {business.name} to your trusted partners.", "success")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.post("/trusted-businesses/<int:business_id>")
+    @login_required
+    def update_trusted_business_admin(business_id: int):
+        business = TrustedBusiness.query.get_or_404(business_id)
+
+        name = request.form.get("name", "").strip()
+        website_url = request.form.get("website_url", "").strip() or None
+        logo = request.files.get("logo")
+
+        if not name:
+            flash("Business name is required.", "danger")
+            return redirect(url_for("dashboard", section="story"))
+
+        business.name = name
+        business.website_url = website_url
+
+        if logo and logo.filename:
+            try:
+                store_trusted_business_logo(app, business, logo)
+            except ValueError as exc:
+                db.session.rollback()
+                flash(str(exc), "danger")
+                return redirect(url_for("dashboard", section="story"))
+
+        db.session.commit()
+        flash(f"Updated {business.name}.", "success")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.post("/trusted-businesses/<int:business_id>/delete")
+    @login_required
+    def delete_trusted_business_admin(business_id: int):
+        business = TrustedBusiness.query.get_or_404(business_id)
+
+        delete_trusted_business_logo(app, business)
+        db.session.delete(business)
+        db.session.commit()
+
+        flash("Business removed from the showcase.", "info")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.get("/trusted-businesses/<int:business_id>/logo")
+    def trusted_business_logo(business_id: int):
+        business = TrustedBusiness.query.get_or_404(business_id)
+        if not business.logo_filename:
+            abort(404)
+
+        upload_folder = Path(app.config["TRUSTED_BUSINESS_UPLOAD_FOLDER"])
+        file_path = upload_folder / business.logo_filename
+        if not file_path.exists():
+            abort(404)
+
+        return send_from_directory(
+            str(upload_folder),
+            business.logo_filename,
+            as_attachment=False,
+            download_name=business.logo_original or "trusted-business",
+        )
 
     @app.post("/blog/posts/<int:post_id>/delete")
     @login_required

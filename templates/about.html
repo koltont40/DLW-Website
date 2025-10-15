@@ -42,5 +42,27 @@
     From tower climbs to ticket resolution, every touch point is handled by people who live in the communities we
     serve.
   </p>
+  <div class="team-grid">
+    {% if team_members %}
+    {% for member in team_members %}
+    <article class="team-card">
+      <div class="team-photo">
+        {% if member.photo_filename %}
+        <img src="{{ url_for('team_member_photo', member_id=member.id) }}" alt="{{ member.name }}" />
+        {% else %}
+        <div class="team-initial" aria-hidden="true">{{ member.name[:1] }}</div>
+        {% endif %}
+      </div>
+      <h3>{{ member.name }}</h3>
+      {% if member.title %}
+      <p class="subtle">{{ member.title }}</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+    {% else %}
+    <p class="subtle">Our leadership profiles are being finalized. Check back soon to meet the crew bringing broadband to your
+      neighborhood.</p>
+    {% endif %}
+  </div>
 </section>
 {% endblock %}

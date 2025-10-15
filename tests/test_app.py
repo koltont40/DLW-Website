@@ -28,6 +28,8 @@ from app import (
     PaymentMethod,
     AutopayEvent,
     SiteTheme,
+    TeamMember,
+    TrustedBusiness,
     REQUIRED_INSTALL_PHOTO_CATEGORIES,
     create_app,
     db,
@@ -46,6 +48,8 @@ def app(tmp_path):
     legal_folder = tmp_path / "legal"
     branding_folder = tmp_path / "branding"
     theme_folder = tmp_path / "theme"
+    team_folder = tmp_path / "team"
+    trusted_folder = tmp_path / "trusted_businesses"
     install_folder = tmp_path / "install_photos"
     signature_folder = tmp_path / "install_signatures"
     verification_folder = tmp_path / "verification"
@@ -66,6 +70,8 @@ def app(tmp_path):
             "LEGAL_UPLOAD_FOLDER": str(legal_folder),
             "BRANDING_UPLOAD_FOLDER": str(branding_folder),
             "THEME_UPLOAD_FOLDER": str(theme_folder),
+            "TEAM_UPLOAD_FOLDER": str(team_folder),
+            "TRUSTED_BUSINESS_UPLOAD_FOLDER": str(trusted_folder),
             "INSTALL_PHOTOS_FOLDER": str(install_folder),
             "INSTALL_SIGNATURE_FOLDER": str(signature_folder),
             "CLIENT_VERIFICATION_FOLDER": str(verification_folder),
@@ -194,6 +200,24 @@ def test_index_page_renders(client):
     assert response.status_code == 200
     assert b"Wireless Internet" in response.data
     assert b"/services#plans-phone-service" in response.data
+    assert b"Businesses that trust us" in response.data
+    assert b"Showcase the businesses you support" in response.data
+
+
+def test_index_page_lists_trusted_businesses(app, client):
+    with app.app_context():
+        partner = TrustedBusiness(
+            name="Main Street Market",
+            website_url="https://market.example.com",
+            position=1,
+        )
+        db.session.add(partner)
+        db.session.commit()
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert b"Main Street Market" in response.data
+    assert b"https://market.example.com" in response.data
 
 
 def test_service_plans_page_lists_offerings(client):
@@ -221,6 +245,18 @@ def test_about_page_highlights_mission(client):
     assert response.status_code == 200
     assert b"Our Mission" in response.data
     assert b"local experts" in response.data
+
+
+def test_about_page_lists_team_members(app, client):
+    with app.app_context():
+        member = TeamMember(name="Jordan Williams", title="Network Ops Manager", position=1)
+        db.session.add(member)
+        db.session.commit()
+
+    response = client.get("/about")
+    assert response.status_code == 200
+    assert b"Jordan Williams" in response.data
+    assert b"Network Ops Manager" in response.data
 
 
 def test_support_page_offers_resources(client):
@@ -343,6 +379,68 @@ def test_admin_can_login_and_view_dashboard(client):
     branding_response = client.get("/dashboard?section=branding", follow_redirects=True)
     assert branding_response.status_code == 200
     assert b"Branding Assets" in branding_response.data
+
+
+def test_admin_can_create_team_member_with_photo(app, client):
+    login_admin(client)
+
+    response = client.post(
+        "/team-members",
+        data={
+            "name": "Jordan Williams",
+            "title": "Network Ops Manager",
+            "photo": (BytesIO(b"fake-image"), "headshot.png"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Added Jordan Williams to the team." in response.data
+
+    with app.app_context():
+        member = TeamMember.query.filter_by(name="Jordan Williams").first()
+        assert member is not None
+        assert member.title == "Network Ops Manager"
+        assert member.photo_filename is not None
+        member_id = member.id
+        photo_path = Path(app.config["TEAM_UPLOAD_FOLDER"]) / member.photo_filename
+        assert photo_path.exists()
+
+    photo_response = client.get(f"/team-members/{member_id}/photo")
+    assert photo_response.status_code == 200
+    assert b"fake-image" in photo_response.data
+
+
+def test_admin_can_create_trusted_business_with_logo(app, client):
+    login_admin(client)
+
+    response = client.post(
+        "/trusted-businesses",
+        data={
+            "name": "Main Street Market",
+            "website_url": "https://market.example.com",
+            "logo": (BytesIO(b"<svg></svg>"), "logo.svg"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Added Main Street Market to your trusted partners." in response.data
+
+    with app.app_context():
+        business = TrustedBusiness.query.filter_by(name="Main Street Market").first()
+        assert business is not None
+        assert business.website_url == "https://market.example.com"
+        assert business.logo_filename is not None
+        business_id = business.id
+        logo_path = Path(app.config["TRUSTED_BUSINESS_UPLOAD_FOLDER"]) / business.logo_filename
+        assert logo_path.exists()
+
+    logo_response = client.get(f"/trusted-businesses/{business_id}/logo")
+    assert logo_response.status_code == 200
+    assert b"<svg" in logo_response.data
 
 
 def test_admin_can_view_security_settings(client):

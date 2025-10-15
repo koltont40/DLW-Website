@@ -23,6 +23,7 @@
         <a class="sidebar-link {% if active_section == 'plans' %}active{% endif %}" href="{{ url_for('dashboard', section='plans') }}">Service Plans</a>
         <a class="sidebar-link {% if active_section == 'navigation' %}active{% endif %}" href="{{ url_for('dashboard', section='navigation') }}">Header Links</a>
         <a class="sidebar-link {% if active_section == 'branding' %}active{% endif %}" href="{{ url_for('dashboard', section='branding') }}">Branding</a>
+        <a class="sidebar-link {% if active_section == 'story' %}active{% endif %}" href="{{ url_for('dashboard', section='story') }}">Team &amp; Trust</a>
         <a class="sidebar-link {% if active_section == 'blog' %}active{% endif %}" href="{{ url_for('dashboard', section='blog') }}">Blog</a>
         <a class="sidebar-link {% if active_section == 'legal' %}active{% endif %}" href="{{ url_for('dashboard', section='legal') }}">Legal</a>
       </div>
@@ -1673,6 +1674,171 @@
           </form>
         </article>
         {% endfor %}
+      </div>
+    </section>
+    {% elif active_section == 'story' %}
+    <section class="card story-card" id="story">
+      <header class="section-header">
+        <div>
+          <h2>Team &amp; Trust</h2>
+          <p class="subtle">Keep the public site in sync with your people and the businesses that rely on your network.</p>
+        </div>
+      </header>
+      <div class="story-grid">
+        <article class="story-panel">
+          <header class="story-panel-header">
+            <h3>Meet the team</h3>
+            <p class="subtle">Add names, titles, and headshots for the About page.</p>
+          </header>
+          <form
+            class="stacked-form story-create-form"
+            method="post"
+            action="{{ url_for('create_team_member_admin') }}"
+            enctype="multipart/form-data"
+          >
+            <label>
+              Full name
+              <input type="text" name="name" placeholder="Example: Jordan Williams" required />
+            </label>
+            <label>
+              Title
+              <input type="text" name="title" placeholder="Network Operations Manager" />
+            </label>
+            <label class="file-field">
+              Headshot
+              <input type="file" name="photo" accept="image/*" />
+            </label>
+            <button class="button primary" type="submit">Add team member</button>
+          </form>
+          <div class="story-list">
+            {% if team_members %}
+            {% for member in team_members %}
+            <article class="story-item">
+              <div class="story-item-media">
+                {% if member.photo_filename %}
+                <img
+                  src="{{ url_for('team_member_photo', member_id=member.id) }}"
+                  alt="{{ member.name }} headshot"
+                />
+                {% else %}
+                <div class="story-item-placeholder" aria-hidden="true">{{ member.name[:1] }}</div>
+                {% endif %}
+              </div>
+              <form
+                class="stacked-form story-item-form"
+                method="post"
+                action="{{ url_for('update_team_member_admin', member_id=member.id) }}"
+                enctype="multipart/form-data"
+              >
+                <label>
+                  Full name
+                  <input type="text" name="name" value="{{ member.name }}" required />
+                </label>
+                <label>
+                  Title
+                  <input type="text" name="title" value="{{ member.title or '' }}" />
+                </label>
+                <label class="file-field">
+                  Replace photo
+                  <input type="file" name="photo" accept="image/*" />
+                </label>
+                <div class="form-actions">
+                  <button class="button small primary" type="submit">Save changes</button>
+                  <button
+                    class="button small danger"
+                    type="submit"
+                    formaction="{{ url_for('delete_team_member_admin', member_id=member.id) }}"
+                    formmethod="post"
+                    onclick="return confirm('Remove {{ member.name }} from the team?');"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </form>
+            </article>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">No team members yet. Add your leadership and installers to build trust.</p>
+            {% endif %}
+          </div>
+        </article>
+        <article class="story-panel">
+          <header class="story-panel-header">
+            <h3>Businesses that trust us</h3>
+            <p class="subtle">Showcase partners on the homepage with optional logo links.</p>
+          </header>
+          <form
+            class="stacked-form story-create-form"
+            method="post"
+            action="{{ url_for('create_trusted_business_admin') }}"
+            enctype="multipart/form-data"
+          >
+            <label>
+              Business name
+              <input type="text" name="name" placeholder="Example: Main Street Market" required />
+            </label>
+            <label>
+              Website URL
+              <input type="url" name="website_url" placeholder="https://example.com" />
+            </label>
+            <label class="file-field">
+              Logo
+              <input type="file" name="logo" accept="image/*,.svg" />
+            </label>
+            <button class="button primary" type="submit">Add business</button>
+          </form>
+          <div class="story-list">
+            {% if trusted_businesses %}
+            {% for business in trusted_businesses %}
+            <article class="story-item">
+              <div class="story-item-media">
+                {% if business.logo_filename %}
+                <img
+                  src="{{ url_for('trusted_business_logo', business_id=business.id) }}"
+                  alt="{{ business.name }} logo"
+                />
+                {% else %}
+                <div class="story-item-placeholder" aria-hidden="true">{{ business.name[:1] }}</div>
+                {% endif %}
+              </div>
+              <form
+                class="stacked-form story-item-form"
+                method="post"
+                action="{{ url_for('update_trusted_business_admin', business_id=business.id) }}"
+                enctype="multipart/form-data"
+              >
+                <label>
+                  Business name
+                  <input type="text" name="name" value="{{ business.name }}" required />
+                </label>
+                <label>
+                  Website URL
+                  <input type="url" name="website_url" value="{{ business.website_url or '' }}" />
+                </label>
+                <label class="file-field">
+                  Replace logo
+                  <input type="file" name="logo" accept="image/*,.svg" />
+                </label>
+                <div class="form-actions">
+                  <button class="button small primary" type="submit">Save changes</button>
+                  <button
+                    class="button small danger"
+                    type="submit"
+                    formaction="{{ url_for('delete_trusted_business_admin', business_id=business.id) }}"
+                    formmethod="post"
+                    onclick="return confirm('Remove {{ business.name }} from the homepage?');"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </form>
+            </article>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">Add the companies you serve to highlight community partnerships.</p>
+            {% endif %}
+          </div>
+        </article>
       </div>
     </section>
     {% elif active_section == 'blog' %}
