@@ -1645,6 +1645,7 @@ class NotificationConfig(db.Model):
     list_unsubscribe_mailto = db.Column(db.String(500))
     notify_install_activity = db.Column(db.Boolean, nullable=False, default=True)
     notify_customer_activity = db.Column(db.Boolean, nullable=False, default=True)
+    notify_all_account_activity = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = db.Column(
         db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
@@ -2678,6 +2679,10 @@ def ensure_notification_configuration() -> NotificationConfig:
         statements.append(
             "ALTER TABLE notification_config ADD COLUMN list_unsubscribe_mailto VARCHAR(500)"
         )
+    if "notify_all_account_activity" not in columns:
+        statements.append(
+            "ALTER TABLE notification_config ADD COLUMN notify_all_account_activity BOOLEAN NOT NULL DEFAULT 1"
+        )
 
     if statements and not table_missing:
         with db.engine.begin() as connection:
@@ -2835,7 +2840,7 @@ def should_send_notification(category: str) -> bool:
         return config.notify_install_activity
     if normalized == "customer":
         return config.notify_customer_activity
-    return True
+    return config.notify_all_account_activity
 
 
 def login_required(func):
@@ -6442,6 +6447,27 @@ def register_routes(app: Flask) -> None:
         recalculate_client_billing_state(client)
         db.session.commit()
 
+        if client.email:
+            amount_display = f"${(Decimal(invoice.amount_cents) / Decimal(100)).quantize(Decimal('0.01')):,.2f}"
+            due_line = (
+                f"Due date: {invoice.due_date.strftime('%Y-%m-%d')}"
+                if invoice.due_date
+                else "Due date: Not set"
+            )
+            dispatch_notification(
+                client.email,
+                f"Invoice posted: {invoice.description}",
+                (
+                    f"Hello {client.name},\n\n"
+                    f"We've posted a new invoice (#{invoice.id}) for {amount_display}.\n"
+                    f"Description: {invoice.description}\n"
+                    f"{due_line}\n"
+                    f"Status: {invoice.status}\n\n"
+                    "You can review this invoice and make payments in your customer portal."
+                ),
+                category="billing",
+            )
+
         flash(f"Invoice added for {client.name}.", "success")
         return _redirect_back_to_dashboard("billing")
 
@@ -6497,6 +6523,29 @@ def register_routes(app: Flask) -> None:
                 invoice.paid_at = None
         recalculate_client_billing_state(invoice.client)
         db.session.commit()
+
+        client = invoice.client
+        if client and client.email:
+            amount_display = f"${(Decimal(invoice.amount_cents) / Decimal(100)).quantize(Decimal('0.01')):,.2f}"
+            due_line = (
+                f"Due date: {invoice.due_date.strftime('%Y-%m-%d')}"
+                if invoice.due_date
+                else "Due date: Not set"
+            )
+            dispatch_notification(
+                client.email,
+                f"Invoice updated: {invoice.description}",
+                (
+                    f"Hello {client.name},\n\n"
+                    f"We've updated your invoice (#{invoice.id}).\n"
+                    f"Description: {invoice.description}\n"
+                    f"Amount: {amount_display}\n"
+                    f"{due_line}\n"
+                    f"Status: {invoice.status}\n\n"
+                    "Log in to your customer portal to review the latest details."
+                ),
+                category="billing",
+            )
 
         flash("Invoice updated.", "success")
         return _redirect_back_to_dashboard("billing")
@@ -6583,6 +6632,29 @@ def register_routes(app: Flask) -> None:
         db.session.add(equipment)
         db.session.commit()
 
+        if client.email:
+            installed_line = (
+                f"Installed on: {equipment.installed_on.strftime('%Y-%m-%d')}"
+                if equipment.installed_on
+                else "Installed on: Not set"
+            )
+            notes_line = f"Notes: {equipment.notes}\n" if equipment.notes else ""
+            dispatch_notification(
+                client.email,
+                f"Equipment added: {equipment.name}",
+                (
+                    f"Hello {client.name},\n\n"
+                    "We've added new equipment to your account.\n"
+                    f"Name: {equipment.name}\n"
+                    f"Model: {equipment.model or 'Not provided'}\n"
+                    f"Serial: {equipment.serial_number or 'Not provided'}\n"
+                    f"{installed_line}\n"
+                    f"{notes_line}"
+                    "\nYou can review your equipment details in the customer portal."
+                ),
+                category="account",
+            )
+
         flash(f"Equipment added for {client.name}.", "success")
         return _redirect_back_to_dashboard("network")
 
@@ -6614,6 +6686,30 @@ def register_routes(app: Flask) -> None:
         equipment.installed_on = installed_on_value
         equipment.notes = notes
         db.session.commit()
+
+        client = equipment.client
+        if client and client.email:
+            installed_line = (
+                f"Installed on: {equipment.installed_on.strftime('%Y-%m-%d')}"
+                if equipment.installed_on
+                else "Installed on: Not set"
+            )
+            notes_line = f"Notes: {equipment.notes}\n" if equipment.notes else ""
+            dispatch_notification(
+                client.email,
+                f"Equipment updated: {equipment.name}",
+                (
+                    f"Hello {client.name},\n\n"
+                    "We've updated the equipment details on your account.\n"
+                    f"Name: {equipment.name}\n"
+                    f"Model: {equipment.model or 'Not provided'}\n"
+                    f"Serial: {equipment.serial_number or 'Not provided'}\n"
+                    f"{installed_line}\n"
+                    f"{notes_line}"
+                    "\nVisit your customer portal to review the latest equipment information."
+                ),
+                category="account",
+            )
 
         flash("Equipment updated.", "success")
         return _redirect_back_to_dashboard("network")
@@ -7176,6 +7272,9 @@ def register_routes(app: Flask) -> None:
 
         config.notify_install_activity = request.form.get("notify_installs") == "on"
         config.notify_customer_activity = request.form.get("notify_customers") == "on"
+        config.notify_all_account_activity = (
+            request.form.get("notify_all_activity") == "on"
+        )
         config.updated_at = utcnow()
 
         db.session.commit()
