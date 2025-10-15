@@ -1381,6 +1381,7 @@ def test_technician_manages_schedule_and_views_jobs(app, client):
         password="TechSchedule123!",
     )
     assert login_response.status_code == 200
+    assert b"Calendar overview" in login_response.data
     assert b"Current jobs" in login_response.data
     assert b"Upcoming jobs" in login_response.data
     assert b"Completed jobs" in login_response.data
@@ -2221,6 +2222,7 @@ def test_technician_portal_login_and_dashboard(app, client):
 
     assert response.status_code == 200
     assert b"Welcome, Taylor Reed" in response.data
+    assert b"Calendar overview" in response.data
     assert b"My schedule" in response.data
     assert b"Current jobs" in response.data
     assert b"Upcoming jobs" in response.data
