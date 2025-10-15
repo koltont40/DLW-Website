@@ -49,6 +49,27 @@
         {% else %}
         <p class="subtle">All required photos complete.</p>
         {% endif %}
+        {% if appointment.client.address %}
+        <div class="visit-directions">
+          <a
+            class="inline-link"
+            href="https://maps.apple.com/?daddr={{ appointment.client.address | urlencode }}"
+            target="_blank"
+            rel="noopener"
+          >
+            Apple Maps
+          </a>
+          <span>•</span>
+          <a
+            class="inline-link"
+            href="https://www.google.com/maps/dir/?api=1&destination={{ appointment.client.address | urlencode }}"
+            target="_blank"
+            rel="noopener"
+          >
+            Google Maps
+          </a>
+        </div>
+        {% endif %}
         <a class="button primary" href="{{ url_for('tech_appointment_detail', appointment_id=appointment.id) }}">Open visit</a>
       </article>
       {% endfor %}
