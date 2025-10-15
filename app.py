@@ -38,6 +38,7 @@ from werkzeug.serving import BaseWSGIServer, make_server
 from werkzeug.utils import secure_filename
 
 from sqlalchemy import event, inspect, or_, text
+from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError, NoSuchTableError
 
 load_dotenv()
@@ -48,6 +49,8 @@ _billing_schema_checked = False
 
 SITE_SHELL_CACHE_KEY = "_site_shell_cache"
 SITE_SHELL_CACHE_SECONDS_DEFAULT = 15.0
+DASHBOARD_OVERVIEW_CACHE_KEY = "_dashboard_overview_cache"
+DASHBOARD_OVERVIEW_CACHE_SECONDS_DEFAULT = 10.0
 
 
 def utcnow() -> datetime:
@@ -1206,6 +1209,12 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "SITE_SHELL_CACHE_SECONDS", SITE_SHELL_CACHE_SECONDS_DEFAULT
             )
         ),
+        "DASHBOARD_OVERVIEW_CACHE_SECONDS": float(
+            os.environ.get(
+                "DASHBOARD_OVERVIEW_CACHE_SECONDS",
+                DASHBOARD_OVERVIEW_CACHE_SECONDS_DEFAULT,
+            )
+        ),
         "SNMP_TRAP_HOST": os.environ.get("SNMP_TRAP_HOST"),
         "SNMP_TRAP_PORT": snmp_port,
         "SNMP_COMMUNITY": os.environ.get("SNMP_COMMUNITY", "public"),
@@ -2018,6 +2027,20 @@ def invalidate_site_shell_cache(app: Flask | None = None) -> None:
     target_app.config.pop(SITE_SHELL_CACHE_KEY, None)
 
 
+def invalidate_dashboard_overview_cache(app: Flask | None = None) -> None:
+    target_app = app
+    if target_app is None:
+        try:
+            target_app = current_app._get_current_object()
+        except RuntimeError:
+            target_app = None
+
+    if target_app is None:
+        return
+
+    target_app.config.pop(DASHBOARD_OVERVIEW_CACHE_KEY, None)
+
+
 def get_site_shell_snapshot(app: Flask) -> dict[str, object]:
     ttl_seconds = float(
         app.config.get("SITE_SHELL_CACHE_SECONDS", SITE_SHELL_CACHE_SECONDS_DEFAULT)
@@ -2095,8 +2118,279 @@ def get_site_shell_snapshot(app: Flask) -> dict[str, object]:
     return payload
 
 
+def get_dashboard_overview_snapshot(app: Flask) -> dict[str, object]:
+    ttl_seconds = float(
+        app.config.get(
+            "DASHBOARD_OVERVIEW_CACHE_SECONDS",
+            DASHBOARD_OVERVIEW_CACHE_SECONDS_DEFAULT,
+        )
+    )
+    now_monotonic = time.monotonic()
+    cached = app.config.get(DASHBOARD_OVERVIEW_CACHE_KEY)
+
+    if cached and cached.get("expires_at", 0) > now_monotonic:
+        return cached["payload"]
+
+    start_of_week = utcnow() - timedelta(days=7)
+    total_clients = Client.query.count()
+    new_this_week = Client.query.filter(Client.created_at >= start_of_week).count()
+    outstanding_amount_cents = (
+        db.session.query(db.func.coalesce(db.func.sum(Invoice.amount_cents), 0))
+        .filter(~Invoice.status.in_(["Paid", "Cancelled"]))
+        .scalar()
+    )
+    open_ticket_total = (
+        db.session.query(db.func.count(SupportTicket.id))
+        .filter(SupportTicket.status.in_(["Open", "In Progress"]))
+        .scalar()
+    )
+    active_clients = Client.query.filter_by(status="Active").count()
+    onboarding_clients = (
+        Client.query.filter(Client.status.in_(["New", "In Review"]))
+        .count()
+    )
+    clients_without_password = (
+        Client.query.filter(Client.portal_password_hash.is_(None)).count()
+    )
+    pending_invoices_total = (
+        Invoice.query.filter(Invoice.status.in_(["Pending", "Overdue"]))
+        .count()
+    )
+    overdue_amount_cents = (
+        db.session.query(db.func.coalesce(db.func.sum(Invoice.amount_cents), 0))
+        .filter(Invoice.status == "Overdue")
+        .scalar()
+    )
+    equipment_total = Equipment.query.count()
+    network_new_this_week = (
+        Equipment.query.filter(Equipment.created_at >= start_of_week).count()
+    )
+    clients_with_equipment = (
+        db.session.query(db.func.count(db.func.distinct(Equipment.client_id))).scalar()
+        or 0
+    )
+    support_created_this_week = (
+        SupportTicket.query.filter(SupportTicket.created_at >= start_of_week).count()
+    )
+    support_updates = (
+        SupportTicket.query.filter(SupportTicket.updated_at >= start_of_week).count()
+    )
+    billing_invoices_created = (
+        Invoice.query.filter(Invoice.created_at >= start_of_week).count()
+    )
+
+    upcoming_statuses = ["Pending", "Confirmed", "Reschedule Requested"]
+    now = utcnow()
+    appointments_total = Appointment.query.count()
+    upcoming_appointments_count = (
+        Appointment.query.filter(
+            Appointment.status.in_(upcoming_statuses),
+            Appointment.scheduled_for >= now - timedelta(days=1),
+        ).count()
+    )
+    pending_appointments = (
+        Appointment.query.filter_by(status="Pending").count()
+    )
+    reschedule_requests = (
+        Appointment.query.filter_by(status="Reschedule Requested").count()
+    )
+    appointments_created_this_week = (
+        Appointment.query.filter(Appointment.created_at >= start_of_week).count()
+    )
+
+    upcoming_appointments_list = (
+        Appointment.query.options(joinedload(Appointment.client))
+        .filter(Appointment.status.in_(upcoming_statuses))
+        .order_by(Appointment.scheduled_for.asc())
+        .limit(5)
+        .all()
+    )
+
+    recent_clients = (
+        Client.query.order_by(Client.created_at.desc()).limit(5).all()
+    )
+    recent_invoices = (
+        Invoice.query.options(joinedload(Invoice.client))
+        .order_by(Invoice.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    recent_equipment = (
+        Equipment.query.options(joinedload(Equipment.client))
+        .order_by(Equipment.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    recent_tickets = (
+        SupportTicket.query.options(joinedload(SupportTicket.client))
+        .order_by(SupportTicket.created_at.desc())
+        .limit(5)
+        .all()
+    )
+
+    def _client_namespace(client: Client | None) -> SimpleNamespace | None:
+        if client is None:
+            return None
+        return SimpleNamespace(name=client.name)
+
+    overview_payload = {
+        "total_clients": total_clients,
+        "new_this_week": new_this_week,
+        "outstanding_amount_cents": outstanding_amount_cents,
+        "open_ticket_total": open_ticket_total,
+        "active_clients": active_clients,
+        "onboarding_clients": onboarding_clients,
+        "clients_without_password": clients_without_password,
+        "pending_invoices_total": pending_invoices_total,
+        "overdue_amount_cents": overdue_amount_cents,
+        "equipment_total": equipment_total,
+        "network_new_this_week": network_new_this_week,
+        "clients_with_equipment": clients_with_equipment,
+        "support_created_this_week": support_created_this_week,
+        "support_updates": support_updates,
+        "billing_invoices_created": billing_invoices_created,
+        "appointments_total": appointments_total,
+        "pending_appointments": pending_appointments,
+        "upcoming_appointments_count": upcoming_appointments_count,
+        "reschedule_requests": reschedule_requests,
+        "appointments_created_this_week": appointments_created_this_week,
+        "recent_clients": [
+            SimpleNamespace(
+                name=client.name,
+                created_at=client.created_at,
+                status=client.status,
+                service_summary=client.service_summary,
+            )
+            for client in recent_clients
+        ],
+        "recent_invoices": [
+            SimpleNamespace(
+                description=invoice.description,
+                status=invoice.status,
+                amount_cents=invoice.amount_cents,
+                client=_client_namespace(invoice.client),
+            )
+            for invoice in recent_invoices
+        ],
+        "recent_equipment": [
+            SimpleNamespace(
+                name=device.name,
+                created_at=device.created_at,
+                model=device.model,
+                client=_client_namespace(device.client),
+            )
+            for device in recent_equipment
+        ],
+        "upcoming_appointments": [
+            SimpleNamespace(
+                title=appointment.title,
+                status=appointment.status,
+                scheduled_for=appointment.scheduled_for,
+                client=_client_namespace(appointment.client),
+            )
+            for appointment in upcoming_appointments_list
+        ],
+        "recent_tickets": [
+            SimpleNamespace(
+                subject=ticket.subject,
+                status=ticket.status,
+                updated_at=ticket.updated_at,
+                client=_client_namespace(ticket.client),
+            )
+            for ticket in recent_tickets
+        ],
+    }
+
+    overview_payload["operations_snapshot"] = [
+        {
+            "key": "customers",
+            "title": "Customers",
+            "description": "Growth and onboarding momentum across your service area.",
+            "metrics": [
+                {"label": "Total Clients", "value": total_clients},
+                {"label": "Active Clients", "value": active_clients},
+                {"label": "Onboarding", "value": onboarding_clients},
+                {
+                    "label": "Passwords Pending",
+                    "value": clients_without_password,
+                },
+            ],
+            "footer": f"{new_this_week} new signups this week",
+        },
+        {
+            "key": "network",
+            "title": "Network",
+            "description": "Hardware deployed to keep customers online.",
+            "metrics": [
+                {"label": "Devices Online", "value": equipment_total},
+                {"label": "Clients With Gear", "value": clients_with_equipment},
+                {
+                    "label": "Upcoming Visits",
+                    "value": upcoming_appointments_count,
+                },
+                {
+                    "label": "Reschedule Requests",
+                    "value": reschedule_requests,
+                },
+            ],
+            "footer": (
+                f"{appointments_created_this_week} appointments scheduled this week • "
+                f"{network_new_this_week} installs logged"
+            ),
+        },
+        {
+            "key": "support",
+            "title": "Support",
+            "description": "Ticket activity from your subscribers.",
+            "metrics": [
+                {"label": "Open Tickets", "value": open_ticket_total},
+                {"label": "New Tickets", "value": support_created_this_week},
+                {"label": "Updates This Week", "value": support_updates},
+            ],
+            "footer": f"{support_updates} tickets touched this week",
+        },
+        {
+            "key": "billing",
+            "title": "Billing",
+            "description": "Cash flow indicators and invoice workload.",
+            "metrics": [
+                {
+                    "label": "Outstanding Balance",
+                    "value": outstanding_amount_cents,
+                    "format": "currency",
+                },
+                {
+                    "label": "Overdue Balance",
+                    "value": overdue_amount_cents,
+                    "format": "currency",
+                },
+                {
+                    "label": "Pending Invoices",
+                    "value": pending_invoices_total,
+                },
+                {
+                    "label": "Invoices This Week",
+                    "value": billing_invoices_created,
+                },
+            ],
+            "footer": f"{billing_invoices_created} invoices posted this week",
+        },
+    ]
+
+    app.config[DASHBOARD_OVERVIEW_CACHE_KEY] = {
+        "payload": overview_payload,
+        "expires_at": now_monotonic + ttl_seconds,
+    }
+
+    return overview_payload
+
+
 def _site_shell_cache_invalidator(mapper, connection, target):  # noqa: ARG001
     invalidate_site_shell_cache()
+
+
+def _dashboard_overview_cache_invalidator(mapper, connection, target):  # noqa: ARG001
+    invalidate_dashboard_overview_cache()
 
 
 for model in (
@@ -2108,6 +2402,17 @@ for model in (
 ):
     for event_name in ("after_insert", "after_update", "after_delete"):
         event.listen(model, event_name, _site_shell_cache_invalidator)
+
+for model in (
+    Client,
+    Invoice,
+    SupportTicket,
+    Equipment,
+    Appointment,
+    InstallPhoto,
+):
+    for event_name in ("after_insert", "after_update", "after_delete"):
+        event.listen(model, event_name, _dashboard_overview_cache_invalidator)
 
 
 def register_routes(app: Flask) -> None:
@@ -3346,95 +3651,89 @@ def register_routes(app: Flask) -> None:
                 if scheduled_for >= cutoff:
                     appointments.append(record)
 
-        total_clients = Client.query.count()
-        start_of_week = utcnow() - timedelta(days=7)
-        new_this_week = Client.query.filter(Client.created_at >= start_of_week).count()
-        outstanding_amount_cents = (
-            db.session.query(db.func.coalesce(db.func.sum(Invoice.amount_cents), 0))
-            .filter(~Invoice.status.in_(["Paid", "Cancelled"]))
-            .scalar()
-        )
-        open_ticket_total = (
-            db.session.query(db.func.count(SupportTicket.id))
-            .filter(SupportTicket.status.in_(["Open", "In Progress"]))
-            .scalar()
-        )
-        active_clients = Client.query.filter_by(status="Active").count()
-        onboarding_clients = (
-            Client.query.filter(Client.status.in_(["New", "In Review"])).count()
-        )
-        clients_without_password = (
-            Client.query.filter(Client.portal_password_hash.is_(None)).count()
-        )
-        pending_invoices_total = (
-            Invoice.query.filter(Invoice.status.in_(["Pending", "Overdue"]))
-            .count()
-        )
-        overdue_amount_cents = (
-            db.session.query(db.func.coalesce(db.func.sum(Invoice.amount_cents), 0))
-            .filter(Invoice.status == "Overdue")
-            .scalar()
-        )
-        equipment_total = Equipment.query.count()
-        network_new_this_week = (
-            Equipment.query.filter(Equipment.created_at >= start_of_week).count()
-        )
-        clients_with_equipment = (
-            db.session.query(db.func.count(db.func.distinct(Equipment.client_id))).scalar()
-            or 0
-        )
-        support_created_this_week = (
-            SupportTicket.query.filter(SupportTicket.created_at >= start_of_week).count()
-        )
-        support_updates = (
-            SupportTicket.query.filter(SupportTicket.updated_at >= start_of_week).count()
-        )
-        billing_invoices_created = (
-            Invoice.query.filter(Invoice.created_at >= start_of_week).count()
-        )
+        overview_metrics: dict[str, object] = {}
+        operations_snapshot: list[dict[str, object]] = []
+        recent_clients: list[SimpleNamespace] = []
+        recent_invoices: list[SimpleNamespace] = []
+        recent_equipment: list[SimpleNamespace] = []
+        recent_tickets: list[SimpleNamespace] = []
+        upcoming_appointments_list: list[SimpleNamespace] = []
+        total_clients = 0
+        new_this_week = 0
+        outstanding_amount_cents = 0
+        open_ticket_total = 0
+        active_clients = 0
+        onboarding_clients = 0
+        clients_without_password = 0
+        pending_invoices_total = 0
+        overdue_amount_cents = 0
+        equipment_total = 0
+        network_new_this_week = 0
+        clients_with_equipment = 0
+        support_created_this_week = 0
+        support_updates = 0
+        billing_invoices_created = 0
+        appointments_total = 0
+        pending_appointments = 0
+        upcoming_appointments_count = 0
+        reschedule_requests = 0
+        appointments_created_this_week = 0
+        recent_appointments: list[Appointment] = []
+
+        if active_section == "overview":
+            overview_metrics = get_dashboard_overview_snapshot(current_app)
+            total_clients = overview_metrics["total_clients"]
+            new_this_week = overview_metrics["new_this_week"]
+            outstanding_amount_cents = overview_metrics["outstanding_amount_cents"]
+            open_ticket_total = overview_metrics["open_ticket_total"]
+            active_clients = overview_metrics["active_clients"]
+            onboarding_clients = overview_metrics["onboarding_clients"]
+            clients_without_password = overview_metrics["clients_without_password"]
+            pending_invoices_total = overview_metrics["pending_invoices_total"]
+            overdue_amount_cents = overview_metrics["overdue_amount_cents"]
+            equipment_total = overview_metrics["equipment_total"]
+            network_new_this_week = overview_metrics["network_new_this_week"]
+            clients_with_equipment = overview_metrics["clients_with_equipment"]
+            support_created_this_week = overview_metrics["support_created_this_week"]
+            support_updates = overview_metrics["support_updates"]
+            billing_invoices_created = overview_metrics["billing_invoices_created"]
+            appointments_total = overview_metrics["appointments_total"]
+            pending_appointments = overview_metrics["pending_appointments"]
+            upcoming_appointments_count = overview_metrics["upcoming_appointments_count"]
+            reschedule_requests = overview_metrics["reschedule_requests"]
+            appointments_created_this_week = overview_metrics[
+                "appointments_created_this_week"
+            ]
+            operations_snapshot = overview_metrics["operations_snapshot"]
+            recent_clients = overview_metrics["recent_clients"]
+            recent_invoices = overview_metrics["recent_invoices"]
+            recent_equipment = overview_metrics["recent_equipment"]
+            recent_tickets = overview_metrics["recent_tickets"]
+            upcoming_appointments_list = overview_metrics["upcoming_appointments"]
+
         upcoming_statuses = ["Pending", "Confirmed", "Reschedule Requested"]
-        now = utcnow()
-        appointments_total = Appointment.query.count()
-        upcoming_appointments_count = (
-            Appointment.query.filter(
-                Appointment.status.in_(upcoming_statuses),
-                Appointment.scheduled_for >= now - timedelta(days=1),
-            ).count()
-        )
-        pending_appointments = (
-            Appointment.query.filter_by(status="Pending").count()
-        )
-        reschedule_requests = (
-            Appointment.query.filter_by(status="Reschedule Requested").count()
-        )
-        appointments_created_this_week = (
-            Appointment.query.filter(Appointment.created_at >= start_of_week).count()
-        )
-
-        upcoming_appointments_list = (
-            Appointment.query.filter(
-                Appointment.status.in_(upcoming_statuses)
+        if active_section in {"appointments", "field"} and not overview_metrics:
+            now = utcnow()
+            start_of_week = now - timedelta(days=7)
+            appointments_total = Appointment.query.count()
+            upcoming_appointments_count = (
+                Appointment.query.filter(
+                    Appointment.status.in_(upcoming_statuses),
+                    Appointment.scheduled_for >= now - timedelta(days=1),
+                ).count()
             )
-            .order_by(Appointment.scheduled_for.asc())
-            .limit(5)
-            .all()
-        )
-        recent_appointments = (
-            Appointment.query.order_by(Appointment.updated_at.desc()).limit(5).all()
-        )
-
-        recent_clients = (
-            Client.query.order_by(Client.created_at.desc()).limit(5).all()
-        )
-        recent_invoices = (
-            Invoice.query.order_by(Invoice.created_at.desc()).limit(5).all()
-        )
-        recent_equipment = (
-            Equipment.query.order_by(Equipment.created_at.desc()).limit(5).all()
-        )
-        recent_tickets = (
-            SupportTicket.query.order_by(SupportTicket.created_at.desc()).limit(5).all()
-        )
+            pending_appointments = (
+                Appointment.query.filter_by(status="Pending").count()
+            )
+            reschedule_requests = (
+                Appointment.query.filter_by(status="Reschedule Requested").count()
+            )
+            appointments_created_this_week = (
+                Appointment.query.filter(Appointment.created_at >= start_of_week).count()
+            )
+            recent_appointments = (
+                Appointment.query.order_by(Appointment.updated_at.desc()).limit(5).all()
+            )
         recent_install_photos: list[InstallPhoto] = []
         field_requirements: dict[int, list[str]] = {}
         field_photo_map: dict[int, dict[str, list[InstallPhoto]]] = {}
