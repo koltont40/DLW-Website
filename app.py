@@ -186,6 +186,34 @@ def allowed_ticket_attachment(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_TICKET_ATTACHMENT_EXTENSIONS
 
 
+def get_install_photo_requirements() -> list["InstallPhotoRequirement"]:
+    return (
+        InstallPhotoRequirement.query.order_by(
+            InstallPhotoRequirement.position.asc(),
+            InstallPhotoRequirement.id.asc(),
+        ).all()
+    )
+
+
+def get_required_install_photo_categories() -> list[str]:
+    requirements = get_install_photo_requirements()
+    return [requirement.label for requirement in requirements]
+
+
+def get_install_photo_category_choices() -> list[str]:
+    categories = list(get_required_install_photo_categories())
+    if OPTIONAL_INSTALL_PHOTO_CATEGORY not in categories:
+        categories.append(OPTIONAL_INSTALL_PHOTO_CATEGORY)
+    return categories
+
+
+def resequence_install_photo_requirements(
+    ordered_requirements: list["InstallPhotoRequirement"],
+) -> None:
+    for index, requirement in enumerate(ordered_requirements):
+        requirement.position = index
+
+
 def delete_client_verification_photo(app: Flask, client: "Client") -> None:
     if not client.verification_photo_filename:
         return
@@ -1051,7 +1079,7 @@ def is_truthy(value: str | None) -> bool:
 
 PORTAL_SESSION_KEY = "client_portal_id"
 TECH_SESSION_KEY = "technician_portal_id"
-REQUIRED_INSTALL_PHOTO_CATEGORIES = [
+DEFAULT_INSTALL_PHOTO_CATEGORIES = [
     "Arrival & Site Overview",
     "Mounting Location & Hardware",
     "Cable Path & Building Entry",
@@ -1061,9 +1089,7 @@ REQUIRED_INSTALL_PHOTO_CATEGORIES = [
     "Customer Premise Gear & Wi-Fi",
     "Speed Test & Service Validation",
 ]
-INSTALL_PHOTO_CATEGORY_CHOICES = REQUIRED_INSTALL_PHOTO_CATEGORIES + [
-    "Additional Detail"
-]
+OPTIONAL_INSTALL_PHOTO_CATEGORY = "Additional Detail"
 ALLOWED_INSTALL_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif"}
 ALLOWED_VERIFICATION_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".pdf"}
 ALLOWED_TICKET_ATTACHMENT_EXTENSIONS = {
@@ -1257,6 +1283,21 @@ class Technician(db.Model):
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Technician {self.email}>"
+
+
+class InstallPhotoRequirement(db.Model):
+    __tablename__ = "install_photo_requirements"
+
+    id = db.Column(db.Integer, primary_key=True)
+    label = db.Column(db.String(160), nullable=False, unique=True)
+    position = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<InstallPhotoRequirement {self.label}>"
 
 
 class InstallPhoto(db.Model):
@@ -1690,6 +1731,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_install_photo_requirements_seeded()
         ensure_team_member_bio_field()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
@@ -1714,6 +1756,7 @@ def init_db() -> None:
         ensure_snmp_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_install_photo_requirements_seeded()
         ensure_team_member_bio_field()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
@@ -2146,6 +2189,23 @@ def ensure_support_ticket_priority_field() -> None:
                 "UPDATE support_tickets SET priority = 'Normal' WHERE priority IS NULL"
             )
         )
+
+
+def ensure_install_photo_requirements_seeded() -> None:
+    inspector = inspect(db.engine)
+    try:
+        inspector.get_columns("install_photo_requirements")
+    except NoSuchTableError:
+        return
+
+    if InstallPhotoRequirement.query.count() > 0:
+        return
+
+    for index, label in enumerate(DEFAULT_INSTALL_PHOTO_CATEGORIES):
+        requirement = InstallPhotoRequirement(label=label, position=index)
+        db.session.add(requirement)
+
+    db.session.commit()
 
 
 def ensure_team_member_bio_field() -> None:
@@ -3802,6 +3862,9 @@ def register_routes(app: Flask) -> None:
         ]
         recent = sorted(recent, key=lambda ap: _scheduled_for(ap), reverse=True)[:5]
 
+        required_categories = get_required_install_photo_categories()
+        photo_category_choices = get_install_photo_category_choices()
+
         client_ids = {ap.client_id for ap in appointments}
         raw_photo_map: dict[int, dict[str, list[InstallPhoto]]] = defaultdict(
             lambda: defaultdict(list)
@@ -3832,7 +3895,7 @@ def register_routes(app: Flask) -> None:
         for ap in appointments:
             missing = [
                 category
-                for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
+                for category in required_categories
                 if not raw_photo_map[ap.client_id].get(category)
             ]
             if ap.client_id not in acknowledgements_map:
@@ -3853,8 +3916,8 @@ def register_routes(app: Flask) -> None:
             recent_appointments=recent,
             missing_requirements=missing_requirements,
             photo_map=photo_map,
-            photo_categories=INSTALL_PHOTO_CATEGORY_CHOICES,
-            required_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
+            photo_categories=photo_category_choices,
+            required_categories=required_categories,
             recent_uploads=recent_uploads,
             acknowledgements_map=acknowledgements_map,
         )
@@ -3866,6 +3929,8 @@ def register_routes(app: Flask) -> None:
             Appointment.query.filter_by(id=appointment_id, technician_id=technician.id)
             .first_or_404()
         )
+        required_categories = get_required_install_photo_categories()
+        photo_category_choices = get_install_photo_category_choices()
         photos = (
             InstallPhoto.query.filter_by(client_id=appointment.client_id)
             .order_by(InstallPhoto.uploaded_at.desc())
@@ -3877,7 +3942,7 @@ def register_routes(app: Flask) -> None:
 
         missing_categories = [
             category
-            for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
+            for category in required_categories
             if not photos_by_category.get(category)
         ]
 
@@ -3905,8 +3970,8 @@ def register_routes(app: Flask) -> None:
             client=appointment.client,
             photos_by_category=dict(photos_by_category),
             missing_categories=missing_categories,
-            photo_categories=INSTALL_PHOTO_CATEGORY_CHOICES,
-            required_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
+            photo_categories=photo_category_choices,
+            required_categories=required_categories,
             acknowledgement=acknowledgement,
             legal_documents=legal_documents,
         )
@@ -3940,8 +4005,17 @@ def register_routes(app: Flask) -> None:
             flash("You do not have access to that customer record.", "danger")
             return redirect(url_for("tech_dashboard"))
 
-        category = request.form.get("category", "").strip() or REQUIRED_INSTALL_PHOTO_CATEGORIES[0]
-        if category not in INSTALL_PHOTO_CATEGORY_CHOICES:
+        required_categories = get_required_install_photo_categories()
+        photo_category_choices = get_install_photo_category_choices()
+        category_default = (
+            required_categories[0]
+            if required_categories
+            else photo_category_choices[0]
+            if photo_category_choices
+            else OPTIONAL_INSTALL_PHOTO_CATEGORY
+        )
+        category = request.form.get("category", "").strip() or category_default
+        if category not in photo_category_choices:
             flash("Choose a supported photo category.", "danger")
             return redirect(url_for("tech_appointment_detail", appointment_id=appointment.id))
 
@@ -4237,6 +4311,9 @@ def register_routes(app: Flask) -> None:
         selected_client_missing_categories: list[str] = []
         selected_client_service_groups: list[tuple[str, str]] = []
         selected_client_portal_enabled = False
+        required_photo_categories = get_required_install_photo_categories()
+        install_photo_categories = get_install_photo_category_choices()
+        install_photo_requirements: list[InstallPhotoRequirement] = []
         tls_config: TLSConfig | None = None
         tls_certificate_ready = False
         tls_challenge_folder = current_app.config.get("TLS_CHALLENGE_FOLDER")
@@ -4309,7 +4386,7 @@ def register_routes(app: Flask) -> None:
                     .all()
                 )
                 selected_client_photo_map = {
-                    category: [] for category in INSTALL_PHOTO_CATEGORY_CHOICES
+                    category: [] for category in install_photo_categories
                 }
                 client_photos = (
                     InstallPhoto.query.filter_by(client_id=selected_client.id)
@@ -4320,7 +4397,7 @@ def register_routes(app: Flask) -> None:
                     selected_client_photo_map.setdefault(photo.category, []).append(photo)
                 selected_client_missing_categories = [
                     category
-                    for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
+                    for category in required_photo_categories
                     if not selected_client_photo_map.get(category)
                 ]
                 if selected_client.residential_plan:
@@ -4451,6 +4528,7 @@ def register_routes(app: Flask) -> None:
         field_requirements: dict[int, list[str]] = {}
         field_photo_map: dict[int, dict[str, list[InstallPhoto]]] = {}
         if active_section == "field":
+            install_photo_requirements = get_install_photo_requirements()
             recent_install_photos = (
                 InstallPhoto.query.order_by(InstallPhoto.uploaded_at.desc())
                 .limit(12)
@@ -4471,7 +4549,7 @@ def register_routes(app: Flask) -> None:
                 category_map = photo_lookup.get(ap.client_id, {})
                 missing = [
                     category
-                    for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
+                    for category in required_photo_categories
                     if not category_map.get(category)
                 ]
                 field_requirements[ap.id] = missing
@@ -4615,7 +4693,9 @@ def register_routes(app: Flask) -> None:
             service_plans_by_category=ordered_plan_categories,
             plan_field_config=plan_field_config,
             recent_install_photos=recent_install_photos,
-            install_photo_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
+            install_photo_categories=install_photo_categories,
+            required_photo_categories=required_photo_categories,
+            install_photo_requirements=install_photo_requirements,
             field_requirements=field_requirements,
             field_photo_map=field_photo_map,
             tls_config=tls_config,
@@ -4636,6 +4716,9 @@ def register_routes(app: Flask) -> None:
     @login_required
     def admin_client_account(client_id: int):
         client = Client.query.get_or_404(client_id)
+
+        required_photo_categories = get_required_install_photo_categories()
+        install_photo_categories = get_install_photo_category_choices()
 
         invoices = (
             Invoice.query.filter_by(client_id=client.id)
@@ -4668,7 +4751,7 @@ def register_routes(app: Flask) -> None:
                 upcoming_appointments.append(appointment)
 
         photo_map: dict[str, list[InstallPhoto]] = {
-            category: [] for category in INSTALL_PHOTO_CATEGORY_CHOICES
+            category: [] for category in install_photo_categories
         }
         client_photos = (
             InstallPhoto.query.filter_by(client_id=client.id)
@@ -4680,7 +4763,7 @@ def register_routes(app: Flask) -> None:
 
         missing_photo_categories = [
             category
-            for category in REQUIRED_INSTALL_PHOTO_CATEGORIES
+            for category in required_photo_categories
             if not photo_map.get(category)
         ]
 
@@ -4782,8 +4865,8 @@ def register_routes(app: Flask) -> None:
             open_ticket_count=open_ticket_count,
             google_maps_url=google_maps_url,
             apple_maps_url=apple_maps_url,
-            required_photo_categories=REQUIRED_INSTALL_PHOTO_CATEGORIES,
-            install_photo_categories=INSTALL_PHOTO_CATEGORY_CHOICES,
+            required_photo_categories=required_photo_categories,
+            install_photo_categories=install_photo_categories,
             ticket_priority_options=TICKET_PRIORITY_OPTIONS,
             upcoming_appointments=upcoming_appointments,
             plan_field_config=plan_field_config,
@@ -5925,6 +6008,101 @@ def register_routes(app: Flask) -> None:
             return _redirect_back_to_dashboard("field")
 
         flash("Technician account created.", "success")
+        return _redirect_back_to_dashboard("field")
+
+    @app.post("/install-photo-requirements")
+    @login_required
+    def create_install_photo_requirement():
+        label = request.form.get("label", "").strip()
+        position_raw = request.form.get("position", "").strip()
+
+        if not label:
+            flash("Provide a name for the photo requirement.", "danger")
+            return _redirect_back_to_dashboard("field")
+
+        requirements = get_install_photo_requirements()
+        desired_index = len(requirements)
+        if position_raw:
+            try:
+                desired_index = int(position_raw)
+            except ValueError:
+                flash("Use a whole number for the position.", "danger")
+                return _redirect_back_to_dashboard("field")
+            desired_index = max(0, min(desired_index, len(requirements)))
+
+        new_requirement = InstallPhotoRequirement(label=label)
+        requirements.insert(desired_index, new_requirement)
+        resequence_install_photo_requirements(requirements)
+
+        db.session.add(new_requirement)
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            flash("A requirement with that name already exists.", "danger")
+            return _redirect_back_to_dashboard("field")
+
+        db.session.commit()
+        flash("Install photo requirement added.", "success")
+        return _redirect_back_to_dashboard("field")
+
+    @app.post("/install-photo-requirements/<int:requirement_id>/update")
+    @login_required
+    def update_install_photo_requirement(requirement_id: int):
+        requirement = InstallPhotoRequirement.query.get_or_404(requirement_id)
+        label = request.form.get("label", "").strip()
+        position_raw = request.form.get("position", "").strip()
+
+        if not label:
+            flash("Provide a name for the photo requirement.", "danger")
+            return _redirect_back_to_dashboard("field")
+
+        requirements = get_install_photo_requirements()
+        try:
+            current_index = next(
+                index for index, item in enumerate(requirements) if item.id == requirement.id
+            )
+        except StopIteration:  # pragma: no cover - defensive
+            requirements.append(requirement)
+            current_index = len(requirements) - 1
+
+        requirements.pop(current_index)
+        new_index = current_index
+        if position_raw:
+            try:
+                new_index = int(position_raw)
+            except ValueError:
+                flash("Use a whole number for the position.", "danger")
+                return _redirect_back_to_dashboard("field")
+        max_index = len(requirements)
+        new_index = max(0, min(new_index, max_index))
+        requirements.insert(new_index, requirement)
+        requirement.label = label
+        resequence_install_photo_requirements(requirements)
+
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            flash("A requirement with that name already exists.", "danger")
+            return _redirect_back_to_dashboard("field")
+
+        db.session.commit()
+        flash("Install photo requirement updated.", "success")
+        return _redirect_back_to_dashboard("field")
+
+    @app.post("/install-photo-requirements/<int:requirement_id>/delete")
+    @login_required
+    def delete_install_photo_requirement(requirement_id: int):
+        requirement = InstallPhotoRequirement.query.get_or_404(requirement_id)
+        db.session.delete(requirement)
+        db.session.flush()
+
+        remaining = get_install_photo_requirements()
+        resequence_install_photo_requirements(remaining)
+        db.session.commit()
+
+        flash("Install photo requirement removed.", "info")
         return _redirect_back_to_dashboard("field")
 
     @app.post("/technicians/<int:technician_id>/update")

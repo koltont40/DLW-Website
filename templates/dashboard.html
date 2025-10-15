@@ -196,6 +196,75 @@
           {% endif %}
         </article>
       </div>
+      <div class="field-checklist-manager">
+        <div>
+          <h3>Install photo checklist</h3>
+          <p class="subtle">
+            Choose the categories technicians must capture before signing off on an install. Adjust the order to match your
+            workflow.
+          </p>
+        </div>
+        <form class="stacked-form compact" method="post" action="{{ url_for('create_install_photo_requirement') }}">
+          <div class="form-row">
+            <label>
+              Category name
+              <input type="text" name="label" placeholder="Grounding rod" required />
+            </label>
+            <label>
+              Position
+              <input
+                type="number"
+                name="position"
+                min="0"
+                placeholder="{{ install_photo_requirements|length }}"
+              />
+            </label>
+          </div>
+          <div class="record-actions">
+            <button class="button small primary" type="submit">Add requirement</button>
+          </div>
+        </form>
+        {% if install_photo_requirements %}
+        <div class="requirement-list">
+          {% for requirement in install_photo_requirements %}
+          <div class="requirement-item">
+            <form
+              id="update-requirement-{{ requirement.id }}"
+              class="stacked-form compact"
+              method="post"
+              action="{{ url_for('update_install_photo_requirement', requirement_id=requirement.id) }}"
+            >
+              <div class="form-row">
+                <label>
+                  Category name
+                  <input type="text" name="label" value="{{ requirement.label }}" required />
+                </label>
+                <label>
+                  Position
+                  <input type="number" name="position" min="0" value="{{ loop.index0 }}" />
+                </label>
+              </div>
+            </form>
+            <form
+              id="delete-requirement-{{ requirement.id }}"
+              method="post"
+              action="{{ url_for('delete_install_photo_requirement', requirement_id=requirement.id) }}"
+            ></form>
+            <div class="record-actions">
+              <button class="button small primary" type="submit" form="update-requirement-{{ requirement.id }}">
+                Save
+              </button>
+              <button class="button small secondary" type="submit" form="delete-requirement-{{ requirement.id }}">
+                Remove
+              </button>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="subtle">No required photos configured yet. Add categories above to build your checklist.</p>
+        {% endif %}
+      </div>
     </section>
     {% elif active_section == 'customers' %}
     {% if selected_client %}

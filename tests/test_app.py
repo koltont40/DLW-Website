@@ -18,6 +18,7 @@ from app import (
     Appointment,
     InstallPhoto,
     InstallAcknowledgement,
+    InstallPhotoRequirement,
     ServicePlan,
     SNMPConfig,
     Technician,
@@ -33,9 +34,10 @@ from app import (
     TeamMember,
     TrustedBusiness,
     StripeConfig,
-    REQUIRED_INSTALL_PHOTO_CATEGORIES,
     create_app,
     db,
+    get_install_photo_category_choices,
+    get_required_install_photo_categories,
     utcnow,
 )
 from werkzeug.security import generate_password_hash
@@ -265,10 +267,12 @@ def create_detailed_customer_record(app):
         stored_filename = f"client_{customer.id}_detail.jpg"
         (install_folder / stored_filename).write_bytes(b"photo-bytes")
 
+        category_choices = get_install_photo_category_choices()
+        photo_category = category_choices[0] if category_choices else "Additional Detail"
         photo = InstallPhoto(
             client_id=customer.id,
             technician_id=technician.id,
-            category=REQUIRED_INSTALL_PHOTO_CATEGORIES[0],
+            category=photo_category,
             original_filename="detail.jpg",
             stored_filename=stored_filename,
         )
@@ -832,8 +836,12 @@ def test_customer_focus_view_surfaces_account_summary(app, client):
     assert b"Subscriber Antenna" in response.data
     assert b"Initial Setup" in response.data
     assert b"On-site Activation" in response.data
-    assert escape(REQUIRED_INSTALL_PHOTO_CATEGORIES[0]).encode() in response.data
-    assert escape(REQUIRED_INSTALL_PHOTO_CATEGORIES[1]).encode() in response.data
+    with app.app_context():
+        categories = get_required_install_photo_categories()
+    assert categories
+    assert escape(categories[0]).encode() in response.data
+    if len(categories) > 1:
+        assert escape(categories[1]).encode() in response.data
 
 
 def test_customer_directory_links_to_admin_account_view(app, client):
@@ -850,6 +858,51 @@ def test_customer_directory_links_to_admin_account_view(app, client):
     assert response.status_code == 200
     assert f"/dashboard/customers/{customer_id}".encode() in response.data
     assert b"Focus Customer" in response.data
+
+
+def test_admin_manages_install_photo_requirements(app, client):
+    login_admin(client)
+
+    response = client.post(
+        "/install-photo-requirements",
+        data={"label": "Roof Anchor Detail", "position": "0"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        requirement = InstallPhotoRequirement.query.filter_by(
+            label="Roof Anchor Detail"
+        ).first()
+        assert requirement is not None
+        assert requirement.position == 0
+        total = InstallPhotoRequirement.query.count()
+
+    response = client.post(
+        f"/install-photo-requirements/{requirement.id}/update",
+        data={"label": "Roof Anchor Photo", "position": "5"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        updated = InstallPhotoRequirement.query.get(requirement.id)
+        assert updated is not None
+        assert updated.label == "Roof Anchor Photo"
+        expected_position = min(5, total - 1)
+        assert updated.position == expected_position
+
+    response = client.post(
+        f"/install-photo-requirements/{requirement.id}/delete",
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+
+    with app.app_context():
+        assert (
+            InstallPhotoRequirement.query.filter_by(id=requirement.id).first()
+            is None
+        )
 
 
 def test_admin_customer_account_view_shows_details(app, client):
@@ -2080,6 +2133,8 @@ def test_technician_uploads_install_photo(app, client):
         db.session.commit()
         appointment_id = appointment.id
         client_id = customer.id
+        category_choices = get_install_photo_category_choices()
+        first_category = category_choices[0] if category_choices else "Additional Detail"
 
     login_response = client.post(
         "/tech/login",
@@ -2093,7 +2148,7 @@ def test_technician_uploads_install_photo(app, client):
 
     upload_data = {
         "appointment_id": str(appointment_id),
-        "category": REQUIRED_INSTALL_PHOTO_CATEGORIES[0],
+        "category": first_category,
         "notes": "Mounted to west gable.",
         "next": f"/tech/appointments/{appointment_id}",
         "photo": (io.BytesIO(b"fake image bytes"), "install.jpg"),
