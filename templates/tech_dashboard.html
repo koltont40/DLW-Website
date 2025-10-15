@@ -100,21 +100,21 @@
         <p class="subtle">Set the days and hours you can take on-site appointments.</p>
       </div>
     </header>
-    <form class="tech-schedule-form" method="post" action="{{ url_for('create_technician_schedule') }}">
-      <label class="form-field">
-        <span>Date</span>
+    <form class="card form-card tech-schedule-form" method="post" action="{{ url_for('create_technician_schedule') }}">
+      <label>
+        Date
         <input type="date" name="date" required />
       </label>
-      <label class="form-field">
-        <span>Start time</span>
+      <label>
+        Start time
         <input type="time" name="start_time" required />
       </label>
-      <label class="form-field">
-        <span>End time</span>
+      <label>
+        End time
         <input type="time" name="end_time" required />
       </label>
-      <label class="form-field form-field-note">
-        <span>Notes (optional)</span>
+      <label class="note-field">
+        Notes (optional)
         <input type="text" name="note" placeholder="On-call, warehouse, etc." />
       </label>
       <div class="schedule-actions">
@@ -132,10 +132,25 @@
               <strong>{{ block.start_at.strftime('%b %d, %Y') }}</strong>
               <span>{{ block.start_at.strftime('%I:%M %p') }} – {{ block.end_at.strftime('%I:%M %p') }}</span>
               {% if block.note %}<span class="subtle">{{ block.note }}</span>{% endif %}
+              <span
+                class="schedule-status {% if block.status == 'cancel_pending' %}status-pending{% else %}status-approved{% endif %}"
+              >
+                {% if block.status == 'cancel_pending' %}
+                Cancellation pending manager approval
+                {% else %}
+                Approved shift
+                {% endif %}
+              </span>
             </div>
-            <form method="post" action="{{ url_for('delete_technician_schedule', block_id=block.id) }}">
-              <button class="button link" type="submit">Remove</button>
-            </form>
+            <div class="schedule-actions-inline">
+              {% if block.status == 'cancel_pending' %}
+              <span class="subtle">Awaiting manager review.</span>
+              {% else %}
+              <form method="post" action="{{ url_for('delete_technician_schedule', block_id=block.id) }}">
+                <button class="button link" type="submit">Request cancellation</button>
+              </form>
+              {% endif %}
+            </div>
           </li>
           {% endfor %}
         </ul>
@@ -159,6 +174,44 @@
         </ul>
         {% else %}
         <p class="subtle">Recent shifts will appear here after they conclude.</p>
+        {% endif %}
+      </div>
+      <div class="tech-schedule-column">
+        <h3>Requests awaiting approval</h3>
+        {% if pending_schedule_requests %}
+        <ul class="schedule-list">
+          {% for block in pending_schedule_requests %}
+          <li class="schedule-item pending">
+            <div class="schedule-meta">
+              <strong>{{ block.start_at.strftime('%b %d, %Y') }}</strong>
+              <span>{{ block.start_at.strftime('%I:%M %p') }} – {{ block.end_at.strftime('%I:%M %p') }}</span>
+              <span class="schedule-status status-pending">Waiting for manager approval</span>
+              {% if block.note %}<span class="subtle">{{ block.note }}</span>{% endif %}
+            </div>
+            <form method="post" action="{{ url_for('delete_technician_schedule', block_id=block.id) }}">
+              <button class="button link" type="submit">Withdraw</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="subtle">No new requests are waiting for review.</p>
+        {% endif %}
+        {% if rejected_schedule_requests %}
+        <div class="schedule-feedback">
+          <h4>Manager responses</h4>
+          <ul class="schedule-feedback-list">
+            {% for block in rejected_schedule_requests %}
+            <li>
+              <strong>{{ block.start_at.strftime('%b %d, %Y') }}</strong>
+              <span>Request declined{% if block.review_note %}: {{ block.review_note }}{% endif %}</span>
+              <form method="post" action="{{ url_for('delete_technician_schedule', block_id=block.id) }}">
+                <button class="button link" type="submit">Dismiss</button>
+              </form>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
         {% endif %}
       </div>
     </div>

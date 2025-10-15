@@ -1401,7 +1401,8 @@ def test_technician_manages_schedule_and_views_jobs(app, client):
         follow_redirects=True,
     )
     assert schedule_response.status_code == 200
-    assert b"Schedule saved" in schedule_response.data
+    assert b"Shift submitted for manager approval" in schedule_response.data
+    assert b"Requests awaiting approval" in schedule_response.data
     assert b"Warehouse coverage" in schedule_response.data
 
     with app.app_context():
@@ -1412,17 +1413,69 @@ def test_technician_manages_schedule_and_views_jobs(app, client):
         block = schedule_blocks[0]
         assert block.end_at > block.start_at
         assert block.note == "Warehouse coverage"
+        assert block.status == "pending"
         block_id = block.id
 
-    delete_response = client.post(
+    client.get("/tech/logout", follow_redirects=True)
+    login_admin(client)
+
+    field_page = client.get("/dashboard?section=field")
+    assert field_page.status_code == 200
+    assert b"Technician schedule approvals" in field_page.data
+    assert b"New availability" in field_page.data
+
+    approve_response = client.post(
+        f"/dashboard/field/schedule/{block_id}/approve",
+        data={"next": "/dashboard?section=field", "note": "Approved"},
+        follow_redirects=True,
+    )
+    assert approve_response.status_code == 200
+    assert b"shift was removed" not in approve_response.data
+    assert b"shift approved" in approve_response.data or b"Shift on" in approve_response.data
+
+    with app.app_context():
+        block = TechnicianSchedule.query.get(block_id)
+        assert block is not None
+        assert block.status == "approved"
+        assert block.review_note == "Approved"
+
+    client.get("/logout", follow_redirects=True)
+    login_response = login_technician(
+        client,
+        email="schedule-tech@example.com",
+        password="TechSchedule123!",
+    )
+    assert login_response.status_code == 200
+    assert b"Approved shift" in login_response.data
+    assert b"Request cancellation" in login_response.data
+
+    cancel_request = client.post(
         f"/tech/schedule/{block_id}/delete",
         follow_redirects=True,
     )
-    assert delete_response.status_code == 200
-    assert b"Schedule entry removed" in delete_response.data
+    assert cancel_request.status_code == 200
+    assert b"Cancellation request sent" in cancel_request.data
 
     with app.app_context():
-        assert TechnicianSchedule.query.filter_by(id=block_id).first() is None
+        block = TechnicianSchedule.query.get(block_id)
+        assert block.status == "cancel_pending"
+        assert block.cancel_requested_at is not None
+
+    client.get("/tech/logout", follow_redirects=True)
+    login_admin(client)
+
+    cancel_approve = client.post(
+        f"/dashboard/field/schedule/{block_id}/approve",
+        data={"next": "/dashboard?section=field"},
+        follow_redirects=True,
+    )
+    assert cancel_approve.status_code == 200
+    assert b"Cancellation approved" in cancel_approve.data
+
+    with app.app_context():
+        block = TechnicianSchedule.query.get(block_id)
+        assert block is not None
+        assert block.status == "cancelled"
 
 
 def test_admin_customer_account_view_requires_login(client):
@@ -2385,6 +2438,7 @@ def test_technician_appointment_page_shows_availability_calendar(app, client):
             start_at=appointment_time.replace(hour=9),
             end_at=appointment_time.replace(hour=12),
             note="Morning availability",
+            status="approved",
         )
         db.session.add_all([appointment, block])
         db.session.commit()

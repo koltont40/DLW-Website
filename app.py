@@ -1299,17 +1299,23 @@ class TechnicianSchedule(db.Model):
     start_at = db.Column(db.DateTime(timezone=True), nullable=False)
     end_at = db.Column(db.DateTime(timezone=True), nullable=False)
     note = db.Column(db.String(255))
+    status = db.Column(db.String(20), nullable=False, default="pending")
+    review_note = db.Column(db.Text)
+    reviewed_at = db.Column(db.DateTime(timezone=True))
+    reviewed_by_id = db.Column(db.Integer, db.ForeignKey("admin_users.id"))
+    cancel_requested_at = db.Column(db.DateTime(timezone=True))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = db.Column(
         db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
     )
 
     technician = db.relationship("Technician", back_populates="schedule_blocks")
+    reviewed_by = db.relationship("AdminUser")
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return (
             f"<TechnicianSchedule technician={self.technician_id} "
-            f"start={self.start_at:%Y-%m-%d %H:%M}>"
+            f"start={self.start_at:%Y-%m-%d %H:%M} status={self.status}>"
         )
 
 
@@ -1760,6 +1766,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
         ensure_install_photo_requirements_seeded()
+        ensure_technician_schedule_review_fields()
         ensure_team_member_bio_field()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
@@ -1785,6 +1792,7 @@ def init_db() -> None:
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
         ensure_install_photo_requirements_seeded()
+        ensure_technician_schedule_review_fields()
         ensure_team_member_bio_field()
         ensure_site_theme_background_fields()
         ensure_down_detector_configuration()
@@ -2234,6 +2242,44 @@ def ensure_install_photo_requirements_seeded() -> None:
         db.session.add(requirement)
 
     db.session.commit()
+
+
+def ensure_technician_schedule_review_fields() -> None:
+    inspector = inspect(db.engine)
+    try:
+        columns = {column["name"] for column in inspector.get_columns("technician_schedule")}
+    except NoSuchTableError:
+        return
+
+    statements: list[str] = []
+    if "status" not in columns:
+        statements.append(
+            "ALTER TABLE technician_schedule ADD COLUMN status VARCHAR(20) DEFAULT 'pending'"
+        )
+    if "review_note" not in columns:
+        statements.append("ALTER TABLE technician_schedule ADD COLUMN review_note TEXT")
+    if "reviewed_at" not in columns:
+        statements.append("ALTER TABLE technician_schedule ADD COLUMN reviewed_at TIMESTAMP")
+    if "reviewed_by_id" not in columns:
+        statements.append("ALTER TABLE technician_schedule ADD COLUMN reviewed_by_id INTEGER")
+    if "cancel_requested_at" not in columns:
+        statements.append(
+            "ALTER TABLE technician_schedule ADD COLUMN cancel_requested_at TIMESTAMP"
+        )
+
+    if statements:
+        with db.engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+    if "status" not in columns:
+        db.session.execute(
+            text(
+                "UPDATE technician_schedule SET status = 'approved' "
+                "WHERE status IS NULL"
+            )
+        )
+        db.session.commit()
 
 
 def ensure_team_member_bio_field() -> None:
@@ -3920,9 +3966,28 @@ def register_routes(app: Flask) -> None:
         def _format_time(dt: datetime) -> str:
             return dt.strftime("%I:%M %p").lstrip("0")
 
-        schedule_blocks = (
-            TechnicianSchedule.query.filter_by(technician_id=technician.id)
+        active_schedule_blocks = (
+            TechnicianSchedule.query.filter(
+                TechnicianSchedule.technician_id == technician.id,
+                TechnicianSchedule.status.in_(["approved", "cancel_pending"]),
+            )
             .order_by(TechnicianSchedule.start_at.asc())
+            .all()
+        )
+        pending_schedule_requests = (
+            TechnicianSchedule.query.filter(
+                TechnicianSchedule.technician_id == technician.id,
+                TechnicianSchedule.status == "pending",
+            )
+            .order_by(TechnicianSchedule.start_at.asc())
+            .all()
+        )
+        rejected_schedule_requests = (
+            TechnicianSchedule.query.filter(
+                TechnicianSchedule.technician_id == technician.id,
+                TechnicianSchedule.status == "rejected",
+            )
+            .order_by(TechnicianSchedule.updated_at.desc())
             .all()
         )
         grace_cutoff = now - timedelta(hours=1)
@@ -3936,7 +4001,7 @@ def register_routes(app: Flask) -> None:
 
         upcoming_schedule: list[TechnicianSchedule] = []
         past_schedule_blocks: list[TechnicianSchedule] = []
-        for block in schedule_blocks:
+        for block in active_schedule_blocks:
             block_end = _with_utc(block.end_at)
             if block_end >= grace_cutoff:
                 upcoming_schedule.append(block)
@@ -3953,7 +4018,7 @@ def register_routes(app: Flask) -> None:
         calendar_reference: datetime | None = None
         for candidate in [
             *(appointment.scheduled_for for appointment in appointments),
-            *(block.start_at for block in schedule_blocks),
+            *(block.start_at for block in active_schedule_blocks),
         ]:
             if candidate is not None:
                 calendar_reference = candidate
@@ -3975,7 +4040,7 @@ def register_routes(app: Flask) -> None:
 
         relevant_schedule = [
             block
-            for block in schedule_blocks
+            for block in active_schedule_blocks
             if _coerce_utc(block.end_at) >= calendar_start
             and _coerce_utc(block.start_at) < calendar_end
         ]
@@ -4128,6 +4193,8 @@ def register_routes(app: Flask) -> None:
             acknowledgements_map=acknowledgements_map,
             upcoming_schedule=upcoming_schedule,
             past_schedule=past_schedule,
+            pending_schedule_requests=pending_schedule_requests,
+            rejected_schedule_requests=rejected_schedule_requests,
             dashboard_calendar_weeks=dashboard_calendar_weeks,
             calendar_range_label=calendar_range_label,
         )
@@ -4164,11 +4231,19 @@ def register_routes(app: Flask) -> None:
             start_at=start_at,
             end_at=end_at,
             note=note,
+            status="pending",
+            review_note=None,
+            reviewed_at=None,
+            reviewed_by_id=None,
+            cancel_requested_at=None,
         )
         db.session.add(schedule_block)
         db.session.commit()
 
-        flash("Schedule saved to your calendar.", "success")
+        flash(
+            "Shift submitted for manager approval. You'll see it on your calendar once approved.",
+            "info",
+        )
         return redirect(url_for("tech_dashboard"))
 
     @app.post("/tech/schedule/<int:block_id>/delete")
@@ -4185,10 +4260,36 @@ def register_routes(app: Flask) -> None:
             flash("Schedule entry not found.", "danger")
             return redirect(url_for("tech_dashboard"))
 
-        db.session.delete(schedule_block)
+        if schedule_block.status == "pending":
+            db.session.delete(schedule_block)
+            db.session.commit()
+            flash("Pending schedule request withdrawn.", "info")
+            return redirect(url_for("tech_dashboard"))
+
+        if schedule_block.status == "rejected":
+            db.session.delete(schedule_block)
+            db.session.commit()
+            flash("Rejected schedule request removed.", "info")
+            return redirect(url_for("tech_dashboard"))
+
+        if schedule_block.status == "cancel_pending":
+            flash("Cancellation already awaiting manager approval.", "warning")
+            return redirect(url_for("tech_dashboard"))
+
+        if schedule_block.status == "cancelled":
+            db.session.delete(schedule_block)
+            db.session.commit()
+            flash("Cancelled schedule entry cleared.", "info")
+            return redirect(url_for("tech_dashboard"))
+
+        schedule_block.status = "cancel_pending"
+        schedule_block.cancel_requested_at = utcnow()
+        schedule_block.review_note = None
+        schedule_block.reviewed_at = None
+        schedule_block.reviewed_by_id = None
         db.session.commit()
 
-        flash("Schedule entry removed.", "info")
+        flash("Cancellation request sent for manager approval.", "info")
         return redirect(url_for("tech_dashboard"))
 
     @app.route("/tech/appointments/<int:appointment_id>")
@@ -4249,7 +4350,10 @@ def register_routes(app: Flask) -> None:
         calendar_end = calendar_start + timedelta(days=calendar_days)
 
         schedule_blocks = (
-            TechnicianSchedule.query.filter_by(technician_id=technician.id)
+            TechnicianSchedule.query.filter(
+                TechnicianSchedule.technician_id == technician.id,
+                TechnicianSchedule.status.in_(["approved", "cancel_pending"]),
+            )
             .order_by(TechnicianSchedule.start_at.asc())
             .all()
         )
@@ -4694,6 +4798,8 @@ def register_routes(app: Flask) -> None:
         team_members: list[TeamMember] = []
         trusted_businesses: list[TrustedBusiness] = []
         stripe_config: StripeConfig | None = None
+        pending_schedule_requests: list[TechnicianSchedule] = []
+        recent_schedule_decisions: list[TechnicianSchedule] = []
         if active_section in {
             "customers",
             "billing",
@@ -4925,6 +5031,25 @@ def register_routes(app: Flask) -> None:
                 ]
                 field_requirements[ap.id] = missing
 
+            pending_schedule_requests = (
+                TechnicianSchedule.query.filter(
+                    TechnicianSchedule.status.in_("pending cancel_pending".split())
+                )
+                .order_by(TechnicianSchedule.start_at.asc())
+                .all()
+            )
+            recent_schedule_decisions = (
+                TechnicianSchedule.query.filter(
+                    TechnicianSchedule.reviewed_at.isnot(None),
+                    TechnicianSchedule.status.in_(
+                        ("approved", "rejected", "cancelled")
+                    ),
+                )
+                .order_by(TechnicianSchedule.reviewed_at.desc())
+                .limit(10)
+                .all()
+            )
+
         tls_config = TLSConfig.query.first()
         if tls_config:
             tls_certificate_ready = tls_config.certificate_ready()
@@ -5069,6 +5194,8 @@ def register_routes(app: Flask) -> None:
             install_photo_requirements=install_photo_requirements,
             field_requirements=field_requirements,
             field_photo_map=field_photo_map,
+            pending_schedule_requests=pending_schedule_requests,
+            recent_schedule_decisions=recent_schedule_decisions,
             tls_config=tls_config,
             tls_certificate_ready=tls_certificate_ready,
             tls_challenge_folder=tls_challenge_folder,
@@ -5416,6 +5543,87 @@ def register_routes(app: Flask) -> None:
         if focus_value:
             params["focus"] = focus_value
         return redirect(url_for("dashboard", **params))
+
+    @app.post("/dashboard/field/schedule/<int:block_id>/approve")
+    @login_required
+    def approve_technician_schedule(block_id: int):
+        schedule_block = TechnicianSchedule.query.get_or_404(block_id)
+        note = request.form.get("note", "").strip() or None
+        admin_id = session.get("admin_user_id")
+        status = schedule_block.status
+        technician_name = (
+            schedule_block.technician.name if schedule_block.technician else "technician"
+        )
+
+        if status in {"pending", "rejected"}:
+            schedule_block.status = "approved"
+            schedule_block.review_note = note
+            schedule_block.reviewed_at = utcnow()
+            schedule_block.reviewed_by_id = admin_id
+            schedule_block.cancel_requested_at = None
+            db.session.commit()
+            flash(
+                f"Shift on {schedule_block.start_at.strftime('%b %d, %Y')} for "
+                f"{technician_name} approved.",
+                "success",
+            )
+            return _redirect_back_to_dashboard("field")
+
+        if status == "cancel_pending":
+            schedule_block.status = "cancelled"
+            schedule_block.review_note = note
+            schedule_block.reviewed_at = utcnow()
+            schedule_block.reviewed_by_id = admin_id
+            schedule_block.cancel_requested_at = None
+            db.session.commit()
+            flash(
+                f"Cancellation approved. {technician_name}'s shift was removed.",
+                "success",
+            )
+            return _redirect_back_to_dashboard("field")
+
+        flash("Schedule change already processed.", "info")
+        return _redirect_back_to_dashboard("field")
+
+    @app.post("/dashboard/field/schedule/<int:block_id>/reject")
+    @login_required
+    def reject_technician_schedule(block_id: int):
+        schedule_block = TechnicianSchedule.query.get_or_404(block_id)
+        note = request.form.get("note", "").strip() or None
+        admin_id = session.get("admin_user_id")
+        status = schedule_block.status
+        technician_name = (
+            schedule_block.technician.name if schedule_block.technician else "technician"
+        )
+
+        if status == "pending":
+            schedule_block.status = "rejected"
+            schedule_block.review_note = note
+            schedule_block.reviewed_at = utcnow()
+            schedule_block.reviewed_by_id = admin_id
+            schedule_block.cancel_requested_at = None
+            db.session.commit()
+            flash(
+                f"Schedule request for {technician_name} declined.",
+                "info",
+            )
+            return _redirect_back_to_dashboard("field")
+
+        if status == "cancel_pending":
+            schedule_block.status = "approved"
+            schedule_block.review_note = note
+            schedule_block.reviewed_at = utcnow()
+            schedule_block.reviewed_by_id = admin_id
+            schedule_block.cancel_requested_at = None
+            db.session.commit()
+            flash(
+                f"Cancellation denied. {technician_name}'s shift remains scheduled.",
+                "warning",
+            )
+            return _redirect_back_to_dashboard("field")
+
+        flash("Schedule change already resolved.", "info")
+        return _redirect_back_to_dashboard("field")
 
     @app.post("/clients")
     @login_required

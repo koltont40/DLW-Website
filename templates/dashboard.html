@@ -1200,6 +1200,116 @@
         </div>
       </div>
     </section>
+    <section class="card" id="field-schedule-approvals">
+      <header class="section-header">
+        <div>
+          <h2>Technician schedule approvals</h2>
+          <p class="subtle">Approve or deny availability updates submitted by field technicians.</p>
+        </div>
+      </header>
+      {% if pending_schedule_requests %}
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Technician</th>
+              <th>Shift</th>
+              <th>Request</th>
+              <th>Submitted</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for block in pending_schedule_requests %}
+            <tr>
+              <td>
+                <strong>{{ block.technician.name if block.technician else 'Technician' }}</strong>
+                {% if block.note %}<div class="subtle">{{ block.note }}</div>{% endif %}
+              </td>
+              <td>
+                <div>{{ block.start_at.strftime('%b %d, %Y %I:%M %p') }}</div>
+                <div class="subtle">{{ block.end_at.strftime('%b %d, %Y %I:%M %p') }}</div>
+              </td>
+              <td>
+                {% if block.status == 'cancel_pending' %}
+                <span class="badge warning">Cancellation</span>
+                {% else %}
+                <span class="badge info">New availability</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if block.status == 'cancel_pending' and block.cancel_requested_at %}
+                {{ block.cancel_requested_at.strftime('%b %d, %Y %I:%M %p') }}
+                {% else %}
+                {{ block.created_at.strftime('%b %d, %Y %I:%M %p') }}
+                {% endif %}
+              </td>
+              <td class="field-actions">
+                <form
+                  id="approve-schedule-{{ block.id }}"
+                  class="inline-form"
+                  method="post"
+                  action="{{ url_for('approve_technician_schedule', block_id=block.id, section='field') }}"
+                >
+                  <input type="hidden" name="next" value="{{ url_for('dashboard', section='field') }}" />
+                  <label class="sr-only" for="approve-note-{{ block.id }}">Approval note</label>
+                  <input
+                    id="approve-note-{{ block.id }}"
+                    type="text"
+                    name="note"
+                    placeholder="Optional note"
+                  />
+                  <button class="button small primary" type="submit">Approve</button>
+                </form>
+                <form
+                  id="reject-schedule-{{ block.id }}"
+                  class="inline-form"
+                  method="post"
+                  action="{{ url_for('reject_technician_schedule', block_id=block.id, section='field') }}"
+                >
+                  <input type="hidden" name="next" value="{{ url_for('dashboard', section='field') }}" />
+                  <label class="sr-only" for="reject-note-{{ block.id }}">Rejection note</label>
+                  <input
+                    id="reject-note-{{ block.id }}"
+                    type="text"
+                    name="note"
+                    placeholder="Optional note"
+                  />
+                  <button class="button small danger" type="submit">Reject</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="subtle">No schedule updates require approval right now.</p>
+      {% endif %}
+      {% if recent_schedule_decisions %}
+      <div class="schedule-log">
+        <h3>Recent decisions</h3>
+        <ul>
+          {% for entry in recent_schedule_decisions %}
+          <li>
+            <strong>{{ entry.technician.name if entry.technician else 'Technician' }}</strong>
+            <span>
+              {% if entry.status == 'approved' %}
+              shift approved
+              {% elif entry.status == 'cancelled' %}
+              cancellation approved
+              {% elif entry.status == 'rejected' %}
+              request rejected
+              {% endif %}
+              on {{ entry.reviewed_at.strftime('%b %d, %Y %I:%M %p') if entry.reviewed_at else entry.updated_at.strftime('%b %d, %Y %I:%M %p') }}
+            </span>
+            {% if entry.review_note %}<span class="subtle">{{ entry.review_note }}</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+    </section>
     <section class="card" id="field-visits">
       <header class="section-header">
         <div>
