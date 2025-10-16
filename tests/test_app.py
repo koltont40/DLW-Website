@@ -1835,6 +1835,65 @@ def test_admin_adds_equipment_from_account_view(app, client):
         assert str(devices[0].installed_on) == "2024-08-01"
 
 
+def test_uisp_api_client_normalizes_base_url_and_follows_links(monkeypatch):
+    requests_made: list[tuple[str, dict]] = []
+
+    class DummyResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        @property
+        def text(self):
+            return "ok"
+
+    payloads = [
+        {"items": [], "_links": {"next": "/nms/api/v2.1/devices?page=2"}},
+        {"items": []},
+    ]
+    call_index = {"value": 0}
+
+    def fake_get(url, headers=None, params=None, timeout=None, verify=None):
+        requests_made.append((url, {
+            "headers": headers,
+            "params": params,
+            "timeout": timeout,
+            "verify": verify,
+        }))
+        payload = payloads[min(call_index["value"], len(payloads) - 1)]
+        call_index["value"] += 1
+        return DummyResponse(payload)
+
+    monkeypatch.setattr(app_module.requests, "get", fake_get)
+
+    client = app_module.UispApiClient("uisp.example.net/uisp", "token")
+    assert client.base_url == "https://uisp.example.net/uisp"
+
+    devices = client.fetch_devices()
+    assert devices == []
+    assert len(requests_made) == 2
+
+    first_url, first_meta = requests_made[0]
+    assert first_url == "https://uisp.example.net/uisp/nms/api/v2.1/devices"
+    assert first_meta["headers"]["x-auth-token"] == "token"
+    assert first_meta["verify"] is True
+
+    second_url, second_meta = requests_made[1]
+    assert second_url == "https://uisp.example.net/uisp/nms/api/v2.1/devices?page=2"
+    assert second_meta["params"] is None
+
+
+def test_uisp_api_client_rejects_invalid_base_url():
+    with pytest.raises(app_module.UispApiError):
+        app_module.UispApiClient("://invalid", "token")
+    with pytest.raises(app_module.UispApiError):
+        app_module.UispApiClient("https://uisp.example.net", "")
+
+
 def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypatch):
     login_admin(client)
 
@@ -1923,7 +1982,7 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
         def text(self):
             return "ok"
 
-    def fake_get(url, headers=None, params=None, timeout=None):
+    def fake_get(url, headers=None, params=None, timeout=None, verify=None):
         if any(
             segment in url
             for segment in (
@@ -2122,7 +2181,7 @@ def test_admin_syncs_uisp_devices_with_nested_heartbeat_payload(app, client, mon
         def text(self):
             return "ok"
 
-    def fake_get(url, headers=None, params=None, timeout=None):
+    def fake_get(url, headers=None, params=None, timeout=None, verify=None):
         if any(
             segment in url
             for segment in ("device-heartbeats", "devices/heartbeats", "devices/monitoring")
@@ -2224,7 +2283,7 @@ def test_admin_syncs_uisp_devices_with_unknown_heartbeat_status(app, client, mon
         def text(self):
             return "ok"
 
-    def fake_get(url, headers=None, params=None, timeout=None):
+    def fake_get(url, headers=None, params=None, timeout=None, verify=None):
         if any(
             segment in url
             for segment in (

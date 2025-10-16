@@ -22,7 +22,7 @@ from email.utils import formataddr, format_datetime, make_msgid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterable, Sequence
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import quote_plus, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
@@ -292,20 +292,85 @@ class UispApiError(RuntimeError):
 
 
 class UispApiClient:
-    def __init__(self, base_url: str, token: str, *, timeout: float = 10.0):
-        self.base_url = (base_url or "").rstrip("/")
+    _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        *,
+        timeout: float = 10.0,
+        verify: bool = True,
+    ):
+        normalized_base = self._normalize_base_url(base_url)
+        self.base_url = normalized_base.rstrip("/")
         self.token = (token or "").strip()
         self.timeout = timeout
+        self.verify = verify
 
         if not self.base_url or not self.token:
             raise UispApiError("UISP API base URL and token are required.")
 
-    def fetch_devices(self) -> list[dict]:
-        endpoint = f"{self.base_url}/nms/api/v2.1/devices"
-        headers = {
+        self._base_parts = urlparse(self.base_url)
+        self.headers = {
             "accept": "application/json",
             "x-auth-token": self.token,
         }
+
+    @classmethod
+    def _normalize_base_url(cls, base_url: str) -> str:
+        cleaned = (base_url or "").strip()
+        if not cleaned:
+            return ""
+        if not cls._SCHEME_RE.match(cleaned):
+            cleaned = f"https://{cleaned}"
+        parsed = urlparse(cleaned)
+        if (
+            not parsed.scheme
+            or not parsed.netloc
+            or not re.search(r"[a-zA-Z0-9]", parsed.netloc)
+        ):
+            raise UispApiError("UISP API base URL is invalid.")
+        normalized_path = parsed.path.rstrip("/")
+        if normalized_path and not normalized_path.startswith("/"):
+            normalized_path = f"/{normalized_path}"
+        normalized = f"{parsed.scheme}://{parsed.netloc}{normalized_path}"
+        return normalized.rstrip("/")
+
+    def _build_url(self, path: str | None) -> str:
+        if not path:
+            return self.base_url
+        if not isinstance(path, str):
+            path = str(path)
+        cleaned = path.strip()
+        if not cleaned:
+            return self.base_url
+        if self._SCHEME_RE.match(cleaned):
+            return cleaned
+        if cleaned.startswith("//"):
+            return f"{self._base_parts.scheme}:{cleaned}"
+        cleaned = cleaned.lstrip("/")
+        if not cleaned:
+            return self.base_url
+        return f"{self.base_url}/{cleaned}"
+
+    def _request(
+        self, url: str, *, params: dict[str, object] | None = None
+    ) -> requests.Response:
+        try:
+            response = requests.get(
+                url,
+                headers=self.headers,
+                params=params if params else None,
+                timeout=self.timeout,
+                verify=self.verify,
+            )
+        except requests.RequestException as exc:  # pragma: no cover - network error
+            raise UispApiError(f"UISP API request failed: {exc}") from exc
+        return response
+
+    def fetch_devices(self) -> list[dict]:
+        endpoint = self._build_url("/nms/api/v2.1/devices")
 
         devices: list[dict] = []
         per_page = 200
@@ -318,12 +383,7 @@ class UispApiClient:
         last_offset: int | None = None
 
         while next_url:
-            response = requests.get(
-                next_url,
-                headers=headers,
-                params=params if params else None,
-                timeout=self.timeout,
-            )
+            response = self._request(next_url, params=params)
             if response.status_code != 200:
                 raise UispApiError(
                     f"UISP API responded with HTTP {response.status_code}: {response.text}"
@@ -387,7 +447,7 @@ class UispApiClient:
             params = None
 
             if next_link:
-                next_url = urljoin(self.base_url + "/", next_link)
+                next_url = self._build_url(next_link)
             elif pagination:
                 current_page = _coerce_int(
                     pagination.get("page")
@@ -489,10 +549,6 @@ class UispApiClient:
         return devices
 
     def fetch_device_heartbeats(self) -> list[dict]:
-        headers = {
-            "accept": "application/json",
-            "x-auth-token": self.token,
-        }
         candidate_paths = [
             "/nms/api/v2.1/device-heartbeats",
             "/nms/api/v2.1/devices/heartbeats",
@@ -507,10 +563,10 @@ class UispApiClient:
         errors: list[str] = []
 
         for path in candidate_paths:
-            url = urljoin(self.base_url + "/", path.lstrip("/"))
+            url = self._build_url(path)
             try:
-                response = requests.get(url, headers=headers, timeout=self.timeout)
-            except requests.RequestException as exc:  # pragma: no cover - network error
+                response = self._request(url)
+            except UispApiError as exc:
                 errors.append(f"{path} request failed: {exc}")
                 continue
 
@@ -3138,6 +3194,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         "UISP_BASE_URL": os.environ.get("UISP_BASE_URL"),
         "UISP_API_TOKEN": os.environ.get("UISP_API_TOKEN"),
         "UISP_API_TIMEOUT": float(os.environ.get("UISP_API_TIMEOUT", "10")),
+        "UISP_VERIFY_TLS": parse_env_bool(os.environ.get("UISP_VERIFY_TLS"), True),
         "APP_TIMEZONE": os.environ.get("APP_TIMEZONE", DEFAULT_APP_TIMEZONE),
         "AUTOPAY_SCHEDULER_ENABLED": parse_env_bool(
             os.environ.get("AUTOPAY_SCHEDULER_ENABLED"), True
@@ -5064,8 +5121,22 @@ def register_routes(app: Flask) -> None:
             timeout = float(timeout_value)
         except (TypeError, ValueError):
             timeout = 10.0
+        verify_value = app.config.get("UISP_VERIFY_TLS", True)
+        if isinstance(verify_value, str):
+            verify_tls = parse_env_bool(verify_value, True)
+        elif isinstance(verify_value, bool):
+            verify_tls = verify_value
+        elif verify_value is None:
+            verify_tls = True
+        else:
+            verify_tls = bool(verify_value)
         base_url, api_token, _ = _resolve_uisp_credentials()
-        return UispApiClient(base_url or "", api_token or "", timeout=timeout)
+        return UispApiClient(
+            base_url or "",
+            api_token or "",
+            timeout=timeout,
+            verify=verify_tls,
+        )
 
     def _collect_outage_recipients(device: UispDevice) -> list[str]:
         recipients: set[str] = set()
