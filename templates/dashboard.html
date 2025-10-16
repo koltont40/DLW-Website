@@ -852,6 +852,209 @@
         <p class="subtle">CRM billing status changes automatically lift these holds when payments post.</p>
       </div>
       {% endif %}
+      <div class="uisp-inventory">
+        <header class="section-header">
+          <div>
+            <h3>UISP Inventory</h3>
+            <p class="subtle">Sync managed Ubiquiti devices and map them to subscriber accounts.</p>
+          </div>
+          <form
+            method="post"
+            action="{{ url_for('import_uisp_devices', section='network', status=request.args.get('status')) }}"
+          >
+            <button class="button small primary" type="submit">Sync from UISP</button>
+          </form>
+        </header>
+        <div class="uisp-config-panel">
+          <form
+            class="uisp-config-grid"
+            method="post"
+            action="{{ url_for('update_uisp_config', section='network', status=request.args.get('status')) }}"
+          >
+            <label class="inline-field">
+              <span>UISP base URL</span>
+              <input
+                type="url"
+                name="base_url"
+                placeholder="https://uisp.example.com"
+                value="{{ uisp_config.base_url if uisp_config and uisp_config.base_url else '' }}"
+              />
+            </label>
+            <label class="inline-field">
+              <span>API token</span>
+              <input
+                type="password"
+                name="api_token"
+                placeholder="••••••••••"
+                value="{{ uisp_config.api_token if uisp_config and uisp_config.api_token else '' }}"
+              />
+            </label>
+            <label class="inline-field">
+              <span>Sync interval (minutes)</span>
+              <input
+                type="number"
+                name="auto_sync_interval"
+                min="5"
+                max="1440"
+                value="{{ uisp_config.auto_sync_interval_minutes if uisp_config else 30 }}"
+              />
+            </label>
+            <label class="checkbox inline-checkbox">
+              <input
+                type="checkbox"
+                name="auto_sync_enabled"
+                {% if uisp_config and uisp_config.auto_sync_enabled %}checked{% endif %}
+              />
+              <span>Automatically sync devices on this cadence</span>
+            </label>
+            <div class="uisp-config-actions">
+              <button class="button small secondary" type="submit">Save UISP settings</button>
+              <p class="subtle">
+                {% if uisp_config and uisp_config.last_synced_at %}
+                Last sync {{ uisp_config.last_synced_at.strftime('%b %d, %Y %I:%M %p') }} ·
+                {% endif %}
+                Auto sync
+                {% if uisp_config and uisp_config.auto_sync_enabled %}enabled{% else %}disabled{% endif %}
+              </p>
+            </div>
+          </form>
+        </div>
+        {% if uisp_devices %}
+        <div class="record-list">
+          {% for device in uisp_devices %}
+          <form
+            class="record-row uisp-device-row"
+            method="post"
+            action="{{ url_for('assign_uisp_device', device_id=device.id, section='network', status=request.args.get('status')) }}"
+          >
+            <div class="uisp-device-overview">
+              <div class="uisp-device-heading">
+                <strong>{{ device.nickname or device.name }}</strong>
+                <span
+                  class="badge {% if device.status == 'online' %}success{% elif device.status == 'offline' %}danger{% else %}subtle{% endif %}"
+                  >{{ device.status|capitalize }}</span
+                >
+              </div>
+              <div class="uisp-device-meta">
+                {% if device.model %}<span>{{ device.model }}</span>{% endif %}
+                {% if device.site_name %}<span>{{ device.site_name }}</span>{% endif %}
+                {% if device.tower %}<span>Tower · {{ device.tower.name }}</span>{% endif %}
+                {% if device.ip_address %}<span>IP {{ device.ip_address }}</span>{% endif %}
+                <span>Last seen {{ device.last_seen_at.strftime('%b %d, %Y %I:%M %p') if device.last_seen_at else 'Unknown' }}</span>
+              </div>
+            </div>
+            <label class="inline-field">
+              <span>Alias</span>
+              <input type="text" name="nickname" value="{{ device.nickname or '' }}" placeholder="Roof sector AP" />
+            </label>
+            <label class="inline-field">
+              <span>Customer</span>
+              <select name="client_id">
+                <option value="">Unassigned</option>
+                {% for customer in clients %}
+                <option value="{{ customer.id }}" {% if device.client_id == customer.id %}selected{% endif %}>
+                  {{ customer.name }} ({{ customer.email }})
+                </option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="inline-field">
+              <span>Tower</span>
+              <select name="tower_id">
+                <option value="">No tower</option>
+                {% for tower in network_towers %}
+                <option value="{{ tower.id }}" {% if device.tower_id == tower.id %}selected{% endif %}>
+                  {{ tower.name }}{% if tower.location %} — {{ tower.location }}{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="inline-field stretch">
+              <span>Notes</span>
+              <input type="text" name="notes" value="{{ device.notes or '' }}" placeholder="Mount location, handoff details" />
+            </label>
+            <div class="record-actions inline-actions">
+              <button class="button small primary" type="submit">Save</button>
+            </div>
+          </form>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="subtle">No UISP devices have been imported yet. Sync to load your inventory.</p>
+        {% endif %}
+      </div>
+      <div class="tower-management">
+        <header class="section-header">
+          <div>
+            <h3>Network towers</h3>
+            <p class="subtle">Catalog distribution sites so technicians know where each device homes.</p>
+          </div>
+        </header>
+        <form
+          class="record-row tower-row"
+          method="post"
+          action="{{ url_for('create_network_tower', section='network', status=request.args.get('status')) }}"
+        >
+          <label class="inline-field">
+            <span>Name</span>
+            <input type="text" name="name" placeholder="South Ridge" required />
+          </label>
+          <label class="inline-field">
+            <span>Location</span>
+            <input type="text" name="location" placeholder="GPS, address, or cross streets" />
+          </label>
+          <label class="inline-field stretch">
+            <span>Notes</span>
+            <input type="text" name="notes" placeholder="Power feed, fiber backhaul, owner contact" />
+          </label>
+          <div class="record-actions inline-actions">
+            <button class="button small primary" type="submit">Add tower</button>
+          </div>
+        </form>
+        {% if network_towers %}
+        <div class="record-list">
+          {% for tower in network_towers %}
+          <form
+            class="record-row tower-row"
+            method="post"
+            action="{{ url_for('update_network_tower', tower_id=tower.id, section='network', status=request.args.get('status')) }}"
+          >
+            <label class="inline-field">
+              <span>Name</span>
+              <input type="text" name="name" value="{{ tower.name }}" required />
+            </label>
+            <label class="inline-field">
+              <span>Location</span>
+              <input type="text" name="location" value="{{ tower.location or '' }}" placeholder="GPS, address, or cross streets" />
+            </label>
+            <label class="inline-field stretch">
+              <span>Notes</span>
+              <input type="text" name="notes" value="{{ tower.notes or '' }}" placeholder="Power feed, fiber backhaul, owner contact" />
+            </label>
+            <div class="record-actions inline-actions">
+              <button class="button small secondary" type="submit">Save</button>
+              <button
+                class="button small danger"
+                type="submit"
+                form="delete-tower-{{ tower.id }}"
+                onclick="return confirm('Remove this tower? Devices will remain assigned but unlinked.');"
+              >
+                Delete
+              </button>
+            </div>
+          </form>
+          <form
+            id="delete-tower-{{ tower.id }}"
+            class="inline-form"
+            method="post"
+            action="{{ url_for('delete_network_tower', tower_id=tower.id, section='network', status=request.args.get('status')) }}"
+          ></form>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="subtle tower-empty">No tower sites documented yet. Add your first tower above.</p>
+        {% endif %}
+      </div>
       {% if clients %}
       <div class="client-stack">
         {% for client in clients %}
@@ -1657,6 +1860,10 @@
             <label class="checkbox-field">
               <input type="checkbox" name="notify_customers" {% if notification_config and notification_config.notify_customer_activity %}checked{% endif %} />
               <span>Email customers when appointments or account activity changes</span>
+            </label>
+            <label class="checkbox-field">
+              <input type="checkbox" name="notify_all_activity" {% if notification_config and notification_config.notify_all_account_activity %}checked{% endif %} />
+              <span>Notify customers about any change to their account details or services</span>
             </label>
             <div class="notification-actions">
               <button class="button secondary" type="submit">Save preferences</button>
