@@ -3,37 +3,51 @@
 {% block title %}Admin Dashboard | DIXIELAND WIRELESS LLC{% endblock %}
 {% block content %}
 <div class="dashboard-layout">
+  {% set sidebar_expanded = active_section != 'overview' %}
   <aside class="admin-sidebar">
     <div class="sidebar-header">
       <h1>Admin Control Center</h1>
       <p class="subtle">Command every facet of DIXIELAND WIRELESS LLC from one dark-mode cockpit.</p>
     </div>
-    <nav class="sidebar-nav">
+    <nav class="sidebar-nav" data-sidebar data-expanded="{{ 'true' if sidebar_expanded else 'false' }}">
       <div class="sidebar-group">
         <span class="sidebar-group-label">Snapshot</span>
         <a class="sidebar-link {% if active_section == 'overview' %}active{% endif %}" href="{{ url_for('dashboard', section='overview') }}">Operations</a>
       </div>
-      <div class="sidebar-group">
-        <span class="sidebar-group-label">CRM</span>
-        <a class="sidebar-link {% if active_section == 'customers' %}active{% endif %}" href="{{ url_for('dashboard', section='customers') }}">Customers</a>
-        <a class="sidebar-link {% if active_section == 'billing' %}active{% endif %}" href="{{ url_for('dashboard', section='billing') }}">Billing</a>
-        <a class="sidebar-link {% if active_section == 'support' %}active{% endif %}" href="{{ url_for('dashboard', section='support') }}">Support</a>
-      </div>
-      <div class="sidebar-group">
-        <span class="sidebar-group-label">Site Experience</span>
-        <a class="sidebar-link {% if active_section == 'plans' %}active{% endif %}" href="{{ url_for('dashboard', section='plans') }}">Service Plans</a>
-        <a class="sidebar-link {% if active_section == 'navigation' %}active{% endif %}" href="{{ url_for('dashboard', section='navigation') }}">Header Links</a>
-        <a class="sidebar-link {% if active_section == 'branding' %}active{% endif %}" href="{{ url_for('dashboard', section='branding') }}">Branding</a>
-        <a class="sidebar-link {% if active_section == 'story' %}active{% endif %}" href="{{ url_for('dashboard', section='story') }}">Team &amp; Trust</a>
-        <a class="sidebar-link {% if active_section == 'blog' %}active{% endif %}" href="{{ url_for('dashboard', section='blog') }}">Blog</a>
-        <a class="sidebar-link {% if active_section == 'legal' %}active{% endif %}" href="{{ url_for('dashboard', section='legal') }}">Legal</a>
-      </div>
-      <div class="sidebar-group">
-        <span class="sidebar-group-label">NMS</span>
-        <a class="sidebar-link {% if active_section == 'network' %}active{% endif %}" href="{{ url_for('dashboard', section='network') }}">Network</a>
-        <a class="sidebar-link {% if active_section == 'field' %}active{% endif %}" href="{{ url_for('dashboard', section='field') }}">Field Ops</a>
-        <a class="sidebar-link {% if active_section == 'security' %}active{% endif %}" href="{{ url_for('dashboard', section='security') }}">Security</a>
-        <a class="sidebar-link {% if active_section == 'notifications' %}active{% endif %}" href="{{ url_for('dashboard', section='notifications') }}">Notifications</a>
+      <button
+        class="sidebar-toggle"
+        type="button"
+        data-sidebar-toggle
+        data-expand-label="Show full menu"
+        data-collapse-label="Hide menu"
+        aria-expanded="{{ 'true' if sidebar_expanded else 'false' }}"
+        aria-controls="admin-sidebar-menu"
+      >
+        {{ 'Hide menu' if sidebar_expanded else 'Show full menu' }}
+      </button>
+      <div class="sidebar-groups" id="admin-sidebar-menu" data-sidebar-content>
+        <div class="sidebar-group">
+          <span class="sidebar-group-label">CRM</span>
+          <a class="sidebar-link {% if active_section == 'customers' %}active{% endif %}" href="{{ url_for('dashboard', section='customers') }}">Customers</a>
+          <a class="sidebar-link {% if active_section == 'billing' %}active{% endif %}" href="{{ url_for('dashboard', section='billing') }}">Billing</a>
+          <a class="sidebar-link {% if active_section == 'support' %}active{% endif %}" href="{{ url_for('dashboard', section='support') }}">Support</a>
+        </div>
+        <div class="sidebar-group">
+          <span class="sidebar-group-label">Site Experience</span>
+          <a class="sidebar-link {% if active_section == 'plans' %}active{% endif %}" href="{{ url_for('dashboard', section='plans') }}">Service Plans</a>
+          <a class="sidebar-link {% if active_section == 'navigation' %}active{% endif %}" href="{{ url_for('dashboard', section='navigation') }}">Header Links</a>
+          <a class="sidebar-link {% if active_section == 'branding' %}active{% endif %}" href="{{ url_for('dashboard', section='branding') }}">Branding</a>
+          <a class="sidebar-link {% if active_section == 'story' %}active{% endif %}" href="{{ url_for('dashboard', section='story') }}">Team &amp; Trust</a>
+          <a class="sidebar-link {% if active_section == 'blog' %}active{% endif %}" href="{{ url_for('dashboard', section='blog') }}">Blog</a>
+          <a class="sidebar-link {% if active_section == 'legal' %}active{% endif %}" href="{{ url_for('dashboard', section='legal') }}">Legal</a>
+        </div>
+        <div class="sidebar-group">
+          <span class="sidebar-group-label">NMS</span>
+          <a class="sidebar-link {% if active_section == 'network' %}active{% endif %}" href="{{ url_for('dashboard', section='network') }}">Network</a>
+          <a class="sidebar-link {% if active_section == 'field' %}active{% endif %}" href="{{ url_for('dashboard', section='field') }}">Field Ops</a>
+          <a class="sidebar-link {% if active_section == 'security' %}active{% endif %}" href="{{ url_for('dashboard', section='security') }}">Security</a>
+          <a class="sidebar-link {% if active_section == 'notifications' %}active{% endif %}" href="{{ url_for('dashboard', section='notifications') }}">Notifications</a>
+        </div>
       </div>
     </nav>
     <div class="sidebar-footer">
@@ -316,7 +330,17 @@
         <div>
           <h2>{{ selected_client.name }}</h2>
           <p class="subtle">
-            Account <code>{{ selected_client.account_reference }}</code>
+            Account
+            <a
+              href="#"
+              class="inline-link account-reference-trigger"
+              data-account-reference="{{ selected_client.account_reference }}"
+              data-account-name="{{ selected_client.name }}"
+              aria-controls="account-reference-modal"
+              role="button"
+            >
+              {{ selected_client.account_reference }}
+            </a>
             • <a class="inline-link" href="mailto:{{ selected_client.email }}">{{ selected_client.email }}</a>
           </p>
         </div>
@@ -775,7 +799,20 @@
                   {{ client.name }}
                 </a>
               </h3>
-              <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
+              <p class="subtle">
+                Account
+                <a
+                  href="#"
+                  class="inline-link account-reference-trigger"
+                  data-account-reference="{{ client.account_reference }}"
+                  data-account-name="{{ client.name }}"
+                  aria-controls="account-reference-modal"
+                  role="button"
+                >
+                  {{ client.account_reference }}
+                </a>
+                · {{ client.email }}
+              </p>
             </div>
             <div class="client-metrics">
               <span><strong>{{ client.invoices|length }}</strong> invoices</span>
@@ -1108,7 +1145,20 @@
                   {{ client.name }}
                 </a>
               </h3>
-              <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
+              <p class="subtle">
+                Account
+                <a
+                  href="#"
+                  class="inline-link account-reference-trigger"
+                  data-account-reference="{{ client.account_reference }}"
+                  data-account-name="{{ client.name }}"
+                  aria-controls="account-reference-modal"
+                  role="button"
+                >
+                  {{ client.account_reference }}
+                </a>
+                · {{ client.email }}
+              </p>
             </div>
             <div class="client-status-pills">
               <span class="badge subtle">{{ client.status }}</span>
@@ -1588,14 +1638,23 @@
               </td>
               <td>
                 {% set missing = field_requirements.get(appointment.id) or [] %}
+                {% set pending_review = field_pending_review.get(appointment.id) or [] %}
                 {% if missing %}
                 <ul class="checklist pending">
                   {% for category in missing %}
                   <li>{{ category }}</li>
                   {% endfor %}
                 </ul>
-                {% else %}
-                <p class="subtle">All required photos uploaded.</p>
+                {% endif %}
+                {% if pending_review %}
+                <ul class="checklist review">
+                  {% for category in pending_review %}
+                  <li>{{ category }}</li>
+                  {% endfor %}
+                </ul>
+                {% endif %}
+                {% if not missing and not pending_review %}
+                <p class="subtle">All required photos verified.</p>
                 {% endif %}
               </td>
               <td>
@@ -1622,12 +1681,31 @@
         {% for photo in recent_install_photos %}
         <figure class="photo-card">
           <a href="{{ url_for('serve_install_photo', photo_id=photo.id) }}" target="_blank">
-            <img src="{{ url_for('serve_install_photo', photo_id=photo.id) }}" alt="{{ photo.category }} for {{ photo.client.name }}" />
+            <img
+              src="{{ url_for('serve_install_photo', photo_id=photo.id) }}"
+              alt="{{ photo.category }} for {{ photo.client.name if photo.client else 'Client' }}"
+            />
           </a>
           <figcaption>
             <strong>{{ photo.category }}</strong>
             <span class="subtle">{{ photo.client.name if photo.client else 'Client' }}</span>
             <span class="subtle">{{ photo.uploaded_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+            {% set uploader = photo.uploaded_by_admin.display_name() if photo.uploaded_by_admin else (photo.technician.name if photo.technician else 'Team') %}
+            <span class="subtle">Captured by {{ uploader }}</span>
+            {% if photo.notes %}
+            <span class="subtle">{{ photo.notes }}</span>
+            {% endif %}
+            <div class="photo-card-status">
+              {% if photo.verified_at %}
+              <span class="badge success">Verified</span>
+              <span class="subtle">{{ photo.verified_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+              {% if photo.verified_by_admin %}
+              <span class="subtle">by {{ photo.verified_by_admin.display_name() }}</span>
+              {% endif %}
+              {% else %}
+              <span class="badge warning">Needs review</span>
+              {% endif %}
+            </div>
           </figcaption>
         </figure>
         {% endfor %}
@@ -1687,7 +1765,20 @@
                   {{ client.name }}
                 </a>
               </h3>
-              <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
+              <p class="subtle">
+                Account
+                <a
+                  href="#"
+                  class="inline-link account-reference-trigger"
+                  data-account-reference="{{ client.account_reference }}"
+                  data-account-name="{{ client.name }}"
+                  aria-controls="account-reference-modal"
+                  role="button"
+                >
+                  {{ client.account_reference }}
+                </a>
+                · {{ client.email }}
+              </p>
             </div>
             <span class="badge subtle">{{ client.status }}</span>
           </header>
@@ -2958,6 +3049,168 @@
       </div>
     </section>
     {% endif %}
+  <div class="modal-backdrop" id="account-reference-modal" hidden>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="account-reference-title">
+      <header class="modal-header">
+        <div>
+          <h2 id="account-reference-title">Customer ID</h2>
+          <p class="subtle">Reference this identifier when coordinating billing, installs, or support.</p>
+        </div>
+        <button class="modal-close" type="button" data-close aria-label="Close customer ID window">&times;</button>
+      </header>
+      <div class="modal-content">
+        <dl class="detail-list">
+          <div>
+            <dt>Customer</dt>
+            <dd data-modal-account-name>—</dd>
+          </div>
+          <div>
+            <dt>Account ID</dt>
+            <dd><code data-modal-account-reference>—</code></dd>
+          </div>
+        </dl>
+        <div class="button-row">
+          <button class="button small secondary" type="button" data-copy>Copy ID</button>
+          <button class="button small primary" type="button" data-close>Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const initializeAccountReferenceModal = () => {
+      const modal = document.getElementById('account-reference-modal');
+      if (!modal || modal.dataset.initialized === 'true') {
+        return;
+      }
+
+      modal.dataset.initialized = 'true';
+
+      const nameTarget = modal.querySelector('[data-modal-account-name]');
+      const idTarget = modal.querySelector('[data-modal-account-reference]');
+      const closeButtons = modal.querySelectorAll('[data-close]');
+      const copyButton = modal.querySelector('[data-copy]');
+      let previousOverflow = '';
+      let activeTrigger = null;
+
+      const focusFirstCloseButton = () => {
+        const firstClose = modal.querySelector('[data-close]');
+        if (firstClose) {
+          window.requestAnimationFrame(() => {
+            firstClose.focus();
+          });
+        }
+      };
+
+      const openModal = (trigger) => {
+        if (!trigger) {
+          return;
+        }
+
+        const accountName = trigger.getAttribute('data-account-name') || 'Customer';
+        const accountReference = trigger.getAttribute('data-account-reference') || '';
+
+        if (nameTarget) {
+          nameTarget.textContent = accountName;
+        }
+        if (idTarget) {
+          idTarget.textContent = accountReference || '—';
+        }
+
+        activeTrigger = trigger;
+        previousOverflow = document.body.style.overflow;
+        modal.removeAttribute('hidden');
+        document.body.style.overflow = 'hidden';
+        focusFirstCloseButton();
+      };
+
+      const closeModal = () => {
+        modal.setAttribute('hidden', '');
+        document.body.style.overflow = previousOverflow;
+        if (activeTrigger) {
+          activeTrigger.focus();
+          activeTrigger = null;
+        }
+      };
+
+      const handleTriggerClick = (event) => {
+        const trigger = event.target.closest('.account-reference-trigger');
+        if (!trigger) {
+          return;
+        }
+
+        event.preventDefault();
+        openModal(trigger);
+      };
+
+      document.addEventListener('click', handleTriggerClick);
+
+      closeButtons.forEach((button) => {
+        button.addEventListener('click', closeModal);
+      });
+
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal) {
+          closeModal();
+        }
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !modal.hasAttribute('hidden')) {
+          event.preventDefault();
+          closeModal();
+        }
+      });
+
+      if (copyButton) {
+        copyButton.addEventListener('click', async () => {
+          const value = (idTarget ? idTarget.textContent : '').trim();
+          if (!value) {
+            return;
+          }
+
+          let copied = false;
+
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            try {
+              await navigator.clipboard.writeText(value);
+              copied = true;
+            } catch (error) {
+              copied = false;
+            }
+          }
+
+          if (!copied && idTarget) {
+            const range = document.createRange();
+            range.selectNodeContents(idTarget);
+            const selection = window.getSelection();
+            if (selection) {
+              selection.removeAllRanges();
+              selection.addRange(range);
+            }
+            try {
+              copied = document.execCommand('copy');
+            } catch (error) {
+              copied = false;
+            }
+          }
+
+          if (copied) {
+            const originalText = copyButton.textContent;
+            copyButton.textContent = 'Copied!';
+            window.setTimeout(() => {
+              copyButton.textContent = originalText || 'Copy ID';
+            }, 2000);
+          }
+        });
+      }
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initializeAccountReferenceModal);
+    } else {
+      initializeAccountReferenceModal();
+    }
+  </script>
   </div>
 </div>
 {% endblock %}

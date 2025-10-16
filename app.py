@@ -2357,9 +2357,18 @@ class InstallPhoto(db.Model):
     stored_filename = db.Column(db.String(255), nullable=False)
     notes = db.Column(db.Text)
     uploaded_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    uploaded_by_admin_id = db.Column(db.Integer, db.ForeignKey("admin_users.id"))
+    verified_at = db.Column(db.DateTime(timezone=True))
+    verified_by_admin_id = db.Column(db.Integer, db.ForeignKey("admin_users.id"))
 
     client = db.relationship("Client", back_populates="install_photos")
     technician = db.relationship("Technician", back_populates="install_photos")
+    uploaded_by_admin = db.relationship(
+        "AdminUser", foreign_keys=[uploaded_by_admin_id], lazy="joined"
+    )
+    verified_by_admin = db.relationship(
+        "AdminUser", foreign_keys=[verified_by_admin_id], lazy="joined"
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<InstallPhoto {self.stored_filename} for client {self.client_id}>"
@@ -2537,6 +2546,13 @@ class AdminUser(db.Model):
 
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password_hash, password)
+
+    def display_name(self) -> str:
+        if self.username:
+            return self.username
+        if self.email:
+            return self.email
+        return f"Admin {self.id}"
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<AdminUser {self.username}>"
@@ -2984,6 +3000,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_support_ticket_priority_field()
         ensure_support_ticket_message_schema()
         ensure_install_photo_requirements_seeded()
+        ensure_install_photo_admin_fields()
         ensure_technician_schedule_review_fields()
         ensure_team_member_bio_field()
         ensure_site_theme_background_fields()
@@ -3019,6 +3036,7 @@ def init_db() -> None:
         ensure_support_ticket_priority_field()
         ensure_support_ticket_message_schema()
         ensure_install_photo_requirements_seeded()
+        ensure_install_photo_admin_fields()
         ensure_technician_schedule_review_fields()
         ensure_team_member_bio_field()
         ensure_site_theme_background_fields()
@@ -3692,6 +3710,31 @@ def ensure_install_photo_requirements_seeded() -> None:
         db.session.add(requirement)
 
     db.session.commit()
+
+
+def ensure_install_photo_admin_fields() -> None:
+    inspector = inspect(db.engine)
+    try:
+        columns = {column["name"] for column in inspector.get_columns("install_photos")}
+    except NoSuchTableError:
+        return
+
+    statements: list[str] = []
+    if "uploaded_by_admin_id" not in columns:
+        statements.append(
+            "ALTER TABLE install_photos ADD COLUMN uploaded_by_admin_id INTEGER"
+        )
+    if "verified_at" not in columns:
+        statements.append("ALTER TABLE install_photos ADD COLUMN verified_at TIMESTAMP")
+    if "verified_by_admin_id" not in columns:
+        statements.append(
+            "ALTER TABLE install_photos ADD COLUMN verified_by_admin_id INTEGER"
+        )
+
+    if statements:
+        with db.engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
 
 
 def ensure_technician_schedule_review_fields() -> None:
@@ -6973,6 +7016,7 @@ def register_routes(app: Flask) -> None:
         unassigned_uisp_devices: list[UispDevice] = []
         network_towers: list[NetworkTower] = []
         uisp_config: UispConfig | None = None
+        field_pending_review: dict[int, list[str]] = {}
         if active_section in {
             "customers",
             "billing",
@@ -7208,7 +7252,13 @@ def register_routes(app: Flask) -> None:
         if active_section == "field":
             install_photo_requirements = get_install_photo_requirements()
             recent_install_photos = (
-                InstallPhoto.query.order_by(InstallPhoto.uploaded_at.desc())
+                InstallPhoto.query.options(
+                    selectinload(InstallPhoto.client),
+                    selectinload(InstallPhoto.technician),
+                    selectinload(InstallPhoto.uploaded_by_admin),
+                    selectinload(InstallPhoto.verified_by_admin),
+                )
+                .order_by(InstallPhoto.uploaded_at.desc())
                 .limit(12)
                 .all()
             )
@@ -7230,7 +7280,15 @@ def register_routes(app: Flask) -> None:
                     for category in required_photo_categories
                     if not category_map.get(category)
                 ]
+                pending_review: list[str] = []
+                for category in required_photo_categories:
+                    photos_for_category = category_map.get(category, [])
+                    if photos_for_category and not any(
+                        photo.verified_at for photo in photos_for_category
+                    ):
+                        pending_review.append(category)
                 field_requirements[ap.id] = missing
+                field_pending_review[ap.id] = pending_review
 
             pending_schedule_requests = (
                 TechnicianSchedule.query.filter(
@@ -7404,6 +7462,7 @@ def register_routes(app: Flask) -> None:
             required_photo_categories=required_photo_categories,
             install_photo_requirements=install_photo_requirements,
             field_requirements=field_requirements,
+            field_pending_review=field_pending_review,
             field_photo_map=field_photo_map,
             pending_schedule_requests=pending_schedule_requests,
             recent_schedule_decisions=recent_schedule_decisions,
@@ -7503,21 +7562,38 @@ def register_routes(app: Flask) -> None:
             if scheduled_for >= current_time:
                 upcoming_appointments.append(appointment)
 
-        photo_map: dict[str, list[InstallPhoto]] = {
-            category: [] for category in install_photo_categories
-        }
+        categorized_photos: defaultdict[str, list[InstallPhoto]] = defaultdict(list)
+        verified_photos: defaultdict[str, list[InstallPhoto]] = defaultdict(list)
+        for category in install_photo_categories:
+            categorized_photos[category] = []
         client_photos = (
             InstallPhoto.query.filter_by(client_id=client.id)
+            .options(
+                selectinload(InstallPhoto.technician),
+                selectinload(InstallPhoto.uploaded_by_admin),
+                selectinload(InstallPhoto.verified_by_admin),
+            )
             .order_by(InstallPhoto.uploaded_at.desc())
             .all()
         )
         for photo in client_photos:
-            photo_map.setdefault(photo.category, []).append(photo)
+            categorized_photos[photo.category].append(photo)
+            if photo.verified_at:
+                verified_photos[photo.category].append(photo)
+        photo_map: dict[str, list[InstallPhoto]] = {
+            category: photos for category, photos in categorized_photos.items()
+        }
 
         missing_photo_categories = [
             category
             for category in required_photo_categories
             if not photo_map.get(category)
+        ]
+
+        unverified_photo_categories = [
+            category
+            for category in required_photo_categories
+            if not verified_photos.get(category)
         ]
 
         service_groups: list[tuple[str, str]] = []
@@ -7613,6 +7689,7 @@ def register_routes(app: Flask) -> None:
             appointments=appointments,
             photo_map=photo_map,
             missing_photo_categories=missing_photo_categories,
+            unverified_photo_categories=unverified_photo_categories,
             service_groups=service_groups,
             portal_enabled=bool(client.portal_password_hash),
             outstanding_balance_cents=outstanding_balance_cents,
@@ -7640,6 +7717,105 @@ def register_routes(app: Flask) -> None:
             network_towers=network_towers,
             device_search=device_search,
         )
+
+    @app.post("/dashboard/customers/<int:client_id>/install-photos")
+    @login_required
+    def upload_install_photo_admin(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        required_categories = get_required_install_photo_categories()
+        photo_category_choices = get_install_photo_category_choices()
+        category_default = (
+            required_categories[0]
+            if required_categories
+            else photo_category_choices[0]
+            if photo_category_choices
+            else OPTIONAL_INSTALL_PHOTO_CATEGORY
+        )
+        category = request.form.get("category", "").strip() or category_default
+        if category not in photo_category_choices:
+            flash("Choose a supported photo category.", "danger")
+            return redirect(url_for("admin_client_account", client_id=client.id))
+
+        technician_id_raw = request.form.get("technician_id", "").strip()
+        try:
+            technician_id = int(technician_id_raw)
+        except (TypeError, ValueError):
+            technician_id = None
+        technician = Technician.query.get(technician_id) if technician_id else None
+        if technician is None:
+            flash("Select the technician associated with this install photo.", "danger")
+            return redirect(url_for("admin_client_account", client_id=client.id))
+
+        ensure_file_surface_enabled("install-photo")
+        file = request.files.get("photo")
+        if not file or not file.filename:
+            flash("Choose a photo to upload.", "danger")
+            return redirect(url_for("admin_client_account", client_id=client.id))
+
+        if not allowed_install_file(file.filename):
+            flash("Upload JPG, PNG, or HEIC images for installation records.", "danger")
+            return redirect(url_for("admin_client_account", client_id=client.id))
+
+        notes = request.form.get("notes", "").strip() or None
+        install_folder = Path(app.config["INSTALL_PHOTOS_FOLDER"]) / f"client_{client.id}"
+        install_folder.mkdir(parents=True, exist_ok=True)
+
+        timestamp = utcnow().strftime("%Y%m%d%H%M%S")
+        safe_name = secure_filename(file.filename)
+        stored_filename = f"{timestamp}_{safe_name}" if safe_name else f"{timestamp}.jpg"
+        relative_path = Path(f"client_{client.id}") / stored_filename
+        file.save(install_folder / stored_filename)
+
+        admin_id = session.get("admin_user_id")
+        photo = InstallPhoto(
+            client_id=client.id,
+            technician_id=technician.id,
+            category=category,
+            original_filename=file.filename,
+            stored_filename=str(relative_path),
+            notes=notes,
+            uploaded_by_admin_id=admin_id,
+        )
+
+        if request.form.get("verify_now") and admin_id:
+            photo.verified_at = utcnow()
+            photo.verified_by_admin_id = admin_id
+
+        db.session.add(photo)
+        db.session.commit()
+
+        message = "Install photo uploaded."
+        if photo.verified_at:
+            message = "Install photo uploaded and verified."
+        flash(message, "success")
+
+        redirect_target = request.form.get("next")
+        if redirect_target:
+            return redirect(redirect_target)
+        return redirect(url_for("admin_client_account", client_id=client.id))
+
+    @app.post("/dashboard/install-photos/<int:photo_id>/verify")
+    @login_required
+    def verify_install_photo(photo_id: int):
+        photo = InstallPhoto.query.get_or_404(photo_id)
+        admin_id = session.get("admin_user_id")
+        action = (request.form.get("action", "verify") or "").strip().lower()
+
+        if action == "unverify":
+            photo.verified_at = None
+            photo.verified_by_admin_id = None
+            db.session.commit()
+            flash("Photo verification cleared.", "info")
+        else:
+            photo.verified_at = utcnow()
+            photo.verified_by_admin_id = admin_id
+            db.session.commit()
+            flash("Photo verified for this install.", "success")
+
+        redirect_target = request.form.get("next")
+        if redirect_target:
+            return redirect(redirect_target)
+        return redirect(url_for("admin_client_account", client_id=photo.client_id))
 
     @app.post("/documents/upload")
     @login_required

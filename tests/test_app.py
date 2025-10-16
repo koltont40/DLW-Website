@@ -1030,6 +1030,12 @@ def test_customer_focus_view_surfaces_account_summary(app, client):
     assert b"Subscriber Antenna" in response.data
     assert b"Initial Setup" in response.data
     assert b"On-site Activation" in response.data
+    status_indicators = [
+        b"Missing categories",
+        b"Awaiting verification",
+        b"All required photo categories are verified",
+    ]
+    assert any(indicator in response.data for indicator in status_indicators)
     with app.app_context():
         categories = get_required_install_photo_categories()
     assert categories
@@ -1115,6 +1121,82 @@ def test_admin_customer_account_view_shows_details(app, client):
     assert b"diagnostic.log" in response.data
     assert b"On-site Activation" in response.data
     assert b"Install documentation" in response.data
+    status_indicators = [
+        b"Missing categories",
+        b"Awaiting verification",
+        b"All required photo categories are verified",
+    ]
+    assert any(indicator in response.data for indicator in status_indicators)
+
+
+def test_admin_can_upload_and_verify_install_photo(app, client):
+    login_admin(client)
+
+    with app.app_context():
+        customer_id = create_detailed_customer_record(app)
+        technician = Technician.query.filter_by(email="lead@example.com").first()
+        assert technician is not None
+        categories = get_install_photo_category_choices()
+        category = categories[0]
+
+    upload_response = client.post(
+        f"/dashboard/customers/{customer_id}/install-photos",
+        data={
+            "category": category,
+            "technician_id": str(technician.id),
+            "notes": "Meter location",
+            "verify_now": "on",
+            "photo": (io.BytesIO(b"new-photo"), "install.jpg"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert upload_response.status_code == 200
+    assert b"Install photo uploaded and verified" in upload_response.data
+
+    with app.app_context():
+        photos = (
+            InstallPhoto.query.filter_by(client_id=customer_id)
+            .order_by(InstallPhoto.uploaded_at.desc())
+            .all()
+        )
+        assert photos
+        uploaded = photos[0]
+        assert uploaded.original_filename == "install.jpg"
+        assert uploaded.uploaded_by_admin_id is not None
+        assert uploaded.notes == "Meter location"
+        assert uploaded.verified_at is not None
+        assert uploaded.verified_by_admin_id == uploaded.uploaded_by_admin_id
+
+
+def test_admin_can_verify_existing_install_photo(app, client):
+    login_admin(client)
+
+    with app.app_context():
+        customer_id = create_detailed_customer_record(app)
+        photo = (
+            InstallPhoto.query.filter_by(client_id=customer_id)
+            .order_by(InstallPhoto.uploaded_at.asc())
+            .first()
+        )
+        assert photo is not None
+        photo_id = photo.id
+        assert photo.verified_at is None
+
+    verify_response = client.post(
+        f"/dashboard/install-photos/{photo_id}/verify",
+        data={"action": "verify"},
+        follow_redirects=True,
+    )
+
+    assert verify_response.status_code == 200
+
+    with app.app_context():
+        updated = InstallPhoto.query.get(photo_id)
+        assert updated is not None
+        assert updated.verified_at is not None
+        assert updated.verified_by_admin_id is not None
 
 
 def test_admin_updates_service_plans_from_account_view(app, client):

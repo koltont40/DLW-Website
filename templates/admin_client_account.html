@@ -9,7 +9,7 @@
       <h1>Customer Account</h1>
       <p class="subtle">Dive into {{ client.name }}'s subscription, billing, and field history.</p>
     </div>
-    <nav class="sidebar-nav">
+    <nav class="sidebar-nav" data-sidebar data-expanded="false">
       <div class="sidebar-group">
         <span class="sidebar-group-label">Navigation</span>
         <a class="sidebar-link" href="{{ url_for('dashboard', section='customers') }}">Back to customers</a>
@@ -18,18 +18,31 @@
           href="{{ url_for('dashboard', section='customers', focus=client.id) }}#customer-detail"
         >Open summary panel</a>
       </div>
-      <div class="sidebar-group">
-        <span class="sidebar-group-label">Quick actions</span>
-        <a class="sidebar-link" href="mailto:{{ client.email }}">Email customer</a>
-        {% if client.phone %}
-        <a class="sidebar-link" href="tel:{{ client.phone }}">Call customer</a>
-        {% endif %}
-        {% if google_maps_url %}
-        <a class="sidebar-link" href="{{ google_maps_url }}" target="_blank" rel="noopener">Google Maps</a>
-        {% endif %}
-        {% if apple_maps_url %}
-        <a class="sidebar-link" href="{{ apple_maps_url }}" target="_blank" rel="noopener">Apple Maps</a>
-        {% endif %}
+      <button
+        class="sidebar-toggle"
+        type="button"
+        data-sidebar-toggle
+        data-expand-label="Show quick actions"
+        data-collapse-label="Hide quick actions"
+        aria-expanded="false"
+        aria-controls="admin-account-sidebar-actions"
+      >
+        Show quick actions
+      </button>
+      <div class="sidebar-groups" id="admin-account-sidebar-actions" data-sidebar-content>
+        <div class="sidebar-group">
+          <span class="sidebar-group-label">Quick actions</span>
+          <a class="sidebar-link" href="mailto:{{ client.email }}">Email customer</a>
+          {% if client.phone %}
+          <a class="sidebar-link" href="tel:{{ client.phone }}">Call customer</a>
+          {% endif %}
+          {% if google_maps_url %}
+          <a class="sidebar-link" href="{{ google_maps_url }}" target="_blank" rel="noopener">Google Maps</a>
+          {% endif %}
+          {% if apple_maps_url %}
+          <a class="sidebar-link" href="{{ apple_maps_url }}" target="_blank" rel="noopener">Apple Maps</a>
+          {% endif %}
+        </div>
       </div>
     </nav>
     <div class="sidebar-footer">
@@ -893,45 +906,254 @@
       {% endif %}
     </section>
 
-    <section class="card">
+    <section class="card" id="install-documentation">
       <header class="section-header">
         <div>
           <h3>Install documentation</h3>
           {% if missing_photo_categories %}
           <p class="alert subtle">Missing categories: {{ missing_photo_categories | join(', ') }}</p>
+          {% elif unverified_photo_categories %}
+          <p class="alert subtle">Awaiting verification: {{ unverified_photo_categories | join(', ') }}</p>
           {% else %}
-          <p class="subtle">All required photo categories are on file.</p>
+          <p class="subtle">All required photo categories are verified.</p>
           {% endif %}
         </div>
       </header>
-      <div class="detail-photo-grid">
-        {% for category in install_photo_categories %}
-        {% set photos = photo_map.get(category) %}
-        <article class="detail-photo-item {% if photos %}complete{% else %}missing{% endif %}">
-          <h4>{{ category }}</h4>
-          {% if photos %}
-          <div class="photo-chip-group">
-            {% for photo in photos %}
-            <a href="{{ url_for('serve_install_photo', photo_id=photo.id) }}" target="_blank" rel="noopener">View</a>
-            {% endfor %}
-          </div>
-          {% else %}
-          <p class="subtle">Upload needed</p>
-          {% endif %}
-        </article>
-        {% endfor %}
-        {% for category, photos in photo_map.items() if category not in install_photo_categories and photos %}
-        <article class="detail-photo-item optional">
-          <h4>{{ category }}</h4>
-          <div class="photo-chip-group">
-            {% for photo in photos %}
-            <a href="{{ url_for('serve_install_photo', photo_id=photo.id) }}" target="_blank" rel="noopener">View</a>
-            {% endfor %}
-          </div>
-        </article>
-        {% endfor %}
+      <div class="install-doc-body">
+        <div class="detail-photo-grid">
+          {% for category in install_photo_categories %}
+          {% set photos = photo_map.get(category) %}
+          <article class="detail-photo-item {% if photos %}complete{% else %}missing{% endif %}">
+            <h4>{{ category }}</h4>
+            {% if photos %}
+            <ul class="photo-review-list">
+              {% for photo in photos %}
+              {% set uploader = photo.uploaded_by_admin.display_name() if photo.uploaded_by_admin else photo.technician.name %}
+              {% set uploaded_at = photo.uploaded_at.strftime('%b %d, %Y %I:%M %p') %}
+              {% set verified_at = photo.verified_at.strftime('%b %d, %Y %I:%M %p') if photo.verified_at else None %}
+              {% set meta_parts = ['Uploaded ' ~ uploaded_at ~ ' by ' ~ uploader] %}
+              {% if photo.notes %}{% set _ = meta_parts.append(photo.notes) %}{% endif %}
+              {% if verified_at %}{% set _ = meta_parts.append('Verified ' ~ verified_at) %}{% endif %}
+              {% set meta_text = meta_parts | join(' • ') %}
+              <li class="photo-review-item {% if photo.verified_at %}verified{% else %}pending{% endif %}">
+                <div class="photo-review-top">
+                  <div class="photo-review-details">
+                    <p class="photo-review-upload">Uploaded {{ uploaded_at }} by {{ uploader }}</p>
+                    {% if photo.notes %}
+                    <p class="photo-review-notes">{{ photo.notes }}</p>
+                    {% endif %}
+                  </div>
+                  <div class="photo-review-actions">
+                    <button
+                      class="button small secondary"
+                      type="button"
+                      data-action="preview-install-photo"
+                      data-photo-url="{{ url_for('serve_install_photo', photo_id=photo.id) }}"
+                      data-photo-alt="{{ category }} photo for {{ client.name }}"
+                      data-photo-meta="{{ meta_text|e }}"
+                    >
+                      Preview
+                    </button>
+                    <form method="post" action="{{ url_for('verify_install_photo', photo_id=photo.id) }}">
+                      <input type="hidden" name="next" value="{{ request.url }}" />
+                      {% if photo.verified_at %}
+                      <input type="hidden" name="action" value="unverify" />
+                      <button class="button small" type="submit">Unverify</button>
+                      {% else %}
+                      <input type="hidden" name="action" value="verify" />
+                      <button class="button small primary" type="submit">Mark verified</button>
+                      {% endif %}
+                    </form>
+                  </div>
+                </div>
+                <div class="photo-review-status">
+                  {% if photo.verified_at %}
+                  <span class="badge success">Verified</span>
+                  <span class="subtle">on {{ photo.verified_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+                  {% if photo.verified_by_admin %}
+                  <span class="subtle">by {{ photo.verified_by_admin.display_name() }}</span>
+                  {% endif %}
+                  {% else %}
+                  <span class="badge warning">Needs review</span>
+                  {% endif %}
+                </div>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="subtle">Upload needed</p>
+            {% endif %}
+          </article>
+          {% endfor %}
+          {% for category, photos in photo_map.items() if category not in install_photo_categories and photos %}
+          <article class="detail-photo-item optional">
+            <h4>{{ category }}</h4>
+            <ul class="photo-review-list">
+              {% for photo in photos %}
+              {% set uploader = photo.uploaded_by_admin.display_name() if photo.uploaded_by_admin else photo.technician.name %}
+              {% set uploaded_at = photo.uploaded_at.strftime('%b %d, %Y %I:%M %p') %}
+              {% set verified_at = photo.verified_at.strftime('%b %d, %Y %I:%M %p') if photo.verified_at else None %}
+              {% set meta_parts = ['Uploaded ' ~ uploaded_at ~ ' by ' ~ uploader] %}
+              {% if photo.notes %}{% set _ = meta_parts.append(photo.notes) %}{% endif %}
+              {% if verified_at %}{% set _ = meta_parts.append('Verified ' ~ verified_at) %}{% endif %}
+              {% set meta_text = meta_parts | join(' • ') %}
+              <li class="photo-review-item {% if photo.verified_at %}verified{% else %}pending{% endif %}">
+                <div class="photo-review-top">
+                  <div class="photo-review-details">
+                    <p class="photo-review-upload">Uploaded {{ uploaded_at }} by {{ uploader }}</p>
+                    {% if photo.notes %}
+                    <p class="photo-review-notes">{{ photo.notes }}</p>
+                    {% endif %}
+                  </div>
+                  <div class="photo-review-actions">
+                    <button
+                      class="button small secondary"
+                      type="button"
+                      data-action="preview-install-photo"
+                      data-photo-url="{{ url_for('serve_install_photo', photo_id=photo.id) }}"
+                      data-photo-alt="{{ category }} photo for {{ client.name }}"
+                      data-photo-meta="{{ meta_text|e }}"
+                    >
+                      Preview
+                    </button>
+                    <form method="post" action="{{ url_for('verify_install_photo', photo_id=photo.id) }}">
+                      <input type="hidden" name="next" value="{{ request.url }}" />
+                      {% if photo.verified_at %}
+                      <input type="hidden" name="action" value="unverify" />
+                      <button class="button small" type="submit">Unverify</button>
+                      {% else %}
+                      <input type="hidden" name="action" value="verify" />
+                      <button class="button small primary" type="submit">Mark verified</button>
+                      {% endif %}
+                    </form>
+                  </div>
+                </div>
+                <div class="photo-review-status">
+                  {% if photo.verified_at %}
+                  <span class="badge success">Verified</span>
+                  <span class="subtle">on {{ photo.verified_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+                  {% if photo.verified_by_admin %}
+                  <span class="subtle">by {{ photo.verified_by_admin.display_name() }}</span>
+                  {% endif %}
+                  {% else %}
+                  <span class="badge warning">Needs review</span>
+                  {% endif %}
+                </div>
+              </li>
+              {% endfor %}
+            </ul>
+          </article>
+          {% endfor %}
+        </div>
+        <form
+          class="stacked-form install-photo-upload"
+          method="post"
+          action="{{ url_for('upload_install_photo_admin', client_id=client.id) }}"
+          enctype="multipart/form-data"
+        >
+          <h4>Add install photo</h4>
+          <input type="hidden" name="next" value="{{ request.url }}" />
+          <label>
+            Photo category
+            <select name="category">
+              {% for category in install_photo_categories %}
+              <option value="{{ category }}">{{ category }}</option>
+              {% endfor %}
+              {% for category, photos in photo_map.items() if category not in install_photo_categories %}
+              <option value="{{ category }}">{{ category }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Technician
+            <select name="technician_id" required>
+              <option value="">Select technician</option>
+              {% for tech in technicians %}
+              <option value="{{ tech.id }}">{{ tech.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Photo file
+            <input type="file" name="photo" accept="image/*" required />
+          </label>
+          <label>
+            Notes
+            <textarea name="notes" rows="2" placeholder="Location details or context"></textarea>
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" name="verify_now" />
+            <span>Mark verified after upload</span>
+          </label>
+          <button class="button primary" type="submit">Upload photo</button>
+        </form>
       </div>
     </section>
+    <div id="install-photo-modal" class="photo-modal" aria-hidden="true">
+      <div class="photo-modal-backdrop" data-action="close-modal"></div>
+      <div class="photo-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="photo-modal-meta" tabindex="-1">
+        <button class="photo-modal-close" type="button" data-action="close-modal" aria-label="Close preview">&times;</button>
+        <img id="photo-modal-image" src="" alt="" />
+        <p id="photo-modal-meta" class="photo-modal-meta"></p>
+      </div>
+    </div>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const modal = document.getElementById('install-photo-modal');
+    if (!modal) {
+      return;
+    }
+    const dialog = modal.querySelector('.photo-modal-dialog');
+    const image = modal.querySelector('#photo-modal-image');
+    const metaField = modal.querySelector('#photo-modal-meta');
+    const closeButtons = modal.querySelectorAll('[data-action="close-modal"]');
+
+    const closeModal = () => {
+      modal.classList.remove('open');
+      modal.setAttribute('aria-hidden', 'true');
+      if (image) {
+        image.removeAttribute('src');
+        image.alt = '';
+      }
+    };
+
+    closeButtons.forEach((button) => {
+      button.addEventListener('click', closeModal);
+    });
+
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) {
+        closeModal();
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && modal.classList.contains('open')) {
+        closeModal();
+      }
+    });
+
+    document.querySelectorAll('[data-action="preview-install-photo"]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const url = button.getAttribute('data-photo-url');
+        const alt = button.getAttribute('data-photo-alt') || 'Install photo preview';
+        const meta = button.getAttribute('data-photo-meta') || '';
+        if (image && url) {
+          image.src = url;
+          image.alt = alt;
+        }
+        if (metaField) {
+          metaField.textContent = meta;
+        }
+        modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
+        if (dialog) {
+          dialog.focus();
+        }
+      });
+    });
+  });
+</script>
 </div>
 </div>
 {% if stripe_ready and stripe_publishable_key %}
