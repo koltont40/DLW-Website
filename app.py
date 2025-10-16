@@ -2289,6 +2289,8 @@ def create_app(test_config: dict | None = None) -> Flask:
         "TLS_CONFIG_FOLDER": str(instance_path / "letsencrypt"),
         "TLS_WORK_FOLDER": str(instance_path / "letsencrypt-work"),
         "TLS_LOG_FOLDER": str(instance_path / "letsencrypt-logs"),
+        "TLS_CERTIFICATE_PATH": os.environ.get("TLS_CERTIFICATE_PATH"),
+        "TLS_PRIVATE_KEY_PATH": os.environ.get("TLS_PRIVATE_KEY_PATH"),
         "CONTACT_EMAIL": os.environ.get(
             "CONTACT_EMAIL", "info@dixielandwireless.com"
         ),
@@ -2462,6 +2464,60 @@ def issue_lets_encrypt_certificate(
         return False, "Certificate files were not found after provisioning.", None, None
 
     return True, None, cert_path, key_path
+
+
+def resolve_tls_certificate_files(
+    app: Flask, tls_config: TLSConfig | None = None
+) -> tuple[Path, Path] | None:
+    candidates: list[tuple[str | Path | None, str | Path | None]] = []
+
+    if tls_config:
+        candidates.append((tls_config.certificate_path, tls_config.private_key_path))
+
+    config_cert = app.config.get("TLS_CERTIFICATE_PATH")
+    config_key = app.config.get("TLS_PRIVATE_KEY_PATH")
+    candidates.append((config_cert, config_key))
+
+    env_cert = os.environ.get("TLS_CERTIFICATE_PATH")
+    env_key = os.environ.get("TLS_PRIVATE_KEY_PATH")
+    candidates.append((env_cert, env_key))
+
+    domain = None
+    if tls_config and tls_config.domain:
+        domain = tls_config.domain.strip()
+
+    if domain:
+        candidates.append(
+            (
+                Path(f"/etc/letsencrypt/live/{domain}/fullchain.pem"),
+                Path(f"/etc/letsencrypt/live/{domain}/privkey.pem"),
+            )
+        )
+
+    candidates.append(
+        (
+            Path("/etc/letsencrypt/live/new1.dixielandwireless.com/fullchain.pem"),
+            Path("/etc/letsencrypt/live/new1.dixielandwireless.com/privkey.pem"),
+        )
+    )
+
+    seen: set[tuple[str, str]] = set()
+    for cert_candidate, key_candidate in candidates:
+        if not cert_candidate or not key_candidate:
+            continue
+
+        cert_path = Path(cert_candidate).expanduser()
+        key_path = Path(key_candidate).expanduser()
+
+        signature = (str(cert_path), str(key_path))
+        if signature in seen:
+            continue
+        seen.add(signature)
+
+        if cert_path.exists() and key_path.exists():
+            return cert_path, key_path
+
+    return None
 
 
 def send_email_via_office365(
@@ -10165,11 +10221,48 @@ if __name__ == "__main__":
 
     with app.app_context():
         tls_config = TLSConfig.query.first()
+        resolved: tuple[Path, Path] | None = None
         if tls_config and tls_config.certificate_ready():
-            ssl_context = (
-                str(Path(tls_config.certificate_path)),
-                str(Path(tls_config.private_key_path)),
+            resolved = (
+                Path(tls_config.certificate_path),
+                Path(tls_config.private_key_path),
             )
+        else:
+            resolved = resolve_tls_certificate_files(app, tls_config)
+            if resolved:
+                cert_path, key_path = resolved
+                if tls_config is None:
+                    tls_config = TLSConfig(
+                        certificate_path=str(cert_path),
+                        private_key_path=str(key_path),
+                        challenge_path=app.config.get("TLS_CHALLENGE_FOLDER"),
+                        status="active",
+                        last_provisioned_at=utcnow(),
+                    )
+                    db.session.add(tls_config)
+                    db.session.commit()
+                else:
+                    changed = False
+                    if tls_config.certificate_path != str(cert_path):
+                        tls_config.certificate_path = str(cert_path)
+                        changed = True
+                    if tls_config.private_key_path != str(key_path):
+                        tls_config.private_key_path = str(key_path)
+                        changed = True
+                    if tls_config.status != "active":
+                        tls_config.status = "active"
+                        changed = True
+                    if tls_config.last_error:
+                        tls_config.last_error = None
+                        changed = True
+                    if tls_config.last_provisioned_at is None:
+                        tls_config.last_provisioned_at = utcnow()
+                        changed = True
+                    if changed:
+                        db.session.commit()
+
+        if resolved:
+            ssl_context = (str(resolved[0]), str(resolved[1]))
 
     http_port = 80
     https_port = 443
