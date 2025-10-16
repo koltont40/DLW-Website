@@ -9148,12 +9148,99 @@ def register_routes(app: Flask) -> None:
             if not cleaned:
                 return None
             lowered = cleaned.lower()
-            if lowered in {"online", "offline"}:
-                return lowered
-            if "off" in lowered:
-                return "offline"
-            if "on" in lowered:
-                return "online"
+            normalized = re.sub(r"[\s_-]+", " ", lowered).strip()
+            if not normalized:
+                return None
+            if normalized in {"online", "offline"}:
+                return normalized
+            if normalized in {"unknown", "not available", "n/a", "na"}:
+                return None
+
+            compact = normalized.replace(" ", "")
+            offline_markers = (
+                "offline",
+                "off line",
+                "off-line",
+                "disconnected",
+                "disconnect",
+                "not connected",
+                "notconnected",
+                "unconnected",
+                "not reachable",
+                "notreachable",
+                "unreachable",
+                "not responding",
+                "notresponding",
+                "no link",
+                "nolink",
+                "link down",
+                "linkdown",
+                "down",
+                "inactive",
+                "disabled",
+                "degraded",
+                "lost",
+                "never connected",
+                "neverconnected",
+                "never seen",
+                "neverseen",
+                "not operational",
+                "notoperational",
+                "no signal",
+                "nosignal",
+                "no heartbeat",
+                "noheartbeat",
+                "heartbeat lost",
+                "lost heartbeat",
+                "heartbeatlost",
+                "dead",
+                "timeout",
+                "time out",
+                "timed out",
+                "timedout",
+                "expired",
+                "stale",
+                "stalled",
+                "critical",
+                "alarm",
+                "alert",
+            )
+            online_markers = (
+                "online",
+                "on line",
+                "on-line",
+                "connected",
+                "link up",
+                "linkup",
+                "up",
+                "reachable",
+                "responding",
+                "active",
+                "enabled",
+                "available",
+                "operational",
+                "running",
+                "ok",
+                "okay",
+                "good",
+                "great",
+                "excellent",
+                "healthy",
+                "normal",
+                "alive",
+                "heartbeat ok",
+                "stable",
+            )
+
+            tokens = normalized.split()
+            for marker in offline_markers:
+                marker_compact = marker.replace(" ", "")
+                if marker in normalized or marker_compact in compact or marker in tokens:
+                    return "offline"
+            for marker in online_markers:
+                marker_compact = marker.replace(" ", "")
+                if marker in normalized or marker_compact in compact or marker in tokens:
+                    return "online"
             return None
 
         def _extract_heartbeat_timestamp(record: dict[str, object]) -> datetime | None:
@@ -9166,6 +9253,24 @@ def register_routes(app: Flask) -> None:
                 "last_seen",
                 "seenAt",
                 "seen_at",
+                "lastSeenAt",
+                "last_seen_at",
+                "lastContact",
+                "last_contact",
+                "lastContactAt",
+                "last_contact_at",
+                "lastHeartbeat",
+                "last_heartbeat",
+                "lastCommunication",
+                "last_communication",
+                "lastCommunicationAt",
+                "last_communication_at",
+                "lastReachable",
+                "last_reachable",
+                "lastReachableAt",
+                "last_reachable_at",
+                "connectedAt",
+                "connected_at",
             ):
                 timestamp = parse_uisp_timestamp(record.get(key))  # type: ignore[arg-type]
                 if timestamp:
@@ -9178,6 +9283,24 @@ def register_routes(app: Flask) -> None:
                     "lastSeen",
                     "last_seen",
                     "heartbeatAt",
+                    "lastSeenAt",
+                    "last_seen_at",
+                    "lastContact",
+                    "last_contact",
+                    "lastContactAt",
+                    "last_contact_at",
+                    "lastHeartbeat",
+                    "last_heartbeat",
+                    "lastCommunication",
+                    "last_communication",
+                    "lastCommunicationAt",
+                    "last_communication_at",
+                    "lastReachable",
+                    "last_reachable",
+                    "lastReachableAt",
+                    "last_reachable_at",
+                    "connectedAt",
+                    "connected_at",
                 ):
                     timestamp = parse_uisp_timestamp(status_field.get(key))  # type: ignore[arg-type]
                     if timestamp:
@@ -9214,6 +9337,21 @@ def register_routes(app: Flask) -> None:
                         device_info.get("device_id"),
                     ]
                 )
+                identification_info = device_info.get("identification")
+                if isinstance(identification_info, dict):
+                    identifiers.extend(
+                        [
+                            identification_info.get("id"),
+                            identification_info.get("_id"),
+                            identification_info.get("uid"),
+                            identification_info.get("deviceId"),
+                            identification_info.get("device_id"),
+                        ]
+                    )
+                    for key in ("mac", "macAddress", "mac_address"):
+                        normalized_mac = _normalize_mac(identification_info.get(key))
+                        if normalized_mac and normalized_mac not in heartbeat_mac_index:
+                            heartbeat_mac_index[normalized_mac] = record
                 for key in ("mac", "macAddress", "mac_address"):
                     normalized_mac = _normalize_mac(device_info.get(key))
                     if normalized_mac and normalized_mac not in heartbeat_mac_index:
@@ -9326,6 +9464,25 @@ def register_routes(app: Flask) -> None:
             status_value = (
                 _normalize_status_value(status_info.get("value"))
                 or _normalize_status_value(status_info.get("state"))
+                or _normalize_status_value(status_info.get("status"))
+                or _normalize_status_value(status_info.get("connection"))
+                or _normalize_status_value(status_info.get("connectionState"))
+                or _normalize_status_value(status_info.get("connection_state"))
+                or _normalize_status_value(status_info.get("connectionStatus"))
+                or _normalize_status_value(status_info.get("connectionStatusLabel"))
+                or _normalize_status_value(status_info.get("stateLabel"))
+                or _normalize_status_value(status_info.get("statusLabel"))
+                or _normalize_status_value(status_info.get("statusText"))
+                or _normalize_status_value(status_info.get("statusDescription"))
+                or _normalize_status_value(status_info.get("health"))
+                or _normalize_status_value(status_info.get("healthStatus"))
+                or _normalize_status_value(status_info.get("health_status"))
+                or _normalize_status_value(status_info.get("heartbeatStatus"))
+                or _normalize_status_value(status_info.get("heartbeat_status"))
+                or _normalize_status_value(status_info.get("online"))
+                or _normalize_status_value(status_info.get("isOnline"))
+                or _normalize_status_value(status_info.get("connected"))
+                or _normalize_status_value(status_info.get("availability"))
                 or _normalize_status_value(status_info)
                 or _normalize_status_value(entry.get("status"))
                 or "unknown"
@@ -9334,8 +9491,48 @@ def register_routes(app: Flask) -> None:
             last_seen = parse_uisp_timestamp(
                 status_info.get("lastSeen")
                 or status_info.get("last_seen")
+                or status_info.get("lastSeenAt")
+                or status_info.get("last_seen_at")
+                or status_info.get("lastContact")
+                or status_info.get("last_contact")
+                or status_info.get("lastContactAt")
+                or status_info.get("last_contact_at")
+                or status_info.get("lastHeartbeat")
+                or status_info.get("last_heartbeat")
+                or status_info.get("lastCommunication")
+                or status_info.get("last_communication")
+                or status_info.get("lastCommunicationAt")
+                or status_info.get("last_communication_at")
+                or status_info.get("lastReachable")
+                or status_info.get("last_reachable")
+                or status_info.get("lastReachableAt")
+                or status_info.get("last_reachable_at")
+                or status_info.get("connectedAt")
+                or status_info.get("connected_at")
+                or status_info.get("updatedAt")
+                or status_info.get("updated_at")
                 or entry.get("lastSeen")
                 or entry.get("last_seen")
+                or entry.get("lastSeenAt")
+                or entry.get("last_seen_at")
+                or entry.get("lastContact")
+                or entry.get("last_contact")
+                or entry.get("lastContactAt")
+                or entry.get("last_contact_at")
+                or entry.get("lastHeartbeat")
+                or entry.get("last_heartbeat")
+                or entry.get("lastCommunication")
+                or entry.get("last_communication")
+                or entry.get("lastCommunicationAt")
+                or entry.get("last_communication_at")
+                or entry.get("lastReachable")
+                or entry.get("last_reachable")
+                or entry.get("lastReachableAt")
+                or entry.get("last_reachable_at")
+                or entry.get("connectedAt")
+                or entry.get("connected_at")
+                or entry.get("updatedAt")
+                or entry.get("updated_at")
             )
 
             heartbeat_status_value: str | None = None
@@ -9348,6 +9545,14 @@ def register_routes(app: Flask) -> None:
                     "connection",
                     "connectionState",
                     "heartbeatStatus",
+                    "stateLabel",
+                    "statusLabel",
+                    "statusText",
+                    "statusDescription",
+                    "health",
+                    "healthStatus",
+                    "health_status",
+                    "availability",
                     "online",
                     "isOnline",
                     "connected",
