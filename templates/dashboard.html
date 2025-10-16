@@ -1120,6 +1120,10 @@
                 {% if device.site_name %}<span>{{ device.site_name }}</span>{% endif %}
                 {% if device.tower %}<span>Tower · {{ device.tower.name }}</span>{% endif %}
                 {% if device.ip_address %}<span>IP {{ device.ip_address }}</span>{% endif %}
+                <span>
+                  Heartbeat {{ device.heartbeat_status|capitalize }} ·
+                  {{ device.last_heartbeat_at.strftime('%b %d, %Y %I:%M %p') if device.last_heartbeat_at else 'Unknown' }}
+                </span>
                 <span>Last seen {{ device.last_seen_at.strftime('%b %d, %Y %I:%M %p') if device.last_seen_at else 'Unknown' }}</span>
               </div>
             </div>

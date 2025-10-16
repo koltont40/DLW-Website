@@ -247,6 +247,24 @@ def app(tmp_path):
         db.session.remove()
 
 
+def test_parse_uisp_timestamp_accepts_multiple_formats():
+    iso_value = "2024-05-01T12:00:00Z"
+    parsed_iso = app_module.parse_uisp_timestamp(iso_value)
+    assert parsed_iso is not None
+    assert parsed_iso.tzinfo is not None
+
+    epoch_seconds = 1_700_000_000
+    parsed_epoch = app_module.parse_uisp_timestamp(epoch_seconds)
+    assert parsed_epoch == datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
+
+    epoch_millis = epoch_seconds * 1000
+    parsed_millis = app_module.parse_uisp_timestamp(epoch_millis)
+    assert parsed_millis == datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
+
+    parsed_string_epoch = app_module.parse_uisp_timestamp(str(epoch_seconds))
+    assert parsed_string_epoch == parsed_epoch
+
+
 @pytest.fixture
 def client(app):
     return app.test_client()
@@ -1450,7 +1468,7 @@ def test_process_autopay_run_disabled_without_stripe(app):
 def test_autopay_schedule_request_and_approval(app, client, monkeypatch):
     sent_notifications: list[tuple[str, str, str]] = []
 
-    def fake_send_email(app_obj, recipient, subject, body):
+    def fake_send_email(app_obj, recipient, subject, body, attachments=None):
         sent_notifications.append((recipient, subject, body))
         return True
 
@@ -1809,7 +1827,7 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
 
     sent_notifications: list[tuple[str, str, str]] = []
 
-    def fake_send_email(app_obj, recipient, subject, body):
+    def fake_send_email(app_obj, recipient, subject, body, attachments=None):
         sent_notifications.append((recipient, subject, body))
         return True
 
@@ -1859,6 +1877,26 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
         },
     ]
 
+    heartbeat_payload = {
+        "items": [
+            {
+                "deviceId": "device-1",
+                "status": {"value": "online"},
+                "timestamp": "2024-05-01T12:00:30Z",
+            },
+            {
+                "deviceId": "device-2",
+                "status": {"value": "offline"},
+                "timestamp": "2024-05-01T11:50:00Z",
+            },
+            {
+                "deviceId": "device-3",
+                "status": {"value": "online"},
+                "timestamp": "2024-05-01T12:05:30Z",
+            },
+        ]
+    }
+
     class DummyResponse:
         status_code = 200
 
@@ -1873,6 +1911,15 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
             return "ok"
 
     def fake_get(url, headers=None, params=None, timeout=None):
+        if any(
+            segment in url
+            for segment in (
+                "device-heartbeats",
+                "devices/heartbeats",
+                "devices/monitoring",
+            )
+        ):
+            return DummyResponse(heartbeat_payload)
         request_page = 1
         if params and "page" in params:
             try:
@@ -1918,8 +1965,12 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
         assert len(devices) == 3
         online_device = next(device for device in devices if device.uisp_id == "device-1")
         assert online_device.tower_id == north_tower_id
+        assert online_device.heartbeat_status == "online"
+        assert online_device.last_heartbeat_at is not None
         offline_device = next(device for device in devices if device.uisp_id == "device-2")
         assert offline_device.status == "offline"
+        assert offline_device.heartbeat_status == "offline"
+        assert offline_device.last_heartbeat_at is not None
         assert offline_device.outage_notified_at is not None
         offline_id = offline_device.id
         lake_device = next(device for device in devices if device.uisp_id == "device-3")
@@ -1956,6 +2007,8 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
         "value": "online",
         "lastSeen": "2024-05-01T12:30:00Z",
     }
+    heartbeat_payload["items"][1]["status"] = {"value": "online"}
+    heartbeat_payload["items"][1]["timestamp"] = "2024-05-01T12:30:30Z"
     client.post("/uisp/devices/import", follow_redirects=True)
     assert not sent_notifications
 
@@ -1963,6 +2016,8 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
         "value": "offline",
         "lastSeen": "2024-05-01T12:45:00Z",
     }
+    heartbeat_payload["items"][1]["status"] = {"value": "offline"}
+    heartbeat_payload["items"][1]["timestamp"] = "2024-05-01T12:45:30Z"
     sent_notifications.clear()
     client.post("/uisp/devices/import", follow_redirects=True)
 
@@ -2946,7 +3001,7 @@ def test_portal_customer_adds_card_via_stripe(app, client, monkeypatch):
 def test_ticket_messaging_allows_replies_with_attachments(app, client, monkeypatch):
     sent_notifications: list[tuple[str, str, str]] = []
 
-    def fake_send_email(app_obj, recipient, subject, body):
+    def fake_send_email(app_obj, recipient, subject, body, attachments=None):
         sent_notifications.append((recipient, subject, body))
         return True
 

@@ -488,6 +488,71 @@ class UispApiClient:
 
         return devices
 
+    def fetch_device_heartbeats(self) -> list[dict]:
+        headers = {
+            "accept": "application/json",
+            "x-auth-token": self.token,
+        }
+        candidate_paths = [
+            "/nms/api/v2.1/device-heartbeats",
+            "/nms/api/v2.1/devices/heartbeats",
+            "/nms/api/v2.1/monitoring/device-heartbeats",
+            "/nms/api/v2.1/devices/monitoring",
+            "/nms/api/v2/device-heartbeats",
+            "/nms/api/v2/devices/heartbeats",
+        ]
+
+        soft_fail_statuses = {400, 404, 405}
+        heartbeat_entries: list[dict] = []
+        errors: list[str] = []
+
+        for path in candidate_paths:
+            url = urljoin(self.base_url + "/", path.lstrip("/"))
+            try:
+                response = requests.get(url, headers=headers, timeout=self.timeout)
+            except requests.RequestException as exc:  # pragma: no cover - network error
+                errors.append(f"{path} request failed: {exc}")
+                continue
+
+            if response.status_code == 200:
+                try:
+                    payload = response.json()
+                except ValueError as exc:  # pragma: no cover - defensive guard
+                    errors.append(f"{path} returned invalid JSON: {exc}")
+                    continue
+
+                entries: list[dict] = []
+                if isinstance(payload, list):
+                    entries = [entry for entry in payload if isinstance(entry, dict)]
+                elif isinstance(payload, dict):
+                    for key in ("items", "data", "heartbeats", "devices", "results"):
+                        value = payload.get(key)
+                        if isinstance(value, list):
+                            entries = [entry for entry in value if isinstance(entry, dict)]
+                            break
+                    else:
+                        if all(isinstance(value, dict) for value in payload.values()):
+                            entries = [
+                                value
+                                for value in payload.values()
+                                if isinstance(value, dict)
+                            ]
+
+                if entries:
+                    heartbeat_entries = entries
+                    break
+            elif response.status_code in soft_fail_statuses:
+                continue
+            else:
+                errors.append(
+                    f"{path} responded with HTTP {response.status_code}: {response.text}"
+                )
+
+        if errors and not heartbeat_entries:
+            raise UispApiError("; ".join(errors))
+
+        return heartbeat_entries
+
 def _coerce_int(value: object | None) -> int | None:
     if value is None:
         return None
@@ -513,21 +578,42 @@ def _coerce_int(value: object | None) -> int | None:
     return None
 
 
-def parse_uisp_timestamp(value: str | None) -> datetime | None:
-    if not value:
+def parse_uisp_timestamp(value: str | int | float | None) -> datetime | None:
+    if value is None:
         return None
-    cleaned = value.strip()
-    if not cleaned:
-        return None
-    if cleaned.endswith("Z"):
-        cleaned = cleaned[:-1] + "+00:00"
-    try:
-        timestamp = datetime.fromisoformat(cleaned)
-    except ValueError:
-        return None
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=UTC)
-    return timestamp.astimezone(UTC)
+
+    if isinstance(value, (int, float)):
+        if value <= 0:
+            return None
+        seconds = float(value)
+        if seconds > 1_000_000_000_000:
+            seconds = seconds / 1000.0
+        try:
+            return datetime.fromtimestamp(seconds, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    cleaned: str
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if cleaned.endswith("Z"):
+            cleaned = cleaned[:-1] + "+00:00"
+        if cleaned.isdigit():
+            return parse_uisp_timestamp(int(cleaned))
+        try:
+            timestamp = datetime.fromisoformat(cleaned)
+        except ValueError:
+            try:
+                return datetime.fromtimestamp(float(cleaned), tz=UTC)
+            except (TypeError, ValueError, OverflowError, OSError):
+                return None
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+        return timestamp.astimezone(UTC)
+
+    return None
 
 
 def init_stripe(app: Flask) -> None:
@@ -2247,6 +2333,8 @@ class UispDevice(db.Model):
     ip_address = db.Column(db.String(64))
     status = db.Column(db.String(20), nullable=False, default="unknown")
     last_seen_at = db.Column(db.DateTime(timezone=True))
+    heartbeat_status = db.Column(db.String(20), nullable=False, default="unknown")
+    last_heartbeat_at = db.Column(db.DateTime(timezone=True))
     firmware_version = db.Column(db.String(64))
     client_id = db.Column(db.Integer, db.ForeignKey("clients.id"))
     tower_id = db.Column(db.Integer, db.ForeignKey("network_towers.id"))
@@ -4098,6 +4186,13 @@ def ensure_uisp_schema() -> None:
             "ALTER TABLE uisp_devices ADD COLUMN outage_notified_at TIMESTAMP"
         ),
         "updated_at": "ALTER TABLE uisp_devices ADD COLUMN updated_at TIMESTAMP",
+        "heartbeat_status": (
+            "ALTER TABLE uisp_devices ADD COLUMN heartbeat_status VARCHAR(20) "
+            "NOT NULL DEFAULT 'unknown'"
+        ),
+        "last_heartbeat_at": (
+            "ALTER TABLE uisp_devices ADD COLUMN last_heartbeat_at TIMESTAMP"
+        ),
     }
 
     for column_name, statement in column_statements.items():
@@ -9026,6 +9121,114 @@ def register_routes(app: Flask) -> None:
                 cleaned = str(value).strip()
             return cleaned or None
 
+        def _normalize_mac(value: object | None) -> str | None:
+            cleaned = _clean_string(value)
+            if not cleaned:
+                return None
+            normalized = "".join(ch for ch in cleaned if ch.isalnum())
+            return normalized.lower() or None
+
+        def _normalize_status_value(value: object | None) -> str | None:
+            if value is None:
+                return None
+            if isinstance(value, dict):
+                for key in ("value", "status", "state", "label", "text"):
+                    if key in value:
+                        normalized = _normalize_status_value(value.get(key))
+                        if normalized:
+                            return normalized
+                if "online" in value and isinstance(value.get("online"), bool):
+                    return "online" if value["online"] else "offline"
+                if "connected" in value and isinstance(value.get("connected"), bool):
+                    return "online" if value["connected"] else "offline"
+                return None
+            if isinstance(value, bool):
+                return "online" if value else "offline"
+            cleaned = _clean_string(value)
+            if not cleaned:
+                return None
+            lowered = cleaned.lower()
+            if lowered in {"online", "offline"}:
+                return lowered
+            if "off" in lowered:
+                return "offline"
+            if "on" in lowered:
+                return "online"
+            return None
+
+        def _extract_heartbeat_timestamp(record: dict[str, object]) -> datetime | None:
+            timestamp = None
+            for key in (
+                "heartbeatAt",
+                "timestamp",
+                "time",
+                "lastSeen",
+                "last_seen",
+                "seenAt",
+                "seen_at",
+            ):
+                timestamp = parse_uisp_timestamp(record.get(key))  # type: ignore[arg-type]
+                if timestamp:
+                    return timestamp
+            status_field = record.get("status")
+            if isinstance(status_field, dict):
+                for key in (
+                    "timestamp",
+                    "time",
+                    "lastSeen",
+                    "last_seen",
+                    "heartbeatAt",
+                ):
+                    timestamp = parse_uisp_timestamp(status_field.get(key))  # type: ignore[arg-type]
+                    if timestamp:
+                        return timestamp
+            return None
+
+        heartbeat_index: dict[str, dict] = {}
+        heartbeat_mac_index: dict[str, dict] = {}
+        try:
+            heartbeat_entries = api_client.fetch_device_heartbeats()
+        except UispApiError as exc:
+            current_app.logger.warning("Unable to fetch UISP heartbeats: %s", exc)
+            heartbeat_entries = []
+
+        for record in heartbeat_entries:
+            if not isinstance(record, dict):
+                continue
+            identifiers: list[object | None] = [
+                record.get("deviceId"),
+                record.get("device_id"),
+                record.get("deviceUid"),
+                record.get("uid"),
+                record.get("id"),
+                record.get("_id"),
+            ]
+            device_info = record.get("device")
+            if isinstance(device_info, dict):
+                identifiers.extend(
+                    [
+                        device_info.get("id"),
+                        device_info.get("_id"),
+                        device_info.get("uid"),
+                        device_info.get("deviceId"),
+                        device_info.get("device_id"),
+                    ]
+                )
+                for key in ("mac", "macAddress", "mac_address"):
+                    normalized_mac = _normalize_mac(device_info.get(key))
+                    if normalized_mac and normalized_mac not in heartbeat_mac_index:
+                        heartbeat_mac_index[normalized_mac] = record
+            for key in ("mac", "macAddress", "mac_address"):
+                normalized_mac = _normalize_mac(record.get(key))
+                if normalized_mac and normalized_mac not in heartbeat_mac_index:
+                    heartbeat_mac_index[normalized_mac] = record
+            for candidate in identifiers:
+                cleaned = _clean_string(candidate)
+                if cleaned:
+                    key = cleaned.lower()
+                    if key not in heartbeat_index:
+                        heartbeat_index[key] = record
+
         created = 0
         updated = 0
         outages = 0
@@ -9098,22 +9301,35 @@ def register_routes(app: Flask) -> None:
             site_name = _clean_string(site_info.get("name") or entry.get("siteName"))
             ip_address = _clean_string(entry.get("ipAddress") or entry.get("ip"))
 
+            heartbeat_entry = None
+            if heartbeat_index or heartbeat_mac_index:
+                for candidate in id_candidates:
+                    cleaned_candidate = _clean_string(candidate)
+                    if cleaned_candidate:
+                        heartbeat_entry = heartbeat_index.get(cleaned_candidate.lower())
+                        if heartbeat_entry:
+                            break
+                if heartbeat_entry is None and mac:
+                    normalized_mac = _normalize_mac(mac)
+                    if normalized_mac:
+                        heartbeat_entry = heartbeat_mac_index.get(normalized_mac)
+                if heartbeat_entry is None:
+                    fallback_mac_normalized = _normalize_mac(
+                        identification.get("mac")
+                        or entry.get("macAddress")
+                        or entry.get("mac")
+                    )
+                    if fallback_mac_normalized:
+                        heartbeat_entry = heartbeat_mac_index.get(fallback_mac_normalized)
+
             status_info = entry.get("status") or {}
-            status_raw = (
-                status_info.get("value")
-                or status_info.get("state")
-                or entry.get("status")
+            status_value = (
+                _normalize_status_value(status_info.get("value"))
+                or _normalize_status_value(status_info.get("state"))
+                or _normalize_status_value(status_info)
+                or _normalize_status_value(entry.get("status"))
+                or "unknown"
             )
-            if status_raw is None and isinstance(status_info.get("online"), bool):
-                status_raw = "online" if status_info.get("online") else "offline"
-            status_value = (_clean_string(status_raw) or "unknown").lower()
-            if status_value not in {"online", "offline"}:
-                if "off" in status_value:
-                    status_value = "offline"
-                elif "on" in status_value:
-                    status_value = "online"
-                else:
-                    status_value = "unknown"
 
             last_seen = parse_uisp_timestamp(
                 status_info.get("lastSeen")
@@ -9121,6 +9337,33 @@ def register_routes(app: Flask) -> None:
                 or entry.get("lastSeen")
                 or entry.get("last_seen")
             )
+
+            heartbeat_status_value: str | None = None
+            heartbeat_seen: datetime | None = None
+            if heartbeat_entry:
+                for key in (
+                    "status",
+                    "state",
+                    "value",
+                    "connection",
+                    "connectionState",
+                    "heartbeatStatus",
+                    "online",
+                    "isOnline",
+                    "connected",
+                ):
+                    heartbeat_status_value = _normalize_status_value(
+                        heartbeat_entry.get(key)
+                    )
+                    if heartbeat_status_value:
+                        break
+                heartbeat_seen = _extract_heartbeat_timestamp(heartbeat_entry)
+                if heartbeat_seen and (
+                    last_seen is None or heartbeat_seen > last_seen
+                ):
+                    last_seen = heartbeat_seen
+                if heartbeat_status_value:
+                    status_value = heartbeat_status_value
 
             firmware_info = entry.get("firmware") or {}
             firmware_version = _clean_string(
@@ -9146,6 +9389,8 @@ def register_routes(app: Flask) -> None:
                 device.ip_address,
                 device.firmware_version,
                 device.last_seen_at,
+                device.heartbeat_status,
+                device.last_heartbeat_at,
             )
 
             device.name = name
@@ -9154,6 +9399,14 @@ def register_routes(app: Flask) -> None:
             device.site_name = site_name
             device.ip_address = ip_address
             device.firmware_version = firmware_version
+            if heartbeat_status_value:
+                device.heartbeat_status = heartbeat_status_value
+            elif status_value in {"online", "offline"}:
+                device.heartbeat_status = status_value
+            if heartbeat_seen:
+                device.last_heartbeat_at = heartbeat_seen
+            elif device.last_heartbeat_at is None and last_seen:
+                device.last_heartbeat_at = last_seen
             device.last_seen_at = last_seen
             device.updated_at = now
 
@@ -9176,6 +9429,8 @@ def register_routes(app: Flask) -> None:
                         ip_address,
                         firmware_version,
                         last_seen,
+                        device.heartbeat_status,
+                        device.last_heartbeat_at,
                     )
                     or status_changed
                 ):
@@ -9198,6 +9453,8 @@ def register_routes(app: Flask) -> None:
                         f"IP address: {device.ip_address or 'N/A'}\n"
                         f"MAC address: {device.mac_address or 'N/A'}\n"
                         f"Last seen: {_format_last_seen(device.last_seen_at)}\n"
+                        f"Heartbeat status: {(device.heartbeat_status or 'unknown').capitalize()}\n"
+                        f"Last heartbeat: {_format_last_seen(device.last_heartbeat_at)}\n"
                         f"Assigned customer: {device.client.name if device.client else 'Unassigned'}\n\n"
                         "Technicians and administrators have been notified so service can be restored."
                     )
