@@ -9,12 +9,25 @@
       <p class="subtle">Account {{ client.account_reference }}</p>
       <p class="subtle">{{ client.email }}</p>
     </div>
-    <nav class="portal-nav">
-      <a href="#overview">Overview</a>
-      <a href="#billing">Billing</a>
-      <a href="#equipment">Equipment</a>
-      <a href="#support">Support</a>
-      <a href="#appointments">Appointments</a>
+    <nav class="portal-nav" data-sidebar data-expanded="false">
+      <a class="portal-nav-primary" href="#overview">Overview</a>
+      <button
+        class="sidebar-toggle portal-nav-toggle"
+        type="button"
+        data-sidebar-toggle
+        data-expand-label="Show menu"
+        data-collapse-label="Hide menu"
+        aria-expanded="false"
+        aria-controls="portal-nav-sections"
+      >
+        Show menu
+      </button>
+      <div class="portal-nav-sections" id="portal-nav-sections" data-sidebar-content>
+        <a href="#billing">Billing</a>
+        <a href="#equipment">Equipment</a>
+        <a href="#support">Support</a>
+        <a href="#appointments">Appointments</a>
+      </div>
     </nav>
     <div class="portal-sidebar-footer">
       <a class="button secondary full-width" href="{{ url_for('portal_logout') }}">Log out</a>

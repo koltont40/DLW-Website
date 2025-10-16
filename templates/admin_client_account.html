@@ -9,7 +9,7 @@
       <h1>Customer Account</h1>
       <p class="subtle">Dive into {{ client.name }}'s subscription, billing, and field history.</p>
     </div>
-    <nav class="sidebar-nav">
+    <nav class="sidebar-nav" data-sidebar data-expanded="false">
       <div class="sidebar-group">
         <span class="sidebar-group-label">Navigation</span>
         <a class="sidebar-link" href="{{ url_for('dashboard', section='customers') }}">Back to customers</a>
@@ -18,18 +18,31 @@
           href="{{ url_for('dashboard', section='customers', focus=client.id) }}#customer-detail"
         >Open summary panel</a>
       </div>
-      <div class="sidebar-group">
-        <span class="sidebar-group-label">Quick actions</span>
-        <a class="sidebar-link" href="mailto:{{ client.email }}">Email customer</a>
-        {% if client.phone %}
-        <a class="sidebar-link" href="tel:{{ client.phone }}">Call customer</a>
-        {% endif %}
-        {% if google_maps_url %}
-        <a class="sidebar-link" href="{{ google_maps_url }}" target="_blank" rel="noopener">Google Maps</a>
-        {% endif %}
-        {% if apple_maps_url %}
-        <a class="sidebar-link" href="{{ apple_maps_url }}" target="_blank" rel="noopener">Apple Maps</a>
-        {% endif %}
+      <button
+        class="sidebar-toggle"
+        type="button"
+        data-sidebar-toggle
+        data-expand-label="Show quick actions"
+        data-collapse-label="Hide quick actions"
+        aria-expanded="false"
+        aria-controls="admin-account-sidebar-actions"
+      >
+        Show quick actions
+      </button>
+      <div class="sidebar-groups" id="admin-account-sidebar-actions" data-sidebar-content>
+        <div class="sidebar-group">
+          <span class="sidebar-group-label">Quick actions</span>
+          <a class="sidebar-link" href="mailto:{{ client.email }}">Email customer</a>
+          {% if client.phone %}
+          <a class="sidebar-link" href="tel:{{ client.phone }}">Call customer</a>
+          {% endif %}
+          {% if google_maps_url %}
+          <a class="sidebar-link" href="{{ google_maps_url }}" target="_blank" rel="noopener">Google Maps</a>
+          {% endif %}
+          {% if apple_maps_url %}
+          <a class="sidebar-link" href="{{ apple_maps_url }}" target="_blank" rel="noopener">Apple Maps</a>
+          {% endif %}
+        </div>
       </div>
     </nav>
     <div class="sidebar-footer">

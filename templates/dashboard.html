@@ -3,37 +3,51 @@
 {% block title %}Admin Dashboard | DIXIELAND WIRELESS LLC{% endblock %}
 {% block content %}
 <div class="dashboard-layout">
+  {% set sidebar_expanded = active_section != 'overview' %}
   <aside class="admin-sidebar">
     <div class="sidebar-header">
       <h1>Admin Control Center</h1>
       <p class="subtle">Command every facet of DIXIELAND WIRELESS LLC from one dark-mode cockpit.</p>
     </div>
-    <nav class="sidebar-nav">
+    <nav class="sidebar-nav" data-sidebar data-expanded="{{ 'true' if sidebar_expanded else 'false' }}">
       <div class="sidebar-group">
         <span class="sidebar-group-label">Snapshot</span>
         <a class="sidebar-link {% if active_section == 'overview' %}active{% endif %}" href="{{ url_for('dashboard', section='overview') }}">Operations</a>
       </div>
-      <div class="sidebar-group">
-        <span class="sidebar-group-label">CRM</span>
-        <a class="sidebar-link {% if active_section == 'customers' %}active{% endif %}" href="{{ url_for('dashboard', section='customers') }}">Customers</a>
-        <a class="sidebar-link {% if active_section == 'billing' %}active{% endif %}" href="{{ url_for('dashboard', section='billing') }}">Billing</a>
-        <a class="sidebar-link {% if active_section == 'support' %}active{% endif %}" href="{{ url_for('dashboard', section='support') }}">Support</a>
-      </div>
-      <div class="sidebar-group">
-        <span class="sidebar-group-label">Site Experience</span>
-        <a class="sidebar-link {% if active_section == 'plans' %}active{% endif %}" href="{{ url_for('dashboard', section='plans') }}">Service Plans</a>
-        <a class="sidebar-link {% if active_section == 'navigation' %}active{% endif %}" href="{{ url_for('dashboard', section='navigation') }}">Header Links</a>
-        <a class="sidebar-link {% if active_section == 'branding' %}active{% endif %}" href="{{ url_for('dashboard', section='branding') }}">Branding</a>
-        <a class="sidebar-link {% if active_section == 'story' %}active{% endif %}" href="{{ url_for('dashboard', section='story') }}">Team &amp; Trust</a>
-        <a class="sidebar-link {% if active_section == 'blog' %}active{% endif %}" href="{{ url_for('dashboard', section='blog') }}">Blog</a>
-        <a class="sidebar-link {% if active_section == 'legal' %}active{% endif %}" href="{{ url_for('dashboard', section='legal') }}">Legal</a>
-      </div>
-      <div class="sidebar-group">
-        <span class="sidebar-group-label">NMS</span>
-        <a class="sidebar-link {% if active_section == 'network' %}active{% endif %}" href="{{ url_for('dashboard', section='network') }}">Network</a>
-        <a class="sidebar-link {% if active_section == 'field' %}active{% endif %}" href="{{ url_for('dashboard', section='field') }}">Field Ops</a>
-        <a class="sidebar-link {% if active_section == 'security' %}active{% endif %}" href="{{ url_for('dashboard', section='security') }}">Security</a>
-        <a class="sidebar-link {% if active_section == 'notifications' %}active{% endif %}" href="{{ url_for('dashboard', section='notifications') }}">Notifications</a>
+      <button
+        class="sidebar-toggle"
+        type="button"
+        data-sidebar-toggle
+        data-expand-label="Show full menu"
+        data-collapse-label="Hide menu"
+        aria-expanded="{{ 'true' if sidebar_expanded else 'false' }}"
+        aria-controls="admin-sidebar-menu"
+      >
+        {{ 'Hide menu' if sidebar_expanded else 'Show full menu' }}
+      </button>
+      <div class="sidebar-groups" id="admin-sidebar-menu" data-sidebar-content>
+        <div class="sidebar-group">
+          <span class="sidebar-group-label">CRM</span>
+          <a class="sidebar-link {% if active_section == 'customers' %}active{% endif %}" href="{{ url_for('dashboard', section='customers') }}">Customers</a>
+          <a class="sidebar-link {% if active_section == 'billing' %}active{% endif %}" href="{{ url_for('dashboard', section='billing') }}">Billing</a>
+          <a class="sidebar-link {% if active_section == 'support' %}active{% endif %}" href="{{ url_for('dashboard', section='support') }}">Support</a>
+        </div>
+        <div class="sidebar-group">
+          <span class="sidebar-group-label">Site Experience</span>
+          <a class="sidebar-link {% if active_section == 'plans' %}active{% endif %}" href="{{ url_for('dashboard', section='plans') }}">Service Plans</a>
+          <a class="sidebar-link {% if active_section == 'navigation' %}active{% endif %}" href="{{ url_for('dashboard', section='navigation') }}">Header Links</a>
+          <a class="sidebar-link {% if active_section == 'branding' %}active{% endif %}" href="{{ url_for('dashboard', section='branding') }}">Branding</a>
+          <a class="sidebar-link {% if active_section == 'story' %}active{% endif %}" href="{{ url_for('dashboard', section='story') }}">Team &amp; Trust</a>
+          <a class="sidebar-link {% if active_section == 'blog' %}active{% endif %}" href="{{ url_for('dashboard', section='blog') }}">Blog</a>
+          <a class="sidebar-link {% if active_section == 'legal' %}active{% endif %}" href="{{ url_for('dashboard', section='legal') }}">Legal</a>
+        </div>
+        <div class="sidebar-group">
+          <span class="sidebar-group-label">NMS</span>
+          <a class="sidebar-link {% if active_section == 'network' %}active{% endif %}" href="{{ url_for('dashboard', section='network') }}">Network</a>
+          <a class="sidebar-link {% if active_section == 'field' %}active{% endif %}" href="{{ url_for('dashboard', section='field') }}">Field Ops</a>
+          <a class="sidebar-link {% if active_section == 'security' %}active{% endif %}" href="{{ url_for('dashboard', section='security') }}">Security</a>
+          <a class="sidebar-link {% if active_section == 'notifications' %}active{% endif %}" href="{{ url_for('dashboard', section='notifications') }}">Notifications</a>
+        </div>
       </div>
     </nav>
     <div class="sidebar-footer">
