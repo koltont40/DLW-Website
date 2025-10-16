@@ -36,6 +36,7 @@ from app import (
     TrustedBusiness,
     StripeConfig,
     NotificationConfig,
+    UispDevice,
     create_app,
     db,
     get_install_photo_category_choices,
@@ -1272,6 +1273,137 @@ def test_admin_adds_equipment_from_account_view(app, client):
         assert str(devices[0].installed_on) == "2024-08-01"
 
 
+def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypatch):
+    login_admin(client)
+
+    app.config["UISP_BASE_URL"] = "https://uisp.example.com"
+    app.config["UISP_API_TOKEN"] = "token"
+
+    sent_notifications: list[tuple[str, str, str]] = []
+
+    def fake_send_email(app_obj, recipient, subject, body):
+        sent_notifications.append((recipient, subject, body))
+        return True
+
+    monkeypatch.setattr(app_module, "send_email_via_office365", fake_send_email)
+
+    payload_holder = {
+        "data": [
+            {
+                "id": "device-1",
+                "identification": {"name": "North Sector", "model": "UISP Wave"},
+                "site": {"name": "North Tower"},
+                "status": {"value": "online", "lastSeen": "2024-05-01T12:00:00Z"},
+                "ipAddress": "10.0.0.10",
+                "macAddress": "AA:BB:CC:DD:EE:01",
+                "firmware": {"version": "1.2.3"},
+            },
+            {
+                "id": "device-2",
+                "identification": {"name": "Backhaul Link", "model": "UISP Wave"},
+                "site": {"name": "Backhaul Ridge"},
+                "status": {"value": "offline", "lastSeen": "2024-05-01T11:45:00Z"},
+                "ipAddress": "10.0.0.11",
+                "macAddress": "AA:BB:CC:DD:EE:02",
+                "firmware": {"version": "1.2.3"},
+            },
+        ]
+    }
+
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            return payload_holder["data"]
+
+        @property
+        def text(self):
+            return "ok"
+
+    def fake_get(url, headers=None, timeout=None):
+        return DummyResponse()
+
+    monkeypatch.setattr(app_module.requests, "get", fake_get)
+
+    with app.app_context():
+        customer = Client(name="Managed Customer", email="managed@example.com", status="Active")
+        db.session.add(customer)
+        technician = Technician(
+            name="Network Tech",
+            email="tech@example.com",
+            password_hash=generate_password_hash("TechPass123!"),
+            is_active=True,
+        )
+        db.session.add(technician)
+        db.session.commit()
+        customer_id = customer.id
+
+    response = client.post("/uisp/devices/import", follow_redirects=True)
+    assert response.status_code == 200
+    assert sent_notifications
+
+    with app.app_context():
+        devices = UispDevice.query.order_by(UispDevice.uisp_id.asc()).all()
+        assert len(devices) == 2
+        offline_device = next(device for device in devices if device.uisp_id == "device-2")
+        assert offline_device.status == "offline"
+        assert offline_device.outage_notified_at is not None
+        offline_id = offline_device.id
+
+    recipients = {entry[0] for entry in sent_notifications}
+    assert "ops@example.com" in recipients
+    assert "tech@example.com" in recipients
+
+    sent_notifications.clear()
+
+    account_url = f"/dashboard/customers/{customer_id}"
+    assign_response = client.post(
+        f"/uisp/devices/{offline_id}/assign",
+        data={
+            "client_id": str(customer_id),
+            "nickname": "Backhaul",
+            "notes": "Feeds subdivision",
+            "next": account_url,
+        },
+        follow_redirects=True,
+    )
+    assert assign_response.status_code == 200
+
+    with app.app_context():
+        device = UispDevice.query.get(offline_id)
+        assert device.client_id == customer_id
+        assert device.nickname == "Backhaul"
+        assert device.notes == "Feeds subdivision"
+
+    payload_holder["data"][1]["status"] = {"value": "online", "lastSeen": "2024-05-01T12:30:00Z"}
+    client.post("/uisp/devices/import", follow_redirects=True)
+    assert not sent_notifications
+
+    payload_holder["data"][1]["status"] = {"value": "offline", "lastSeen": "2024-05-01T12:45:00Z"}
+    sent_notifications.clear()
+    client.post("/uisp/devices/import", follow_redirects=True)
+
+    recipients = {entry[0] for entry in sent_notifications}
+    assert "managed@example.com" in recipients
+    assert "ops@example.com" in recipients
+    assert "tech@example.com" in recipients
+
+    account_view = client.get(account_url)
+    assert account_view.status_code == 200
+    assert b"Backhaul" in account_view.data
+
+    unassign_response = client.post(
+        f"/uisp/devices/{offline_id}/assign",
+        data={"client_id": "", "next": account_url},
+        follow_redirects=True,
+    )
+    assert unassign_response.status_code == 200
+
+    with app.app_context():
+        device = UispDevice.query.get(offline_id)
+        assert device.client_id is None
+
+
 def test_admin_schedules_appointment_from_account_view(app, client):
     login_admin(client)
 
@@ -2387,6 +2519,54 @@ def test_equipment_notifications_sent_on_create_and_update(app, client):
     assert subject.startswith("Equipment updated: Customer Router")
     assert "mounted in hallway" in body.lower()
     assert "Installed on: 2024-01-15" in body
+
+
+def test_appointment_update_uses_all_activity_flag(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    login_admin(client)
+
+    with app.app_context():
+        config = app_module.ensure_notification_configuration()
+        config.notify_customer_activity = False
+        config.notify_all_account_activity = True
+        db.session.commit()
+
+        customer = Client(
+            name="All Activity Customer",
+            email="notify-all@example.com",
+            status="Active",
+        )
+        appointment = Appointment(
+            client=customer,
+            title="Follow-up visit",
+            scheduled_for=utcnow() + timedelta(days=1),
+            status="Pending",
+        )
+        db.session.add_all([customer, appointment])
+        db.session.commit()
+        appointment_id = appointment.id
+
+    response = client.post(
+        f"/appointments/{appointment_id}/update",
+        data={"status": "Completed"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        updated = Appointment.query.get(appointment_id)
+        assert updated.status == "Completed"
+
+    assert notifications, "Expected an appointment notification when all-activity flag is enabled"
+    recipient, subject, body = notifications[-1]
+    assert recipient == "notify-all@example.com"
+    assert subject.startswith("Appointment update: Follow-up visit")
+    assert "completed" in body.lower()
 
 
 def test_admin_can_update_snmp_settings(app, client):
