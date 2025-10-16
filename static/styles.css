@@ -1114,6 +1114,46 @@ a.trusted-logo:hover {
   gap: 1.1rem;
 }
 
+.sidebar-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.1rem;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidebar-toggle:hover,
+.sidebar-toggle:focus-visible {
+  color: var(--secondary);
+  outline: none;
+}
+
+.sidebar-toggle::after {
+  content: "▾";
+  font-size: 0.85em;
+  transition: transform 0.2s ease;
+}
+
+[data-sidebar][data-expanded="true"] > .sidebar-toggle::after,
+[data-sidebar][data-expanded="true"] .sidebar-toggle::after {
+  transform: rotate(180deg);
+}
+
+[data-sidebar][data-expanded="false"] [data-sidebar-content] {
+  display: none;
+}
+
+.sidebar-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
 .sidebar-group {
   display: flex;
   flex-direction: column;
@@ -2856,6 +2896,17 @@ a.trusted-logo:hover {
 }
 
 .portal-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.portal-nav-toggle {
+  align-self: flex-start;
+  padding-left: 0;
+}
+
+.portal-nav-sections {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
@@ -4991,6 +5042,17 @@ a.trusted-logo:hover {
   padding: 0 clamp(1.5rem, 2.5vw, 3rem) clamp(2rem, 3vw, 3.25rem);
 }
 
+.tech-sidebar-card {
+  position: sticky;
+  top: 6rem;
+  align-self: flex-start;
+  padding: 1.25rem;
+  border-radius: 1.25rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
+}
+
 .tech-header {
   display: flex;
   flex-wrap: wrap;
@@ -5010,11 +5072,12 @@ a.trusted-logo:hover {
   align-items: center;
 }
 
+
 .tech-quick-links {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 0.75rem;
-  align-items: center;
+  align-items: stretch;
 }
 
 .tech-quick-links a {
@@ -5029,6 +5092,27 @@ a.trusted-logo:hover {
   text-decoration: none;
   color: inherit;
   transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.tech-nav-primary {
+  width: 100%;
+  justify-content: center;
+}
+
+.tech-nav-toggle {
+  align-self: flex-start;
+  padding-left: 0;
+}
+
+.tech-nav-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tech-nav-sections a {
+  width: 100%;
+  justify-content: center;
 }
 
 .tech-quick-links a:hover,

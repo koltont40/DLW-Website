@@ -188,6 +188,36 @@
           mediaQuery.addListener(ensureStateForViewport);
         }
       })();
+
+      (function () {
+        const sidebars = document.querySelectorAll("[data-sidebar]");
+        sidebars.forEach((sidebar) => {
+          const toggle = sidebar.querySelector("[data-sidebar-toggle]");
+          const content = sidebar.querySelector("[data-sidebar-content]");
+          if (!toggle || !content) {
+            return;
+          }
+
+          const expandLabel = toggle.dataset.expandLabel || "Show menu";
+          const collapseLabel = toggle.dataset.collapseLabel || "Hide menu";
+
+          const hasActiveLink = content.querySelector(".active");
+          const initialExpanded = sidebar.dataset.expanded === "true" || (!!hasActiveLink && sidebar.dataset.expanded !== "false");
+
+          const setExpanded = (expanded) => {
+            sidebar.setAttribute("data-expanded", expanded ? "true" : "false");
+            toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+            toggle.textContent = expanded ? collapseLabel : expandLabel;
+          };
+
+          setExpanded(initialExpanded);
+
+          toggle.addEventListener("click", () => {
+            const isExpanded = sidebar.getAttribute("data-expanded") === "true";
+            setExpanded(!isExpanded);
+          });
+        });
+      })();
     </script>
   </body>
 </html>
