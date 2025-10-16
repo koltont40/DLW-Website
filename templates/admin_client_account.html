@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set page_surface_class = 'page-surface full-bleed' %}
 {% block title %}{{ client.name }} Account | Admin Dashboard{% endblock %}
 {% block content %}
 <div class="dashboard-layout admin-account-layout">
@@ -297,6 +298,117 @@
         <article class="management-column">
           <h4>Installed equipment</h4>
           <div class="record-list">
+            <h5>UISP managed devices</h5>
+            {% if assigned_uisp_devices %}
+            {% for device in assigned_uisp_devices %}
+            <form class="record-row uisp-device-row" method="post" action="{{ url_for('assign_uisp_device', device_id=device.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+              <div class="uisp-device-overview">
+                <div class="uisp-device-heading">
+                  <strong>{{ device.nickname or device.name }}</strong>
+                  <span class="badge {% if device.status == 'online' %}success{% elif device.status == 'offline' %}danger{% else %}subtle{% endif %}">
+                    {{ device.status|capitalize }}
+                  </span>
+                </div>
+                <div class="uisp-device-meta">
+                  {% if device.model %}<span>{{ device.model }}</span>{% endif %}
+                  {% if device.site_name %}<span>{{ device.site_name }}</span>{% endif %}
+                  {% if device.tower %}<span>Tower · {{ device.tower.name }}</span>{% endif %}
+                  {% if device.ip_address %}<span>IP {{ device.ip_address }}</span>{% endif %}
+                  <span>Last seen {{ device.last_seen_at.strftime('%b %d, %Y %I:%M %p') if device.last_seen_at else 'Unknown' }}</span>
+                </div>
+              </div>
+              <label class="inline-field">
+                <span>Alias</span>
+                <input type="text" name="nickname" value="{{ device.nickname or '' }}" placeholder="Roof sector AP" />
+              </label>
+              <label class="inline-field">
+                <span>Tower</span>
+                <select name="tower_id">
+                  <option value="">No tower</option>
+                  {% for tower in network_towers %}
+                  <option value="{{ tower.id }}" {% if device.tower_id == tower.id %}selected{% endif %}>
+                    {{ tower.name }}{% if tower.location %} — {{ tower.location }}{% endif %}
+                  </option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label class="inline-field">
+                <span>Assignment</span>
+                <select name="client_id">
+                  <option value="">Unassigned</option>
+                  <option value="{{ client.id }}" selected>Assign to {{ client.name }}</option>
+                </select>
+              </label>
+              <label class="inline-field stretch">
+                <span>Notes</span>
+                <input type="text" name="notes" value="{{ device.notes or '' }}" placeholder="Mounting notes or install details" />
+              </label>
+              <div class="record-actions inline-actions">
+                <button class="button small primary" type="submit">Save</button>
+              </div>
+            </form>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">No UISP devices assigned to this account.</p>
+            {% endif %}
+            <h6>Find UISP devices</h6>
+            <form class="inline-form uisp-device-search" method="get" action="{{ url_for('admin_client_account', client_id=client.id) }}">
+              <div class="inline-field stretch">
+                <span class="sr-only">Search unassigned UISP devices</span>
+                <input type="search" name="device_search" value="{{ device_search }}" placeholder="Search by name, MAC, tower, or IP" />
+              </div>
+              <button class="button small secondary" type="submit">Search</button>
+              {% if device_search %}
+              <a class="button small ghost" href="{{ url_for('admin_client_account', client_id=client.id) }}">Clear</a>
+              {% endif %}
+            </form>
+            {% if device_search and available_uisp_devices %}
+            <p class="subtle">Showing {{ available_uisp_devices|length }} result{% if available_uisp_devices|length != 1 %}s{% endif %} for “{{ device_search }}”.</p>
+            {% for device in available_uisp_devices %}
+            <form class="record-row uisp-device-row" method="post" action="{{ url_for('assign_uisp_device', device_id=device.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+              <input type="hidden" name="client_id" value="{{ client.id }}" />
+              <div class="uisp-device-overview">
+                <div class="uisp-device-heading">
+                  <strong>{{ device.nickname or device.name }}</strong>
+                  <span class="badge subtle">Unassigned</span>
+                </div>
+                <div class="uisp-device-meta">
+                  {% if device.model %}<span>{{ device.model }}</span>{% endif %}
+                  {% if device.site_name %}<span>{{ device.site_name }}</span>{% endif %}
+                  {% if device.tower %}<span>Tower · {{ device.tower.name }}</span>{% endif %}
+                  {% if device.ip_address %}<span>IP {{ device.ip_address }}</span>{% endif %}
+                  <span>Last seen {{ device.last_seen_at.strftime('%b %d, %Y %I:%M %p') if device.last_seen_at else 'Unknown' }}</span>
+                </div>
+              </div>
+              <label class="inline-field">
+                <span>Alias</span>
+                <input type="text" name="nickname" placeholder="Assign alias" />
+              </label>
+              <label class="inline-field">
+                <span>Tower</span>
+                <select name="tower_id">
+                  <option value="">No tower</option>
+                  {% for tower in network_towers %}
+                  <option value="{{ tower.id }}">{{ tower.name }}{% if tower.location %} — {{ tower.location }}{% endif %}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label class="inline-field stretch">
+                <span>Notes</span>
+                <input type="text" name="notes" placeholder="Mounting notes or install details" />
+              </label>
+              <div class="record-actions inline-actions">
+                <button class="button small primary" type="submit">Assign to {{ client.name }}</button>
+              </div>
+            </form>
+            {% endfor %}
+            {% elif device_search %}
+            <p class="subtle">No unassigned devices matched “{{ device_search }}”.</p>
+            {% else %}
+            <p class="subtle">Search to locate an unassigned UISP device to assign.</p>
+            {% endif %}
             {% if equipment_items %}
             {% for item in equipment_items %}
             <form class="record-row" method="post" action="{{ url_for('update_equipment', equipment_id=item.id) }}">
@@ -399,6 +511,9 @@
                 </select>
               </label>
               <div class="record-actions">
+                {% if invoice.pdf_filename %}
+                <a class="button small secondary" href="{{ url_for('admin_invoice_pdf', invoice_id=invoice.id) }}" target="_blank" rel="noopener">View PDF</a>
+                {% endif %}
                 <button class="button small primary" type="submit">Update</button>
                 <button class="button small danger" type="submit" form="delete-invoice-{{ invoice.id }}" onclick="return confirm('Delete this invoice?');">Delete</button>
               </div>
@@ -473,6 +588,23 @@
             <p class="subtle">No payment methods on file.</p>
             {% endif %}
           </div>
+          {% if stripe_ready and stripe_publishable_key %}
+          <div class="admin-card-controls">
+            <button class="button small primary" type="button" id="admin-add-card">Add card</button>
+          </div>
+          <div class="admin-card-form hidden" id="admin-card-form">
+            <div id="admin-card-element" class="admin-card-element"></div>
+            <label class="checkbox-inline">
+              <input type="checkbox" id="admin-set-default" {% if not payment_methods %}checked{% endif %} />
+              Set as default for autopay
+            </label>
+            <p class="form-help" id="admin-card-errors"></p>
+            <div class="button-row">
+              <button class="button small primary" type="button" id="admin-save-card">Save card</button>
+              <button class="button small secondary" type="button" id="admin-cancel-card">Cancel</button>
+            </div>
+          </div>
+          {% endif %}
           {% if stripe_ready %}
           <form class="stacked-form autopay-add-form" method="post" action="{{ url_for('add_payment_method', client_id=client.id) }}">
             <input type="hidden" name="next" value="{{ account_url }}" />
@@ -485,7 +617,7 @@
               Set as default for autopay
             </label>
             <button class="button small primary" type="submit">Attach payment method</button>
-            <p class="form-help">Admins can paste a payment method ID from Stripe or ask the customer to add a card through the portal.</p>
+            <p class="form-help">Admins can paste a payment method ID from Stripe or use the add card tool above.</p>
           </form>
           {% else %}
           <p class="subtle">Configure Stripe to attach payment methods or direct the customer to the portal.</p>
@@ -493,7 +625,14 @@
           <form class="stacked-form autopay-toggle" method="post" action="{{ url_for('configure_autopay', client_id=client.id) }}">
             <input type="hidden" name="next" value="{{ account_url }}" />
             {% if client.autopay_enabled %}
-            <p class="subtle">Autopay charges {{ default_method.describe() if default_method else 'the default card' }} on invoice due dates.</p>
+            <p class="subtle">
+              Autopay charges {{ default_method.describe() if default_method else 'the default card' }}
+              {% if client.autopay_day %}
+              on day {{ client.autopay_day }} each month.
+              {% else %}
+              when invoices are due.
+              {% endif %}
+            </p>
             <button class="button small danger" type="submit" name="action" value="disable">Disable autopay</button>
             {% else %}
             <p class="subtle">Enable autopay to automatically collect balances when they are due.</p>
@@ -512,6 +651,44 @@
             <button class="button small primary" type="submit" disabled>Enable autopay</button>
             {% endif %}
             {% endif %}
+          </form>
+          <div class="autopay-schedule-status">
+            {% if client.autopay_day %}
+            <p class="subtle">Autopay is scheduled for day {{ client.autopay_day }} of each month.</p>
+            {% else %}
+            <p class="subtle">Autopay runs on each invoice due date.</p>
+            {% endif %}
+          </div>
+          {% if client.autopay_day_pending %}
+          <div class="inline-callout autopay-pending-callout">
+            <div>
+              <strong>Customer request pending</strong>
+              <p class="subtle">{{ client.name }} asked to process autopay on day {{ client.autopay_day_pending }} each month.</p>
+            </div>
+            <form class="autopay-approval-actions" method="post" action="{{ url_for('configure_autopay_schedule', client_id=client.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+              <div class="button-row">
+                <button class="button small primary" type="submit" name="action" value="approve">Approve</button>
+                <button class="button small secondary" type="submit" name="action" value="reject">Dismiss</button>
+              </div>
+            </form>
+          </div>
+          {% endif %}
+          <form class="stacked-form autopay-schedule-form" method="post" action="{{ url_for('configure_autopay_schedule', client_id=client.id) }}">
+            <input type="hidden" name="next" value="{{ account_url }}" />
+            {% set selected_day = client.autopay_day %}
+            <label>
+              Autopay day
+              <select name="autopay_day">
+                <option value="">Charge on invoice due dates</option>
+                {% for day in range(1, 29) %}
+                <option value="{{ day }}" {% if selected_day == day %}selected{% endif %}>Day {{ day }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <div class="button-row">
+              <button class="button small secondary" type="submit">Save schedule</button>
+            </div>
           </form>
         </article>
       </div>
@@ -635,16 +812,44 @@
           <div class="detail-subtle">
             {{ ticket.status }} • Priority {{ ticket.priority }} • Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }}
           </div>
-          <p>{{ ticket.message }}</p>
-          {% if ticket.attachments %}
-          <div class="photo-chip-group">
-            {% for attachment in ticket.attachments %}
-            <a
-              href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}"
-              target="_blank"
-              rel="noopener"
-            >{{ attachment.original_filename }}</a>
+          <div class="ticket-conversation">
+            {% for message in ticket.messages %}
+            <article class="ticket-message {% if message.sender == 'admin' %}from-staff{% else %}from-client{% endif %}">
+              <header class="ticket-message-header">
+                <strong>
+                  {% if message.sender == 'admin' %}
+                  Team reply
+                  {% else %}
+                  {{ ticket.client.name }}
+                  {% endif %}
+                </strong>
+                <span class="subtle">{{ message.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+              </header>
+              <p>{{ message.body }}</p>
+              {% if message.attachments %}
+              <div class="ticket-attachments">
+                <div class="ticket-attachment-strip">
+                  {% for attachment in message.attachments %}
+                  <a class="file-chip" href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
+                    {{ attachment.original_filename }}
+                  </a>
+                  {% endfor %}
+                </div>
+              </div>
+              {% endif %}
+            </article>
             {% endfor %}
+          </div>
+          {% set legacy_attachments = ticket.attachments | selectattr('message_id', 'equalto', None) | list %}
+          {% if legacy_attachments %}
+          <div class="ticket-attachments">
+            <div class="ticket-attachment-strip">
+              {% for attachment in legacy_attachments %}
+              <a class="file-chip" href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
+                {{ attachment.original_filename }}
+              </a>
+              {% endfor %}
+            </div>
           </div>
           {% endif %}
           {% if ticket.resolution_notes %}
@@ -727,6 +932,181 @@
         {% endfor %}
       </div>
     </section>
-  </div>
 </div>
+</div>
+{% if stripe_ready and stripe_publishable_key %}
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+  (() => {
+    const publishableKey = {{ stripe_publishable_key|tojson }};
+    const loginRedirect = "{{ url_for('login', next=account_url) }}";
+    if (!publishableKey) {
+      return;
+    }
+    const addButton = document.getElementById("admin-add-card");
+    const formWrapper = document.getElementById("admin-card-form");
+    const saveButton = document.getElementById("admin-save-card");
+    const cancelButton = document.getElementById("admin-cancel-card");
+    const errorField = document.getElementById("admin-card-errors");
+    const cardContainer = document.getElementById("admin-card-element");
+    const setDefaultInput = document.getElementById("admin-set-default");
+    if (!addButton || !formWrapper || !saveButton || !cancelButton || !errorField || !cardContainer) {
+      return;
+    }
+
+    const stripe = Stripe(publishableKey);
+    const elements = stripe.elements();
+    const cardElement = elements.create("card");
+    const cardholderDetails = {
+      name: {{ client.name|tojson }},
+      email: {{ client.email|tojson }},
+    };
+    let setupSecret = null;
+    let mounted = false;
+    let processing = false;
+
+    const updateSaveState = () => {
+      saveButton.disabled = processing || !setupSecret;
+    };
+
+    const openForm = async () => {
+      formWrapper.classList.remove("hidden");
+      errorField.textContent = "";
+      if (!mounted) {
+        cardElement.mount("#admin-card-element");
+        mounted = true;
+      }
+      setupSecret = null;
+      processing = false;
+      updateSaveState();
+      try {
+        const response = await fetch(
+          "{{ url_for('admin_payment_method_setup_intent', client_id=client.id) }}",
+          {
+            credentials: "include",
+            headers: {
+              Accept: "application/json",
+              "X-Requested-With": "XMLHttpRequest",
+            },
+          }
+        );
+        if (response.status === 401) {
+          window.location.href = loginRedirect;
+          return;
+        }
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.error || !data.client_secret) {
+          throw new Error(data.error || "Unable to prepare card entry. Please try again.");
+        }
+        setupSecret = data.client_secret;
+      } catch (err) {
+        setupSecret = null;
+        errorField.textContent = err.message || "Unable to prepare card entry.";
+      }
+      updateSaveState();
+    };
+
+    const closeForm = () => {
+      formWrapper.classList.add("hidden");
+      setupSecret = null;
+      cardElement.clear();
+      errorField.textContent = "";
+      processing = false;
+      updateSaveState();
+    };
+
+    addButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      openForm();
+    });
+
+    cancelButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      closeForm();
+    });
+
+    saveButton.addEventListener("click", async (event) => {
+      event.preventDefault();
+      if (!setupSecret) {
+        errorField.textContent = "We're getting things ready. Please try saving the card again.";
+        return;
+      }
+      processing = true;
+      updateSaveState();
+      errorField.textContent = "";
+      const billingDetails = {};
+      if (cardholderDetails.name) {
+        billingDetails.name = cardholderDetails.name;
+      }
+      if (cardholderDetails.email) {
+        billingDetails.email = cardholderDetails.email;
+      }
+      let confirmation;
+      try {
+        confirmation = await stripe.confirmCardSetup(
+          setupSecret,
+          {
+            payment_method: {
+              card: cardElement,
+              billing_details: billingDetails,
+            },
+          }
+        );
+      } catch (err) {
+        errorField.textContent = err.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
+        return;
+      }
+      if (confirmation.error) {
+        errorField.textContent = confirmation.error.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
+        return;
+      }
+      const setupIntent = confirmation.setupIntent;
+      const setupStatus = setupIntent ? setupIntent.status : null;
+      if (
+        !setupIntent ||
+        !setupIntent.payment_method ||
+        (setupStatus !== "succeeded" && setupStatus !== "processing")
+      ) {
+        errorField.textContent =
+          "Stripe did not confirm the card. Please try again.";
+        processing = false;
+        updateSaveState();
+        return;
+      }
+      try {
+        const response = await fetch("{{ url_for('add_payment_method', client_id=client.id) }}", {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+          body: JSON.stringify({
+            payment_method_id: setupIntent.payment_method,
+            set_default: setDefaultInput ? setDefaultInput.checked : true,
+          }),
+        });
+        if (response.status === 401) {
+          window.location.href = loginRedirect;
+          return;
+        }
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.error) {
+          throw new Error(payload.error || "Unable to save card. Please try again.");
+        }
+        window.location.reload();
+      } catch (err) {
+        errorField.textContent = err.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
+      }
+    });
+  })();
+</script>
+{% endif %}
 {% endblock %}
