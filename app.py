@@ -55,7 +55,7 @@ from werkzeug.serving import BaseWSGIServer, make_server
 from werkzeug.utils import secure_filename
 
 from sqlalchemy import event, inspect, or_, text
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.exc import IntegrityError, NoSuchTableError
 
 load_dotenv()
@@ -63,6 +63,7 @@ load_dotenv()
 db = SQLAlchemy()
 
 _billing_schema_checked = False
+_performance_indexes_checked = False
 _stripe_schema_checked = False
 
 STRIPE_DEFAULT_CURRENCY = "usd"
@@ -3196,6 +3197,90 @@ def ensure_billing_schema_once() -> None:
         _billing_schema_checked = True
 
     ensure_stripe_schema_once()
+    ensure_performance_indexes_once()
+
+
+def ensure_performance_indexes_once() -> None:
+    """Create frequently used indexes to keep dashboard queries fast."""
+
+    global _performance_indexes_checked
+
+    if _performance_indexes_checked:
+        return
+
+    inspector = inspect(db.engine)
+    try:
+        table_names = set(inspector.get_table_names())
+    except Exception:  # pragma: no cover - inspector guard
+        table_names = set()
+
+    index_plan: dict[str, dict[str, tuple[str, ...]]] = {
+        "clients": {
+            "ix_clients_status": ("status",),
+            "ix_clients_created_at": ("created_at",),
+        },
+        "invoices": {
+            "ix_invoices_client_id": ("client_id",),
+            "ix_invoices_status": ("status",),
+            "ix_invoices_due_date": ("due_date",),
+            "ix_invoices_created_at": ("created_at",),
+        },
+        "support_tickets": {
+            "ix_support_tickets_client_id": ("client_id",),
+            "ix_support_tickets_status": ("status",),
+            "ix_support_tickets_updated_at": ("updated_at",),
+        },
+        "support_ticket_messages": {
+            "ix_support_ticket_messages_created_at": ("created_at",),
+        },
+        "appointments": {
+            "ix_appointments_client_id": ("client_id",),
+            "ix_appointments_status": ("status",),
+            "ix_appointments_scheduled_for": ("scheduled_for",),
+        },
+        "equipment": {
+            "ix_equipment_client_id": ("client_id",),
+            "ix_equipment_created_at": ("created_at",),
+        },
+        "payment_methods": {
+            "ix_payment_methods_client_id": ("client_id",),
+            "ix_payment_methods_status": ("status",),
+        },
+        "autopay_events": {
+            "ix_autopay_events_client_id": ("client_id",),
+            "ix_autopay_events_attempted_at": ("attempted_at",),
+        },
+    }
+
+    statements: list[str] = []
+    missing_tables: set[str] = set()
+
+    for table_name, indexes in index_plan.items():
+        if table_name not in table_names:
+            missing_tables.add(table_name)
+            continue
+
+        try:
+            existing = {index["name"] for index in inspector.get_indexes(table_name)}
+        except NoSuchTableError:
+            missing_tables.add(table_name)
+            continue
+
+        for index_name, columns in indexes.items():
+            if index_name in existing:
+                continue
+            column_list = ", ".join(columns)
+            statements.append(
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_list})"
+            )
+
+    if statements:
+        with db.engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+    if not missing_tables:
+        _performance_indexes_checked = True
 
 
 def ensure_site_theme_background_fields() -> None:
@@ -4583,6 +4668,12 @@ def register_routes(app: Flask) -> None:
         )
         tickets = (
             SupportTicket.query.filter_by(client_id=client.id)
+            .options(
+                selectinload(SupportTicket.attachments),
+                selectinload(SupportTicket.messages).selectinload(
+                    SupportTicketMessage.attachments
+                ),
+            )
             .order_by(SupportTicket.created_at.desc())
             .all()
         )
@@ -6210,6 +6301,12 @@ def register_routes(app: Flask) -> None:
                 )
                 selected_client_tickets = (
                     SupportTicket.query.filter_by(client_id=selected_client.id)
+                    .options(
+                        selectinload(SupportTicket.attachments),
+                        selectinload(SupportTicket.messages).selectinload(
+                            SupportTicketMessage.attachments
+                        ),
+                    )
                     .order_by(SupportTicket.created_at.desc())
                     .limit(6)
                     .all()
@@ -6613,6 +6710,12 @@ def register_routes(app: Flask) -> None:
         )
         tickets = (
             SupportTicket.query.filter_by(client_id=client.id)
+            .options(
+                selectinload(SupportTicket.attachments),
+                selectinload(SupportTicket.messages).selectinload(
+                    SupportTicketMessage.attachments
+                ),
+            )
             .order_by(SupportTicket.updated_at.desc())
             .all()
         )
