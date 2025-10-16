@@ -82,6 +82,43 @@
   </div>
 </section>
 
+<section class="allies">
+  <div class="allies-card card">
+    <header class="allies-header">
+      <h2>Operations allies</h2>
+      <p class="subtle">These companies help keep DIXIELAND WIRELESS LLC running smoothly behind the scenes.</p>
+    </header>
+    {% if support_partners %}
+    <div class="partner-grid">
+      {% for partner in support_partners %}
+      <article class="partner-tile">
+        <div class="partner-media">
+          {% if partner.logo_filename %}
+          <img src="{{ url_for('support_partner_logo', partner_id=partner.id) }}" alt="{{ partner.name }} logo" />
+          {% else %}
+          <span class="partner-placeholder" aria-hidden="true">{{ partner.name[:1] }}</span>
+          {% endif %}
+        </div>
+        <div class="partner-content">
+          <div class="partner-heading">
+            <h3>{{ partner.name }}</h3>
+            {% if partner.website_url %}
+            <a class="text-link" href="{{ partner.website_url }}" target="_blank" rel="noopener">Visit site</a>
+            {% endif %}
+          </div>
+          {% if partner.description %}
+          <p>{{ partner.description }}</p>
+          {% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-state subtle">Highlight the partners that power our network by adding them in the admin dashboard.</p>
+    {% endif %}
+  </div>
+</section>
+
 <section class="cta">
   <div class="cta-card">
     <h2>Ready for better internet and phone service?</h2>
