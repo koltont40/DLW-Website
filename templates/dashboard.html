@@ -852,6 +852,71 @@
         <p class="subtle">CRM billing status changes automatically lift these holds when payments post.</p>
       </div>
       {% endif %}
+      <div class="uisp-inventory">
+        <header class="section-header">
+          <div>
+            <h3>UISP Inventory</h3>
+            <p class="subtle">Sync managed Ubiquiti devices and map them to subscriber accounts.</p>
+          </div>
+          <form
+            method="post"
+            action="{{ url_for('import_uisp_devices', section='network', status=request.args.get('status')) }}"
+          >
+            <button class="button small primary" type="submit">Sync from UISP</button>
+          </form>
+        </header>
+        {% if uisp_devices %}
+        <div class="record-list">
+          {% for device in uisp_devices %}
+          <form
+            class="record-row"
+            method="post"
+            action="{{ url_for('assign_uisp_device', device_id=device.id, section='network', status=request.args.get('status')) }}"
+          >
+            <div class="record-primary">
+              <strong>{{ device.nickname or device.name }}</strong>
+              <span
+                class="badge {% if device.status == 'online' %}success{% elif device.status == 'offline' %}danger{% else %}subtle{% endif %}"
+                >{{ device.status|capitalize }}</span
+              >
+            </div>
+            <div class="record-meta">
+              {% if device.model %}<span>{{ device.model }}</span>{% endif %}
+              {% if device.site_name %}<span class="subtle">{{ device.site_name }}</span>{% endif %}
+              {% if device.ip_address %}<span class="subtle">IP {{ device.ip_address }}</span>{% endif %}
+              <span class="subtle">Last seen {{ device.last_seen_at.strftime('%b %d, %Y %I:%M %p') if device.last_seen_at else 'Unknown' }}</span>
+            </div>
+            <div class="record-fields">
+              <label>
+                Alias
+                <input type="text" name="nickname" value="{{ device.nickname or '' }}" placeholder="Roof sector AP" />
+              </label>
+              <label>
+                Assign to customer
+                <select name="client_id">
+                  <option value="">Unassigned</option>
+                  {% for customer in clients %}
+                  <option value="{{ customer.id }}" {% if device.client_id == customer.id %}selected{% endif %}>
+                    {{ customer.name }} ({{ customer.email }})
+                  </option>
+                  {% endfor %}
+                </select>
+              </label>
+            </div>
+            <label class="full-width">
+              Notes
+              <textarea name="notes" rows="2" placeholder="Mount location, handoff details">{{ device.notes or '' }}</textarea>
+            </label>
+            <div class="record-actions">
+              <button class="button small primary" type="submit">Update device</button>
+            </div>
+          </form>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="subtle">No UISP devices have been imported yet. Sync to load your inventory.</p>
+        {% endif %}
+      </div>
       {% if clients %}
       <div class="client-stack">
         {% for client in clients %}
@@ -1657,6 +1722,10 @@
             <label class="checkbox-field">
               <input type="checkbox" name="notify_customers" {% if notification_config and notification_config.notify_customer_activity %}checked{% endif %} />
               <span>Email customers when appointments or account activity changes</span>
+            </label>
+            <label class="checkbox-field">
+              <input type="checkbox" name="notify_all_activity" {% if notification_config and notification_config.notify_all_account_activity %}checked{% endif %} />
+              <span>Notify customers about any change to their account details or services</span>
             </label>
             <div class="notification-actions">
               <button class="button secondary" type="submit">Save preferences</button>

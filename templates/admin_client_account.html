@@ -297,6 +297,76 @@
         <article class="management-column">
           <h4>Installed equipment</h4>
           <div class="record-list">
+            <h5>UISP managed devices</h5>
+            {% if assigned_uisp_devices %}
+            {% for device in assigned_uisp_devices %}
+            <form class="record-row" method="post" action="{{ url_for('assign_uisp_device', device_id=device.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+              <div class="record-primary">
+                <strong>{{ device.nickname or device.name }}</strong>
+                <span class="badge {% if device.status == 'online' %}success{% elif device.status == 'offline' %}danger{% else %}subtle{% endif %}">
+                  {{ device.status|capitalize }}
+                </span>
+              </div>
+              <div class="record-meta">
+                {% if device.model %}<span>{{ device.model }}</span>{% endif %}
+                {% if device.site_name %}<span class="subtle">{{ device.site_name }}</span>{% endif %}
+                {% if device.ip_address %}<span class="subtle">IP {{ device.ip_address }}</span>{% endif %}
+                <span class="subtle">Last seen {{ device.last_seen_at.strftime('%b %d, %Y %I:%M %p') if device.last_seen_at else 'Unknown' }}</span>
+              </div>
+              <label>
+                Alias
+                <input type="text" name="nickname" value="{{ device.nickname or '' }}" placeholder="Roof sector AP" />
+              </label>
+              <label>
+                Notes
+                <textarea name="notes" rows="2" placeholder="Mounting notes or install details">{{ device.notes or '' }}</textarea>
+              </label>
+              <label>
+                Assignment
+                <select name="client_id">
+                  <option value="">Unassigned</option>
+                  <option value="{{ client.id }}" selected>Assign to {{ client.name }}</option>
+                </select>
+              </label>
+              <div class="record-actions">
+                <button class="button small primary" type="submit">Update device</button>
+              </div>
+            </form>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">No UISP devices assigned to this account.</p>
+            {% endif %}
+            {% if available_uisp_devices %}
+            <h6>Available UISP devices</h6>
+            {% for device in available_uisp_devices %}
+            <form class="record-row" method="post" action="{{ url_for('assign_uisp_device', device_id=device.id) }}">
+              <input type="hidden" name="next" value="{{ account_url }}" />
+              <input type="hidden" name="client_id" value="{{ client.id }}" />
+              <div class="record-primary">
+                <strong>{{ device.nickname or device.name }}</strong>
+                <span class="badge subtle">Unassigned</span>
+              </div>
+              <div class="record-meta">
+                {% if device.model %}<span>{{ device.model }}</span>{% endif %}
+                {% if device.site_name %}<span class="subtle">{{ device.site_name }}</span>{% endif %}
+                {% if device.ip_address %}<span class="subtle">IP {{ device.ip_address }}</span>{% endif %}
+                <span class="subtle">Last seen {{ device.last_seen_at.strftime('%b %d, %Y %I:%M %p') if device.last_seen_at else 'Unknown' }}</span>
+              </div>
+              <label>
+                Alias
+                <input type="text" name="nickname" placeholder="Assign alias" />
+              </label>
+              <label>
+                Notes
+                <textarea name="notes" rows="2" placeholder="Mounting notes or install details"></textarea>
+              </label>
+              <div class="record-actions">
+                <button class="button small primary" type="submit">Assign to {{ client.name }}</button>
+              </div>
+            </form>
+            {% endfor %}
+            {% endif %}
             {% if equipment_items %}
             {% for item in equipment_items %}
             <form class="record-row" method="post" action="{{ url_for('update_equipment', equipment_id=item.id) }}">
