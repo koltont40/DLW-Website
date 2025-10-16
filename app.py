@@ -578,8 +578,103 @@ def _coerce_int(value: object | None) -> int | None:
     return None
 
 
-def parse_uisp_timestamp(value: str | int | float | None) -> datetime | None:
+def parse_uisp_timestamp(value: object | None) -> datetime | None:
     if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        timestamp = value
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+        return timestamp.astimezone(UTC)
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            timestamp = parse_uisp_timestamp(item)
+            if timestamp is not None:
+                return timestamp
+        return None
+
+    if isinstance(value, dict):
+        direct_keys = (
+            "timestamp",
+            "value",
+            "dateTime",
+            "datetime",
+            "date",
+            "time",
+            "iso",
+            "iso8601",
+            "at",
+            "lastSeen",
+            "last_seen",
+            "lastSeenAt",
+            "last_seen_at",
+            "lastHeartbeat",
+            "last_heartbeat",
+            "lastHeartbeatAt",
+            "last_heartbeat_at",
+            "lastCommunication",
+            "last_communication",
+            "lastCommunicationAt",
+            "last_communication_at",
+            "lastReachable",
+            "last_reachable",
+            "lastReachableAt",
+            "last_reachable_at",
+            "heartbeatAt",
+            "heartbeat_at",
+            "updatedAt",
+            "updated_at",
+            "$date",
+        )
+        for key in direct_keys:
+            if key in value:
+                timestamp = parse_uisp_timestamp(value.get(key))
+                if timestamp is not None:
+                    return timestamp
+
+        seconds = _coerce_int(
+            value.get("seconds")
+            or value.get("secs")
+            or value.get("epoch")
+            or value.get("epochSeconds")
+            or value.get("epoch_seconds")
+        )
+        millis = _coerce_int(
+            value.get("millis")
+            or value.get("milliseconds")
+            or value.get("ms")
+            or value.get("epochMillis")
+            or value.get("epoch_millis")
+        )
+        micros = _coerce_int(
+            value.get("micros")
+            or value.get("microseconds")
+            or value.get("us")
+            or value.get("epochMicros")
+            or value.get("epoch_micros")
+        )
+        nanos = _coerce_int(
+            value.get("nanos")
+            or value.get("nanoseconds")
+            or value.get("ns")
+            or value.get("epochNanos")
+            or value.get("epoch_nanos")
+        )
+
+        if any(component is not None for component in (seconds, millis, micros, nanos)):
+            total_seconds = 0.0
+            if seconds is not None:
+                total_seconds += float(seconds)
+            if millis is not None:
+                total_seconds += float(millis) / 1000.0
+            if micros is not None:
+                total_seconds += float(micros) / 1_000_000.0
+            if nanos is not None:
+                total_seconds += float(nanos) / 1_000_000_000.0
+            return parse_uisp_timestamp(total_seconds)
+
         return None
 
     if isinstance(value, (int, float)):
@@ -593,20 +688,28 @@ def parse_uisp_timestamp(value: str | int | float | None) -> datetime | None:
         except (OverflowError, OSError, ValueError):
             return None
 
-    cleaned: str
+    if isinstance(value, bool):
+        # True/False do not represent useful timestamps.
+        return None
+
     if isinstance(value, str):
         cleaned = value.strip()
         if not cleaned:
             return None
-        if cleaned.endswith("Z"):
-            cleaned = cleaned[:-1] + "+00:00"
-        if cleaned.isdigit():
-            return parse_uisp_timestamp(int(cleaned))
+        normalized = cleaned
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        if re.search(r"[+-]\d{4}$", normalized):
+            normalized = normalized[:-5] + normalized[-5:-2] + ":" + normalized[-2:]
+        if normalized.lower().endswith(" utc"):
+            normalized = normalized[:-4].rstrip() + "+00:00"
+        if normalized.isdigit():
+            return parse_uisp_timestamp(int(normalized))
         try:
-            timestamp = datetime.fromisoformat(cleaned)
+            timestamp = datetime.fromisoformat(normalized)
         except ValueError:
             try:
-                return datetime.fromtimestamp(float(cleaned), tz=UTC)
+                return datetime.fromtimestamp(float(normalized), tz=UTC)
             except (TypeError, ValueError, OverflowError, OSError):
                 return None
         if timestamp.tzinfo is None:
@@ -9148,12 +9251,112 @@ def register_routes(app: Flask) -> None:
             if not cleaned:
                 return None
             lowered = cleaned.lower()
-            if lowered in {"online", "offline"}:
-                return lowered
-            if "off" in lowered:
-                return "offline"
-            if "on" in lowered:
-                return "online"
+            normalized = re.sub(r"[\s_-]+", " ", lowered).strip()
+            if not normalized:
+                return None
+            if normalized in {"online", "offline"}:
+                return normalized
+            if normalized in {"unknown", "not available", "n/a", "na"}:
+                return None
+
+            compact = normalized.replace(" ", "")
+            offline_markers = (
+                "offline",
+                "off line",
+                "off-line",
+                "disconnected",
+                "disconnect",
+                "not connected",
+                "notconnected",
+                "unconnected",
+                "not reachable",
+                "notreachable",
+                "unreachable",
+                "not responding",
+                "notresponding",
+                "no link",
+                "nolink",
+                "link down",
+                "linkdown",
+                "down",
+                "inactive",
+                "disabled",
+                "degraded",
+                "lost",
+                "never connected",
+                "neverconnected",
+                "never seen",
+                "neverseen",
+                "not operational",
+                "notoperational",
+                "no signal",
+                "nosignal",
+                "no heartbeat",
+                "noheartbeat",
+                "heartbeat lost",
+                "lost heartbeat",
+                "heartbeatlost",
+                "dead",
+                "timeout",
+                "time out",
+                "timed out",
+                "timedout",
+                "expired",
+                "stale",
+                "stalled",
+                "critical",
+                "alarm",
+                "alert",
+            )
+            online_markers = (
+                "online",
+                "on line",
+                "on-line",
+                "connected",
+                "link up",
+                "linkup",
+                "up",
+                "reachable",
+                "responding",
+                "active",
+                "enabled",
+                "available",
+                "operational",
+                "running",
+                "ok",
+                "okay",
+                "good",
+                "great",
+                "excellent",
+                "healthy",
+                "normal",
+                "alive",
+                "heartbeat ok",
+                "stable",
+            )
+
+            alnum_tokens = set(re.findall(r"[a-z0-9]+", normalized))
+            tokens = normalized.split()
+            for marker in offline_markers:
+                marker_compact = marker.replace(" ", "")
+                marker_tokens = marker.split()
+                if (
+                    marker in normalized
+                    or marker_compact in compact
+                    or marker in tokens
+                    or all(token in alnum_tokens for token in marker_tokens)
+                ):
+                    return "offline"
+            for marker in online_markers:
+                marker_compact = marker.replace(" ", "")
+                marker_tokens = marker.split()
+                if (
+                    marker in normalized
+                    or marker_compact in compact
+                    or marker in tokens
+                    or all(token in alnum_tokens for token in marker_tokens)
+                ):
+                    return "online"
             return None
 
         def _extract_heartbeat_timestamp(record: dict[str, object]) -> datetime | None:
@@ -9162,10 +9365,38 @@ def register_routes(app: Flask) -> None:
                 "heartbeatAt",
                 "timestamp",
                 "time",
+                "timestampMs",
+                "timestamp_ms",
                 "lastSeen",
                 "last_seen",
+                "lastSeenMs",
+                "last_seen_ms",
                 "seenAt",
                 "seen_at",
+                "lastSeenAt",
+                "last_seen_at",
+                "lastContact",
+                "last_contact",
+                "lastContactMs",
+                "last_contact_ms",
+                "lastContactAt",
+                "last_contact_at",
+                "lastHeartbeat",
+                "last_heartbeat",
+                "lastHeartbeatAt",
+                "last_heartbeat_at",
+                "lastHeartbeatMs",
+                "last_heartbeat_ms",
+                "lastCommunication",
+                "last_communication",
+                "lastCommunicationAt",
+                "last_communication_at",
+                "lastReachable",
+                "last_reachable",
+                "lastReachableAt",
+                "last_reachable_at",
+                "connectedAt",
+                "connected_at",
             ):
                 timestamp = parse_uisp_timestamp(record.get(key))  # type: ignore[arg-type]
                 if timestamp:
@@ -9175,13 +9406,44 @@ def register_routes(app: Flask) -> None:
                 for key in (
                     "timestamp",
                     "time",
+                    "timestampMs",
+                    "timestamp_ms",
                     "lastSeen",
                     "last_seen",
                     "heartbeatAt",
+                    "lastSeenAt",
+                    "last_seen_at",
+                    "lastContact",
+                    "last_contact",
+                    "lastContactMs",
+                    "last_contact_ms",
+                    "lastContactAt",
+                    "last_contact_at",
+                    "lastHeartbeat",
+                    "last_heartbeat",
+                    "lastHeartbeatAt",
+                    "last_heartbeat_at",
+                    "lastHeartbeatMs",
+                    "last_heartbeat_ms",
+                    "lastCommunication",
+                    "last_communication",
+                    "lastCommunicationAt",
+                    "last_communication_at",
+                    "lastReachable",
+                    "last_reachable",
+                    "lastReachableAt",
+                    "last_reachable_at",
+                    "connectedAt",
+                    "connected_at",
                 ):
                     timestamp = parse_uisp_timestamp(status_field.get(key))  # type: ignore[arg-type]
                     if timestamp:
                         return timestamp
+            heartbeat_field = record.get("heartbeat")
+            if isinstance(heartbeat_field, dict):
+                nested_timestamp = _extract_heartbeat_timestamp(heartbeat_field)
+                if nested_timestamp:
+                    return nested_timestamp
             return None
 
         heartbeat_index: dict[str, dict] = {}
@@ -9202,6 +9464,7 @@ def register_routes(app: Flask) -> None:
                 record.get("uid"),
                 record.get("id"),
                 record.get("_id"),
+                record.get("device_uid"),
             ]
             device_info = record.get("device")
             if isinstance(device_info, dict):
@@ -9212,8 +9475,27 @@ def register_routes(app: Flask) -> None:
                         device_info.get("uid"),
                         device_info.get("deviceId"),
                         device_info.get("device_id"),
+                        device_info.get("deviceUid"),
+                        device_info.get("device_uid"),
                     ]
                 )
+                identification_info = device_info.get("identification")
+                if isinstance(identification_info, dict):
+                    identifiers.extend(
+                        [
+                            identification_info.get("id"),
+                            identification_info.get("_id"),
+                            identification_info.get("uid"),
+                            identification_info.get("deviceId"),
+                            identification_info.get("device_id"),
+                            identification_info.get("deviceUid"),
+                            identification_info.get("device_uid"),
+                        ]
+                    )
+                    for key in ("mac", "macAddress", "mac_address"):
+                        normalized_mac = _normalize_mac(identification_info.get(key))
+                        if normalized_mac and normalized_mac not in heartbeat_mac_index:
+                            heartbeat_mac_index[normalized_mac] = record
                 for key in ("mac", "macAddress", "mac_address"):
                     normalized_mac = _normalize_mac(device_info.get(key))
                     if normalized_mac and normalized_mac not in heartbeat_mac_index:
@@ -9322,20 +9604,155 @@ def register_routes(app: Flask) -> None:
                     if fallback_mac_normalized:
                         heartbeat_entry = heartbeat_mac_index.get(fallback_mac_normalized)
 
-            status_info = entry.get("status") or {}
+            status_source = entry.get("status")
+            status_info: dict[str, object] = (
+                status_source.copy() if isinstance(status_source, dict) else {}
+            )
+            heartbeat_info = entry.get("heartbeat")
+            if isinstance(heartbeat_info, dict):
+                merged = status_info.copy()
+                merged.update({k: v for k, v in heartbeat_info.items() if k not in merged})
+                status_info = merged
             status_value = (
                 _normalize_status_value(status_info.get("value"))
                 or _normalize_status_value(status_info.get("state"))
-                or _normalize_status_value(status_info)
+                or _normalize_status_value(status_info.get("status"))
+                or _normalize_status_value(status_info.get("connection"))
+                or _normalize_status_value(status_info.get("connectionState"))
+                or _normalize_status_value(status_info.get("connection_state"))
+                or _normalize_status_value(status_info.get("connectionStatus"))
+                or _normalize_status_value(status_info.get("connection_status"))
+                or _normalize_status_value(status_info.get("connectionStatusLabel"))
+                or _normalize_status_value(status_info.get("stateLabel"))
+                or _normalize_status_value(status_info.get("statusLabel"))
+                or _normalize_status_value(status_info.get("statusText"))
+                or _normalize_status_value(status_info.get("statusDescription"))
+                or _normalize_status_value(status_info.get("health"))
+                or _normalize_status_value(status_info.get("healthStatus"))
+                or _normalize_status_value(status_info.get("health_status"))
+                or _normalize_status_value(status_info.get("availability"))
+                or _normalize_status_value(status_info.get("online"))
+                or _normalize_status_value(status_info.get("isOnline"))
+                or _normalize_status_value(status_info.get("connected"))
+                or _normalize_status_value(status_info.get("heartbeatStatus"))
+                or _normalize_status_value(status_info.get("heartbeat_status"))
+                or _normalize_status_value(heartbeat_info.get("status") if isinstance(heartbeat_info, dict) else None)
+                or _normalize_status_value(heartbeat_info.get("state") if isinstance(heartbeat_info, dict) else None)
+                or _normalize_status_value(heartbeat_info.get("value") if isinstance(heartbeat_info, dict) else None)
+                or _normalize_status_value(status_source)
                 or _normalize_status_value(entry.get("status"))
+                or _normalize_status_value(entry.get("state"))
+                or _normalize_status_value(entry.get("value"))
+                or _normalize_status_value(entry.get("connection"))
+                or _normalize_status_value(entry.get("connectionState"))
+                or _normalize_status_value(entry.get("connection_state"))
+                or _normalize_status_value(entry.get("connectionStatus"))
+                or _normalize_status_value(entry.get("connection_status"))
+                or _normalize_status_value(entry.get("availability"))
+                or _normalize_status_value(entry.get("online"))
+                or _normalize_status_value(entry.get("isOnline"))
+                or _normalize_status_value(entry.get("connected"))
+                or _normalize_status_value(entry.get("heartbeatStatus"))
+                or _normalize_status_value(entry.get("heartbeat_status"))
                 or "unknown"
             )
 
             last_seen = parse_uisp_timestamp(
                 status_info.get("lastSeen")
                 or status_info.get("last_seen")
+                or status_info.get("lastSeenAt")
+                or status_info.get("last_seen_at")
+                or status_info.get("lastSeenMs")
+                or status_info.get("last_seen_ms")
+                or status_info.get("lastContact")
+                or status_info.get("last_contact")
+                or status_info.get("lastContactMs")
+                or status_info.get("last_contact_ms")
+                or status_info.get("lastContactAt")
+                or status_info.get("last_contact_at")
+                or status_info.get("lastHeartbeat")
+                or status_info.get("last_heartbeat")
+                or status_info.get("lastHeartbeatAt")
+                or status_info.get("last_heartbeat_at")
+                or status_info.get("lastHeartbeatMs")
+                or status_info.get("last_heartbeat_ms")
+                or status_info.get("heartbeatAt")
+                or status_info.get("heartbeat_at")
+                or status_info.get("heartbeatAtMs")
+                or status_info.get("heartbeat_at_ms")
+                or status_info.get("lastCommunication")
+                or status_info.get("last_communication")
+                or status_info.get("lastCommunicationAt")
+                or status_info.get("last_communication_at")
+                or status_info.get("lastCommunicationMs")
+                or status_info.get("last_communication_ms")
+                or status_info.get("lastReachable")
+                or status_info.get("last_reachable")
+                or status_info.get("lastReachableAt")
+                or status_info.get("last_reachable_at")
+                or status_info.get("lastReachableMs")
+                or status_info.get("last_reachable_ms")
+                or status_info.get("connectedAt")
+                or status_info.get("connected_at")
+                or status_info.get("connectedAtMs")
+                or status_info.get("connected_at_ms")
+                or status_info.get("updatedAt")
+                or status_info.get("updated_at")
+                or status_info.get("timestamp")
+                or status_info.get("timestampMs")
+                or status_info.get("timestamp_ms")
+                or (heartbeat_info.get("timestamp") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("timestampMs") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("timestamp_ms") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastSeen") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_seen") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastSeenAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_seen_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastContact") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_contact") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastContactAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_contact_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastHeartbeat") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_heartbeat") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastHeartbeatAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_heartbeat_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastCommunication") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_communication") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastCommunicationAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_communication_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastReachable") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_reachable") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastReachableAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_reachable_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("connectedAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("connected_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("updatedAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("updated_at") if isinstance(heartbeat_info, dict) else None)
                 or entry.get("lastSeen")
                 or entry.get("last_seen")
+                or entry.get("lastSeenAt")
+                or entry.get("last_seen_at")
+                or entry.get("lastContact")
+                or entry.get("last_contact")
+                or entry.get("lastContactAt")
+                or entry.get("last_contact_at")
+                or entry.get("lastHeartbeat")
+                or entry.get("last_heartbeat")
+                or entry.get("lastCommunication")
+                or entry.get("last_communication")
+                or entry.get("lastCommunicationAt")
+                or entry.get("last_communication_at")
+                or entry.get("lastReachable")
+                or entry.get("last_reachable")
+                or entry.get("lastReachableAt")
+                or entry.get("last_reachable_at")
+                or entry.get("connectedAt")
+                or entry.get("connected_at")
+                or entry.get("updatedAt")
+                or entry.get("updated_at")
+                or entry.get("timestamp")
+                or entry.get("timestampMs")
+                or entry.get("timestamp_ms")
             )
 
             heartbeat_status_value: str | None = None
@@ -9347,16 +9764,36 @@ def register_routes(app: Flask) -> None:
                     "value",
                     "connection",
                     "connectionState",
+                    "connection_status",
                     "heartbeatStatus",
+                    "heartbeat_status",
+                    "stateLabel",
+                    "statusLabel",
+                    "statusText",
+                    "statusDescription",
+                    "health",
+                    "healthStatus",
+                    "health_status",
+                    "availability",
                     "online",
                     "isOnline",
                     "connected",
+                    "heartbeat",
                 ):
                     heartbeat_status_value = _normalize_status_value(
                         heartbeat_entry.get(key)
                     )
                     if heartbeat_status_value:
                         break
+                if not heartbeat_status_value:
+                    heartbeat_field = heartbeat_entry.get("heartbeat")
+                    if isinstance(heartbeat_field, dict):
+                        for key in ("status", "state", "value", "connection"):
+                            heartbeat_status_value = _normalize_status_value(
+                                heartbeat_field.get(key)
+                            )
+                            if heartbeat_status_value:
+                                break
                 heartbeat_seen = _extract_heartbeat_timestamp(heartbeat_entry)
                 if heartbeat_seen and (
                     last_seen is None or heartbeat_seen > last_seen
