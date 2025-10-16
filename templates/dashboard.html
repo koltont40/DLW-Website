@@ -316,7 +316,17 @@
         <div>
           <h2>{{ selected_client.name }}</h2>
           <p class="subtle">
-            Account <code>{{ selected_client.account_reference }}</code>
+            Account
+            <a
+              href="#"
+              class="inline-link account-reference-trigger"
+              data-account-reference="{{ selected_client.account_reference }}"
+              data-account-name="{{ selected_client.name }}"
+              aria-controls="account-reference-modal"
+              role="button"
+            >
+              {{ selected_client.account_reference }}
+            </a>
             • <a class="inline-link" href="mailto:{{ selected_client.email }}">{{ selected_client.email }}</a>
           </p>
         </div>
@@ -775,7 +785,20 @@
                   {{ client.name }}
                 </a>
               </h3>
-              <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
+              <p class="subtle">
+                Account
+                <a
+                  href="#"
+                  class="inline-link account-reference-trigger"
+                  data-account-reference="{{ client.account_reference }}"
+                  data-account-name="{{ client.name }}"
+                  aria-controls="account-reference-modal"
+                  role="button"
+                >
+                  {{ client.account_reference }}
+                </a>
+                · {{ client.email }}
+              </p>
             </div>
             <div class="client-metrics">
               <span><strong>{{ client.invoices|length }}</strong> invoices</span>
@@ -1108,7 +1131,20 @@
                   {{ client.name }}
                 </a>
               </h3>
-              <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
+              <p class="subtle">
+                Account
+                <a
+                  href="#"
+                  class="inline-link account-reference-trigger"
+                  data-account-reference="{{ client.account_reference }}"
+                  data-account-name="{{ client.name }}"
+                  aria-controls="account-reference-modal"
+                  role="button"
+                >
+                  {{ client.account_reference }}
+                </a>
+                · {{ client.email }}
+              </p>
             </div>
             <div class="client-status-pills">
               <span class="badge subtle">{{ client.status }}</span>
@@ -1715,7 +1751,20 @@
                   {{ client.name }}
                 </a>
               </h3>
-              <p class="subtle">Account {{ client.account_reference }} · {{ client.email }}</p>
+              <p class="subtle">
+                Account
+                <a
+                  href="#"
+                  class="inline-link account-reference-trigger"
+                  data-account-reference="{{ client.account_reference }}"
+                  data-account-name="{{ client.name }}"
+                  aria-controls="account-reference-modal"
+                  role="button"
+                >
+                  {{ client.account_reference }}
+                </a>
+                · {{ client.email }}
+              </p>
             </div>
             <span class="badge subtle">{{ client.status }}</span>
           </header>
@@ -2986,6 +3035,168 @@
       </div>
     </section>
     {% endif %}
+  <div class="modal-backdrop" id="account-reference-modal" hidden>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="account-reference-title">
+      <header class="modal-header">
+        <div>
+          <h2 id="account-reference-title">Customer ID</h2>
+          <p class="subtle">Reference this identifier when coordinating billing, installs, or support.</p>
+        </div>
+        <button class="modal-close" type="button" data-close aria-label="Close customer ID window">&times;</button>
+      </header>
+      <div class="modal-content">
+        <dl class="detail-list">
+          <div>
+            <dt>Customer</dt>
+            <dd data-modal-account-name>—</dd>
+          </div>
+          <div>
+            <dt>Account ID</dt>
+            <dd><code data-modal-account-reference>—</code></dd>
+          </div>
+        </dl>
+        <div class="button-row">
+          <button class="button small secondary" type="button" data-copy>Copy ID</button>
+          <button class="button small primary" type="button" data-close>Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const initializeAccountReferenceModal = () => {
+      const modal = document.getElementById('account-reference-modal');
+      if (!modal || modal.dataset.initialized === 'true') {
+        return;
+      }
+
+      modal.dataset.initialized = 'true';
+
+      const nameTarget = modal.querySelector('[data-modal-account-name]');
+      const idTarget = modal.querySelector('[data-modal-account-reference]');
+      const closeButtons = modal.querySelectorAll('[data-close]');
+      const copyButton = modal.querySelector('[data-copy]');
+      let previousOverflow = '';
+      let activeTrigger = null;
+
+      const focusFirstCloseButton = () => {
+        const firstClose = modal.querySelector('[data-close]');
+        if (firstClose) {
+          window.requestAnimationFrame(() => {
+            firstClose.focus();
+          });
+        }
+      };
+
+      const openModal = (trigger) => {
+        if (!trigger) {
+          return;
+        }
+
+        const accountName = trigger.getAttribute('data-account-name') || 'Customer';
+        const accountReference = trigger.getAttribute('data-account-reference') || '';
+
+        if (nameTarget) {
+          nameTarget.textContent = accountName;
+        }
+        if (idTarget) {
+          idTarget.textContent = accountReference || '—';
+        }
+
+        activeTrigger = trigger;
+        previousOverflow = document.body.style.overflow;
+        modal.removeAttribute('hidden');
+        document.body.style.overflow = 'hidden';
+        focusFirstCloseButton();
+      };
+
+      const closeModal = () => {
+        modal.setAttribute('hidden', '');
+        document.body.style.overflow = previousOverflow;
+        if (activeTrigger) {
+          activeTrigger.focus();
+          activeTrigger = null;
+        }
+      };
+
+      const handleTriggerClick = (event) => {
+        const trigger = event.target.closest('.account-reference-trigger');
+        if (!trigger) {
+          return;
+        }
+
+        event.preventDefault();
+        openModal(trigger);
+      };
+
+      document.addEventListener('click', handleTriggerClick);
+
+      closeButtons.forEach((button) => {
+        button.addEventListener('click', closeModal);
+      });
+
+      modal.addEventListener('click', (event) => {
+        if (event.target === modal) {
+          closeModal();
+        }
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !modal.hasAttribute('hidden')) {
+          event.preventDefault();
+          closeModal();
+        }
+      });
+
+      if (copyButton) {
+        copyButton.addEventListener('click', async () => {
+          const value = (idTarget ? idTarget.textContent : '').trim();
+          if (!value) {
+            return;
+          }
+
+          let copied = false;
+
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            try {
+              await navigator.clipboard.writeText(value);
+              copied = true;
+            } catch (error) {
+              copied = false;
+            }
+          }
+
+          if (!copied && idTarget) {
+            const range = document.createRange();
+            range.selectNodeContents(idTarget);
+            const selection = window.getSelection();
+            if (selection) {
+              selection.removeAllRanges();
+              selection.addRange(range);
+            }
+            try {
+              copied = document.execCommand('copy');
+            } catch (error) {
+              copied = false;
+            }
+          }
+
+          if (copied) {
+            const originalText = copyButton.textContent;
+            copyButton.textContent = 'Copied!';
+            window.setTimeout(() => {
+              copyButton.textContent = originalText || 'Copy ID';
+            }, 2000);
+          }
+        });
+      }
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initializeAccountReferenceModal);
+    } else {
+      initializeAccountReferenceModal();
+    }
+  </script>
   </div>
 </div>
 {% endblock %}
