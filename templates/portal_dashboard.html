@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set page_surface_class = 'page-surface full-bleed' %}
 {% block title %}My Account | DIXIELAND WIRELESS LLC{% endblock %}
 {% block content %}
 <div class="portal-layout">
@@ -8,399 +9,590 @@
       <p class="subtle">Account {{ client.account_reference }}</p>
       <p class="subtle">{{ client.email }}</p>
     </div>
-    <nav class="portal-nav">
-      <a href="#overview">Overview</a>
-      <a href="#billing">Billing</a>
-      <a href="#equipment">Equipment</a>
-      <a href="#support">Support</a>
-      <a href="#appointments">Appointments</a>
+    <nav class="portal-nav" data-sidebar data-expanded="false">
+      <a class="portal-nav-primary" href="#overview">Overview</a>
+      <button
+        class="sidebar-toggle portal-nav-toggle"
+        type="button"
+        data-sidebar-toggle
+        data-expand-label="Show menu"
+        data-collapse-label="Hide menu"
+        aria-expanded="false"
+        aria-controls="portal-nav-sections"
+      >
+        Show menu
+      </button>
+      <div class="portal-nav-sections" id="portal-nav-sections" data-sidebar-content>
+        <a href="#billing">Billing</a>
+        <a href="#equipment">Equipment</a>
+        <a href="#support">Support</a>
+        <a href="#appointments">Appointments</a>
+      </div>
     </nav>
     <div class="portal-sidebar-footer">
       <a class="button secondary full-width" href="{{ url_for('portal_logout') }}">Log out</a>
     </div>
   </aside>
   <div class="portal-main">
-    <section class="card portal-section" id="overview">
-      <header class="portal-section-header">
-        <div>
-          <h2>Welcome back, {{ client.name.split(' ')[0] if ' ' in client.name else client.name }}!</h2>
-          <p class="subtle">Track your balance, connected gear, appointments, and support history in one place.</p>
-        </div>
-      </header>
-      <div class="metrics">
-        <div class="metric-card">
-          <span class="metric-label">Account #</span>
-          <span class="metric-value">{{ client.account_reference }}</span>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">Balance Due</span>
-          <span class="metric-value">{{ total_due_cents|currency }}</span>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">Next Due Date</span>
-          <span class="metric-value">{{ upcoming_due_date|date_or_dash }}</span>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">Open Tickets</span>
-          <span class="metric-value">{{ open_ticket_count }}</span>
-        </div>
-      </div>
-      <div class="portal-profile-grid">
-        <section class="portal-profile-card">
-          <h3>Contact information</h3>
-          <dl>
-            <div>
-              <dt>Email</dt>
-              <dd>{{ client.email }}</dd>
-            </div>
-            <div>
-              <dt>Phone</dt>
-              <dd>{{ client.phone or 'Add a number through support' }}</dd>
-            </div>
-            <div>
-              <dt>Service address</dt>
-              <dd>{{ client.address or 'Pending install details' }}</dd>
-            </div>
-            <div>
-              <dt>Driver's license</dt>
-              <dd>{{ client.driver_license_number or 'On file with the office' }}</dd>
-            </div>
-            <div>
-              <dt>Service plans</dt>
-              <dd>{{ client.service_summary or 'Pending selection' }}</dd>
-            </div>
-            <div>
-              <dt>Wi-Fi router</dt>
-              <dd>
-                {% if client.wifi_router_needed %}
-                Provided by DIXIELAND WIRELESS LLC
-                {% else %}
-                Customer supplied equipment
-                {% endif %}
-              </dd>
-            </div>
-          </dl>
-        </section>
-        <section class="portal-profile-card">
-          <h3>Identity verification</h3>
-          {% if client.verification_photo_filename %}
-          <p class="subtle">Submitted {{ client.verification_photo_uploaded_at.strftime('%b %d, %Y') if client.verification_photo_uploaded_at else 'recently' }}.</p>
-          <div class="verification-preview-wrapper">
-            <img
-              src="{{ url_for('client_verification_photo', client_id=client.id) }}"
-              alt="Identification on file"
-              class="verification-preview"
-            />
+    <section
+      class="card portal-section collapsible-card"
+      id="overview"
+      data-collapsible
+      data-default-open="false"
+    >
+      <button
+        class="collapsible-trigger"
+        type="button"
+        data-collapsible-toggle
+        aria-expanded="false"
+        aria-controls="portal-overview-content"
+      >
+        <span class="collapsible-heading">
+          <span class="collapsible-title" role="heading" aria-level="2">Account overview</span>
+          <span class="collapsible-description subtle">Key stats and contact details for your service.</span>
+        </span>
+        <span class="collapsible-icon" aria-hidden="true"></span>
+      </button>
+      <div class="collapsible-content portal-section-content" id="portal-overview-content" data-collapsible-content hidden>
+        <header class="portal-section-header">
+          <div>
+            <h2>Welcome back, {{ client.name.split(' ')[0] if ' ' in client.name else client.name }}!</h2>
+            <p class="subtle">Track your balance, connected gear, appointments, and support history in one place.</p>
           </div>
-          {% else %}
-          <p class="subtle">No identification photo uploaded yet. Contact support if you need to update your records.</p>
-          {% endif %}
-          <p class="subtle">Need to make a change? Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a> so we can refresh your documents.</p>
-        </section>
+        </header>
+        <div class="metrics">
+          <div class="metric-card">
+            <span class="metric-label">Account #</span>
+            <span class="metric-value">{{ client.account_reference }}</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Balance Due</span>
+            <span class="metric-value">{{ total_due_cents|currency }}</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Next Due Date</span>
+            <span class="metric-value">{{ upcoming_due_date|date_or_dash }}</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-label">Open Tickets</span>
+            <span class="metric-value">{{ open_ticket_count }}</span>
+          </div>
+        </div>
+        <div class="portal-profile-grid">
+          <section class="portal-profile-card">
+            <h3>Contact information</h3>
+            <dl>
+              <div>
+                <dt>Email</dt>
+                <dd>{{ client.email }}</dd>
+              </div>
+              <div>
+                <dt>Phone</dt>
+                <dd>{{ client.phone or 'Add a number through support' }}</dd>
+              </div>
+              <div>
+                <dt>Service address</dt>
+                <dd>{{ client.address or 'Pending install details' }}</dd>
+              </div>
+              <div>
+                <dt>Driver's license</dt>
+                <dd>{{ client.driver_license_number or 'On file with the office' }}</dd>
+              </div>
+              <div>
+                <dt>Service plans</dt>
+                <dd>{{ client.service_summary or 'Pending selection' }}</dd>
+              </div>
+              <div>
+                <dt>Wi-Fi router</dt>
+                <dd>
+                  {% if client.wifi_router_needed %}
+                  Provided by DIXIELAND WIRELESS LLC
+                  {% else %}
+                  Customer supplied equipment
+                  {% endif %}
+                </dd>
+              </div>
+            </dl>
+          </section>
+          <section class="portal-profile-card">
+            <h3>Identity verification</h3>
+            {% if client.verification_photo_filename %}
+            <p class="subtle">Submitted {{ client.verification_photo_uploaded_at.strftime('%b %d, %Y') if client.verification_photo_uploaded_at else 'recently' }}.</p>
+            <div class="verification-preview-wrapper">
+              <img
+                src="{{ url_for('client_verification_photo', client_id=client.id) }}"
+                alt="Identification on file"
+                class="verification-preview"
+              />
+            </div>
+            {% else %}
+            <p class="subtle">No identification photo uploaded yet. Contact support if you need to update your records.</p>
+            {% endif %}
+            <p class="subtle">Need to make a change? Email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a> so we can refresh your documents.</p>
+          </section>
+        </div>
       </div>
     </section>
 
-    <section class="card portal-section" id="billing">
-      <header class="portal-section-header">
-        <div>
-          <h2>Billing History</h2>
-          <p class="subtle">Stay current on invoices, payments, and due dates.</p>
-        </div>
-      </header>
-      <div class="portal-billing-grid">
-        <div class="portal-autopay-card">
-          <h3>Saved cards &amp; autopay</h3>
-          {% set default_method = client.default_payment_method() %}
-          {% if client.autopay_enabled and default_method %}
-          <p class="subtle">Autopay charges {{ default_method.describe() }} when invoices are due.</p>
-          {% else %}
-          <p class="subtle">Add a card and enable autopay to keep service active automatically.</p>
-          {% endif %}
-          <ul class="portal-payment-methods">
-            {% for method in payment_methods %}
-            <li>
-              <div class="method-row">
-                <div>
-                  <strong>{{ method.describe() }}</strong>
-                  <p class="subtle">Expires {{ "%02d"|format(method.exp_month) }}/{{ method.exp_year }}</p>
+    <section
+      class="card portal-section collapsible-card"
+      id="billing"
+      data-collapsible
+      data-default-open="false"
+    >
+      <button
+        class="collapsible-trigger"
+        type="button"
+        data-collapsible-toggle
+        aria-expanded="false"
+        aria-controls="portal-billing-content"
+      >
+        <span class="collapsible-heading">
+          <span class="collapsible-title" role="heading" aria-level="2">Billing &amp; payments</span>
+          <span class="collapsible-description subtle">Manage cards, autopay schedules, and past invoices.</span>
+        </span>
+        <span class="collapsible-icon" aria-hidden="true"></span>
+      </button>
+      <div class="collapsible-content portal-section-content" id="portal-billing-content" data-collapsible-content hidden>
+        <header class="portal-section-header">
+          <div>
+            <h2>Billing History</h2>
+            <p class="subtle">Stay current on invoices, payments, and due dates.</p>
+          </div>
+        </header>
+        <div class="portal-billing-grid">
+          <div class="portal-autopay-card">
+            <h3>Saved cards &amp; autopay</h3>
+            {% set default_method = client.default_payment_method() %}
+            {% if client.autopay_enabled and default_method %}
+            <p class="subtle">
+              Autopay charges {{ default_method.describe() }}
+              {% if client.autopay_day %}
+              on day {{ client.autopay_day }} of each month.
+              {% else %}
+              when invoices are due.
+              {% endif %}
+            </p>
+            {% else %}
+            <p class="subtle">Add a card and enable autopay to keep service active automatically.</p>
+            {% endif %}
+            <ul class="portal-payment-methods">
+              {% for method in payment_methods %}
+              <li>
+                <div class="method-row">
+                  <div>
+                    <strong>{{ method.describe() }}</strong>
+                    <p class="subtle">Expires {{ "%02d"|format(method.exp_month) }}/{{ method.exp_year }}</p>
+                  </div>
+                  {% if method.is_default %}
+                  <span class="badge success">Default</span>
+                  {% endif %}
                 </div>
-                {% if method.is_default %}
-                <span class="badge success">Default</span>
-                {% endif %}
-              </div>
-            </li>
-            {% else %}
-            <li class="subtle">No cards saved yet.</li>
-            {% endfor %}
-          </ul>
-          {% if stripe_ready and stripe_publishable_key %}
-          <div class="portal-card-controls">
-            <button class="button small primary" type="button" id="portal-add-card">Add card</button>
-          </div>
-          <div class="portal-card-form hidden" id="portal-card-form">
-            <div id="portal-card-element" class="portal-card-element"></div>
-            <p class="form-help" id="portal-card-errors"></p>
-            <div class="button-row">
-              <button class="button small primary" type="button" id="portal-save-card">Save card</button>
-              <button class="button small secondary" type="button" id="portal-cancel-card">Cancel</button>
+              </li>
+              {% else %}
+              <li class="subtle">No cards saved yet.</li>
+              {% endfor %}
+            </ul>
+            {% if stripe_ready and stripe_publishable_key %}
+            <div class="portal-card-controls">
+              <button class="button small primary" type="button" id="portal-add-card">Add card</button>
             </div>
+            <div class="portal-card-form hidden" id="portal-card-form">
+              <div id="portal-card-element" class="portal-card-element"></div>
+              <p class="form-help" id="portal-card-errors"></p>
+              <div class="button-row">
+                <button class="button small primary" type="button" id="portal-save-card">Save card</button>
+                <button class="button small secondary" type="button" id="portal-cancel-card">Cancel</button>
+              </div>
+            </div>
+            {% elif not stripe_ready %}
+            <p class="subtle">Contact support to update saved payment methods.</p>
+            {% endif %}
+            <form class="stacked-form portal-autopay-form" method="post" action="{{ url_for('portal_autopay') }}">
+              {% if client.autopay_enabled %}
+              <button class="button small danger" type="submit" name="action" value="disable">Disable autopay</button>
+              {% else %}
+              {% if payment_methods %}
+              <label>
+                Use card
+                <select name="payment_method_id">
+                  {% for method in payment_methods %}
+                  <option value="{{ method.id }}" {% if method.is_default %}selected{% endif %}>{{ method.describe() }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <button class="button small primary" type="submit">Enable autopay</button>
+              {% else %}
+              <p class="subtle">Add a card to enable autopay.</p>
+              <button class="button small primary" type="submit" disabled>Enable autopay</button>
+              {% endif %}
+              {% endif %}
+            </form>
+            <div class="autopay-schedule-status">
+              {% if client.autopay_day %}
+              <p class="subtle">Autopay is scheduled for day {{ client.autopay_day }} each month.</p>
+              {% else %}
+              <p class="subtle">Autopay runs on each invoice due date.</p>
+              {% endif %}
+              {% if client.autopay_day_pending %}
+              <p class="subtle warning">Requested day {{ client.autopay_day_pending }} is awaiting approval.</p>
+              {% endif %}
+            </div>
+            <form class="stacked-form autopay-schedule-form" method="post" action="{{ url_for('portal_autopay_schedule') }}">
+              {% set selected_day = client.autopay_day_pending or client.autopay_day %}
+              <label>
+                Preferred autopay day
+                <select name="requested_day">
+                  <option value="">Charge on invoice due dates</option>
+                  {% for day in range(1, 29) %}
+                  <option value="{{ day }}" {% if selected_day == day %}selected{% endif %}>Day {{ day }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <button class="button small secondary" type="submit">Submit schedule request</button>
+            </form>
           </div>
-          {% elif not stripe_ready %}
-          <p class="subtle">Contact support to update saved payment methods.</p>
-          {% endif %}
-          <form class="stacked-form portal-autopay-form" method="post" action="{{ url_for('portal_autopay') }}">
-            {% if client.autopay_enabled %}
-            <button class="button small danger" type="submit" name="action" value="disable">Disable autopay</button>
+          <div class="portal-invoice-card">
+            {% if invoices %}
+            <div class="table-wrapper">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Description</th>
+                    <th>Amount</th>
+                    <th>Due date</th>
+                    <th>Status</th>
+                    <th>Updated</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for invoice in invoices %}
+                  <tr>
+                    <td>{{ invoice.description }}</td>
+                    <td>{{ invoice.amount_cents|currency }}</td>
+                    <td>{{ invoice.due_date|date_or_dash }}</td>
+                    <td><span class="status-pill status-{{ invoice.status|lower|replace(' ', '-') }}">{{ invoice.status }}</span></td>
+                    <td>{{ invoice.updated_at.strftime('%b %d, %Y') }}</td>
+                    <td>
+                      <div class="table-actions">
+                        {% set actions = namespace(rendered=false) %}
+                        {% if invoice.pdf_filename %}
+                        {% set actions.rendered = True %}
+                        <a class="button small secondary" href="{{ url_for('portal_invoice_pdf', invoice_id=invoice.id) }}" target="_blank" rel="noopener">View PDF</a>
+                        {% endif %}
+                        {% if invoice.status not in ['Paid', 'Cancelled', 'Refunded'] and stripe_ready and stripe_publishable_key %}
+                        {% set actions.rendered = True %}
+                        <a class="button small primary" href="{{ url_for('portal_pay_invoice', invoice_id=invoice.id) }}">Pay</a>
+                        {% endif %}
+                        {% if not actions.rendered %}
+                        <span class="subtle">—</span>
+                        {% endif %}
+                      </div>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
             {% else %}
-            {% if payment_methods %}
-            <label>
-              Use card
-              <select name="payment_method_id">
-                {% for method in payment_methods %}
-                <option value="{{ method.id }}" {% if method.is_default %}selected{% endif %}>{{ method.describe() }}</option>
-                {% endfor %}
-              </select>
-            </label>
-            <button class="button small primary" type="submit">Enable autopay</button>
-            {% else %}
-            <p class="subtle">Add a card to enable autopay.</p>
-            <button class="button small primary" type="submit" disabled>Enable autopay</button>
+            <p class="subtle">Invoices will appear here once billing begins.</p>
             {% endif %}
-            {% endif %}
-          </form>
+          </div>
         </div>
-        <div class="portal-invoice-card">
-          {% if invoices %}
-          <div class="table-wrapper">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Description</th>
-                  <th>Amount</th>
-                  <th>Due date</th>
-                  <th>Status</th>
-                  <th>Updated</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for invoice in invoices %}
-                <tr>
-                  <td>{{ invoice.description }}</td>
-                  <td>{{ invoice.amount_cents|currency }}</td>
-                  <td>{{ invoice.due_date|date_or_dash }}</td>
-                  <td><span class="status-pill status-{{ invoice.status|lower|replace(' ', '-') }}">{{ invoice.status }}</span></td>
-                  <td>{{ invoice.updated_at.strftime('%b %d, %Y') }}</td>
-                  <td>
-                    {% if invoice.status not in ['Paid', 'Cancelled', 'Refunded'] and stripe_ready and stripe_publishable_key %}
-                    <a class="button small primary" href="{{ url_for('portal_pay_invoice', invoice_id=invoice.id) }}">Pay</a>
-                    {% else %}
-                    <span class="subtle">—</span>
+      </div>
+    </section>
+
+    <section
+      class="card portal-section collapsible-card"
+      id="equipment"
+      data-collapsible
+      data-default-open="false"
+    >
+      <button
+        class="collapsible-trigger"
+        type="button"
+        data-collapsible-toggle
+        aria-expanded="false"
+        aria-controls="portal-equipment-content"
+      >
+        <span class="collapsible-heading">
+          <span class="collapsible-title" role="heading" aria-level="2">Installed equipment</span>
+          <span class="collapsible-description subtle">See the hardware assigned to your account.</span>
+        </span>
+        <span class="collapsible-icon" aria-hidden="true"></span>
+      </button>
+      <div class="collapsible-content portal-section-content" id="portal-equipment-content" data-collapsible-content hidden>
+        <header class="portal-section-header">
+          <div>
+            <h2>Installed Equipment</h2>
+            <p class="subtle">Everything DIXIELAND WIRELESS LLC has configured for your service.</p>
+            {% if selected_services %}
+            <p class="subtle">Active plans: {{ selected_services|join(', ') }}</p>
+            {% endif %}
+          </div>
+        </header>
+        {% if not selected_services %}
+        <div class="inline-callout">
+          <strong>No service plan on file.</strong>
+          <p>Contact us to set up your service and schedule an installation.</p>
+          <a class="button small primary" href="mailto:{{ contact_email }}">Contact us</a>
+        </div>
+        {% elif equipment_items %}
+        <ul class="equipment-list">
+          {% for device in equipment_items %}
+          <li>
+            <div class="equipment-heading">
+              <strong>{{ device.name }}</strong>
+              <span class="subtle">Installed {{ device.installed_on|date_or_dash }}</span>
+            </div>
+            <dl>
+              {% if device.model %}<div><dt>Model</dt><dd>{{ device.model }}</dd></div>{% endif %}
+              {% if device.serial_number %}<div><dt>Serial</dt><dd>{{ device.serial_number }}</dd></div>{% endif %}
+              {% if device.notes %}<div><dt>Notes</dt><dd>{{ device.notes }}</dd></div>{% endif %}
+            </dl>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="subtle">Your installation details will appear once service is activated.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section
+      class="card portal-section collapsible-card"
+      id="support"
+      data-collapsible
+      data-default-open="false"
+    >
+      <button
+        class="collapsible-trigger"
+        type="button"
+        data-collapsible-toggle
+        aria-expanded="false"
+        aria-controls="portal-support-content"
+      >
+        <span class="collapsible-heading">
+          <span class="collapsible-title" role="heading" aria-level="2">Support center</span>
+          <span class="collapsible-description subtle">Open tickets, share updates, and review responses.</span>
+        </span>
+        <span class="collapsible-icon" aria-hidden="true"></span>
+      </button>
+      <div class="collapsible-content portal-section-content" id="portal-support-content" data-collapsible-content hidden>
+        <header class="portal-section-header">
+          <div>
+            <h2>Support Center</h2>
+            <p class="subtle">Open new tickets and monitor responses from our specialists.</p>
+          </div>
+        </header>
+        <div class="support-layout">
+          <div class="support-form">
+            <form
+              method="post"
+              action="{{ url_for('portal_create_ticket') }}"
+              class="stacked-form"
+              enctype="multipart/form-data"
+            >
+              <h3>Start a new ticket</h3>
+              <label>
+                Subject
+                <input type="text" name="subject" placeholder="Describe your request" required />
+              </label>
+              <label>
+                Details
+                <textarea name="message" rows="4" placeholder="Share as much detail as possible so we can help quickly." required></textarea>
+              </label>
+              <label>
+                Priority
+                <select name="priority">
+                  {% for option in ticket_priority_options %}
+                  <option value="{{ option }}" {% if option == 'Normal' %}selected{% endif %}>{{ option }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>
+                Attachments (optional)
+                <input
+                  type="file"
+                  name="attachments"
+                  accept=".jpg,.jpeg,.png,.gif,.heic,.heif,.pdf,.txt,.csv,.zip,.doc,.docx,.xls,.xlsx"
+                  multiple
+                />
+                <span class="subtle">Include screenshots, documents, or logs that help explain the issue.</span>
+              </label>
+              <button class="button primary" type="submit">Submit ticket</button>
+            </form>
+          </div>
+          <div class="support-tickets">
+            {% if tickets %}
+            <ul class="ticket-list">
+              {% for ticket in tickets %}
+              <li class="ticket-card" id="ticket-{{ ticket.id }}">
+                <div class="ticket-card-header">
+                  <div>
+                    <strong>{{ ticket.subject }}</strong>
+                    <span class="subtle">Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+                  </div>
+                  <span class="status-pill status-{{ ticket.status|lower|replace(' ', '-') }}">{{ ticket.status }}</span>
+                </div>
+                <p class="subtle">Priority: {{ ticket.priority }}</p>
+                <div class="ticket-conversation">
+                  {% for message in ticket.messages %}
+                  <article class="ticket-message {% if message.sender == 'admin' %}from-staff{% else %}from-client{% endif %}">
+                    <header class="ticket-message-header">
+                      <strong>
+                        {% if message.sender == 'admin' %}
+                        Dixieland Wireless Support
+                        {% else %}
+                        You
+                        {% endif %}
+                      </strong>
+                      <span class="subtle">{{ message.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+                    </header>
+                    <p>{{ message.body }}</p>
+                    {% if message.attachments %}
+                    <div class="ticket-attachments">
+                      <div class="ticket-attachment-strip">
+                        {% for attachment in message.attachments %}
+                        <a class="file-chip" href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
+                          {{ attachment.original_filename }}
+                        </a>
+                        {% endfor %}
+                      </div>
+                    </div>
                     {% endif %}
-                  </td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          {% else %}
-          <p class="subtle">Invoices will appear here once billing begins.</p>
-          {% endif %}
-        </div>
-      </div>
-    </section>
-
-    <section class="card portal-section" id="equipment">
-      <header class="portal-section-header">
-        <div>
-          <h2>Installed Equipment</h2>
-          <p class="subtle">Everything DIXIELAND WIRELESS LLC has configured for your service.</p>
-          {% if selected_services %}
-          <p class="subtle">Active plans: {{ selected_services|join(', ') }}</p>
-          {% endif %}
-        </div>
-      </header>
-      {% if not selected_services %}
-      <div class="inline-callout">
-        <strong>No service plan on file.</strong>
-        <p>Contact us to set up your service and schedule an installation.</p>
-        <a class="button small primary" href="mailto:{{ contact_email }}">Contact us</a>
-      </div>
-      {% elif equipment_items %}
-      <ul class="equipment-list">
-        {% for device in equipment_items %}
-        <li>
-          <div class="equipment-heading">
-            <strong>{{ device.name }}</strong>
-            <span class="subtle">Installed {{ device.installed_on|date_or_dash }}</span>
-          </div>
-          <dl>
-            {% if device.model %}<div><dt>Model</dt><dd>{{ device.model }}</dd></div>{% endif %}
-            {% if device.serial_number %}<div><dt>Serial</dt><dd>{{ device.serial_number }}</dd></div>{% endif %}
-            {% if device.notes %}<div><dt>Notes</dt><dd>{{ device.notes }}</dd></div>{% endif %}
-          </dl>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p class="subtle">Your installation details will appear once service is activated.</p>
-      {% endif %}
-    </section>
-
-    <section class="card portal-section" id="support">
-      <header class="portal-section-header">
-        <div>
-          <h2>Support Center</h2>
-          <p class="subtle">Open new tickets and monitor responses from our specialists.</p>
-        </div>
-      </header>
-      <div class="support-layout">
-        <div class="support-form">
-          <form
-            method="post"
-            action="{{ url_for('portal_create_ticket') }}"
-            class="stacked-form"
-            enctype="multipart/form-data"
-          >
-            <h3>Start a new ticket</h3>
-            <label>
-              Subject
-              <input type="text" name="subject" placeholder="Describe your request" required />
-            </label>
-            <label>
-              Details
-              <textarea name="message" rows="4" placeholder="Share as much detail as possible so we can help quickly." required></textarea>
-            </label>
-            <label>
-              Priority
-              <select name="priority">
-                {% for option in ticket_priority_options %}
-                <option value="{{ option }}" {% if option == 'Normal' %}selected{% endif %}>{{ option }}</option>
-                {% endfor %}
-              </select>
-            </label>
-            <label>
-              Photos (optional)
-              <input type="file" name="attachments" accept="image/*" multiple />
-              <span class="subtle">Attach images that illustrate the issue.</span>
-            </label>
-            <button class="button primary" type="submit">Submit ticket</button>
-          </form>
-        </div>
-        <div class="support-tickets">
-          {% if tickets %}
-          <ul class="ticket-list">
-            {% for ticket in tickets %}
-            <li class="ticket-card">
-              <div class="ticket-card-header">
-                <div>
-                  <strong>{{ ticket.subject }}</strong>
-                  <span class="subtle">Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
-                </div>
-                <span class="status-pill status-{{ ticket.status|lower|replace(' ', '-') }}">{{ ticket.status }}</span>
-              </div>
-              <p class="subtle">Priority: {{ ticket.priority }}</p>
-              <p>{{ ticket.message }}</p>
-              {% if ticket.attachments %}
-              <div class="ticket-attachments">
-                <p class="subtle">Attached photos:</p>
-                <div class="ticket-attachment-strip">
-                  {% for attachment in ticket.attachments %}
-                  <a href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
-                    <img
-                      src="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}"
-                      alt="Ticket attachment {{ loop.index }}"
-                      loading="lazy"
-                    />
-                  </a>
+                  </article>
                   {% endfor %}
                 </div>
-              </div>
-              {% endif %}
-              {% if ticket.resolution_notes %}
-              <div class="resolution">
-                <h4>Latest update</h4>
-                <p>{{ ticket.resolution_notes }}</p>
-              </div>
-              {% endif %}
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <p class="subtle">No tickets yet. Let us know how we can help!</p>
-          {% endif %}
+                {% set legacy_attachments = ticket.attachments | selectattr('message_id', 'equalto', None) | list %}
+                {% if legacy_attachments %}
+                <div class="ticket-attachments">
+                  <div class="ticket-attachment-strip">
+                    {% for attachment in legacy_attachments %}
+                    <a class="file-chip" href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
+                      {{ attachment.original_filename }}
+                    </a>
+                    {% endfor %}
+                  </div>
+                </div>
+                {% endif %}
+                {% if ticket.resolution_notes %}
+                <div class="ticket-resolution">
+                  <p>{{ ticket.resolution_notes }}</p>
+                </div>
+                {% endif %}
+                <form
+                  class="stacked-form ticket-reply-form"
+                  method="post"
+                  action="{{ url_for('portal_ticket_message', ticket_id=ticket.id) }}"
+                  enctype="multipart/form-data"
+                >
+                  <label>
+                    Message
+                    <textarea name="message" rows="3" placeholder="Share an update for our support team."></textarea>
+                  </label>
+                  <label class="file-upload">
+                    Attach files
+                    <input type="file" name="attachments" multiple />
+                  </label>
+                  <div class="button-row">
+                    <button class="button small primary" type="submit">Send reply</button>
+                  </div>
+                </form>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="subtle">No tickets yet. Let us know how we can help!</p>
+            {% endif %}
+          </div>
         </div>
       </div>
     </section>
 
-    <section class="card portal-section" id="appointments">
-      <header class="portal-section-header">
-        <div>
-          <h2>Appointments</h2>
-          <p class="subtle">Review upcoming visits and respond directly from your portal.</p>
-        </div>
-      </header>
-      {% if appointments %}
-      <ul class="appointment-list">
-        {% for appointment in appointments %}
-        <li class="appointment-card">
-          <div class="appointment-card-header">
-            <div>
-              <strong>{{ appointment.title }}</strong>
-              <p class="subtle">Scheduled for {{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}</p>
+    <section
+      class="card portal-section collapsible-card"
+      id="appointments"
+      data-collapsible
+      data-default-open="false"
+    >
+      <button
+        class="collapsible-trigger"
+        type="button"
+        data-collapsible-toggle
+        aria-expanded="false"
+        aria-controls="portal-appointments-content"
+      >
+        <span class="collapsible-heading">
+          <span class="collapsible-title" role="heading" aria-level="2">Appointments</span>
+          <span class="collapsible-description subtle">Review upcoming visits and respond directly from your portal.</span>
+        </span>
+        <span class="collapsible-icon" aria-hidden="true"></span>
+      </button>
+      <div class="collapsible-content portal-section-content" id="portal-appointments-content" data-collapsible-content hidden>
+        {% if appointments %}
+        <ul class="appointment-list">
+          {% for appointment in appointments %}
+          <li class="appointment-card">
+            <div class="appointment-card-header">
+              <div>
+                <strong>{{ appointment.title }}</strong>
+                <p class="subtle">Scheduled for {{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}</p>
+              </div>
+              <span class="status-pill status-{{ appointment.status|lower|replace(' ', '-') }}">{{ appointment.status }}</span>
             </div>
-            <span class="status-pill status-{{ appointment.status|lower|replace(' ', '-') }}">{{ appointment.status }}</span>
-          </div>
-          {% if appointment.notes %}
-          <p class="subtle">{{ appointment.notes }}</p>
-          {% endif %}
-          {% if appointment.proposed_time %}
-          <div class="appointment-proposed">
-            <strong>Requested time:</strong>
-            <span>{{ appointment.proposed_time.strftime('%b %d, %Y %I:%M %p') }}</span>
-          </div>
-          {% endif %}
-          {% if appointment.client_message %}
-          <div class="appointment-client-message">
-            <strong>Your notes:</strong>
-            <p>{{ appointment.client_message }}</p>
-          </div>
-          {% endif %}
-          <div class="appointment-actions">
-            <form method="post" action="{{ url_for('portal_update_appointment', appointment_id=appointment.id) }}">
-              <input type="hidden" name="action" value="approve" />
-              <button class="button small primary" type="submit">Approve</button>
-            </form>
-            <form method="post" action="{{ url_for('portal_update_appointment', appointment_id=appointment.id) }}">
-              <input type="hidden" name="action" value="decline" />
-              <label>
-                <span class="subtle">Notes (optional)</span>
-                <input type="text" name="message" class="appointment-note-input" placeholder="Optional note" />
-              </label>
-              <button class="button small danger" type="submit">Decline</button>
-            </form>
-            <details class="reschedule-panel">
-              <summary>Request a new time</summary>
-              <form class="stacked-form" method="post" action="{{ url_for('portal_update_appointment', appointment_id=appointment.id) }}">
-                <input type="hidden" name="action" value="reschedule" />
-                <label>
-                  Preferred date &amp; time
-                  <input type="datetime-local" name="scheduled_for" required />
-                </label>
-                <label>
-                  Notes
-                  <textarea name="message" rows="3" placeholder="Share details that help us plan."></textarea>
-                </label>
-                <button class="button small secondary" type="submit">Send request</button>
+            {% if appointment.notes %}
+            <p class="subtle">{{ appointment.notes }}</p>
+            {% endif %}
+            {% if appointment.proposed_time %}
+            <div class="appointment-proposed">
+              <strong>Requested time:</strong>
+              <span>{{ appointment.proposed_time.strftime('%b %d, %Y %I:%M %p') }}</span>
+            </div>
+            {% endif %}
+            {% if appointment.client_message %}
+            <div class="appointment-client-message">
+              <strong>Your notes:</strong>
+              <p>{{ appointment.client_message }}</p>
+            </div>
+            {% endif %}
+            <div class="appointment-actions">
+              <form method="post" action="{{ url_for('portal_update_appointment', appointment_id=appointment.id) }}">
+                <input type="hidden" name="action" value="approve" />
+                <button class="button small primary" type="submit">Approve</button>
               </form>
-            </details>
-          </div>
-        </li>
-        {% endfor %}
-      </ul>
-      {% else %}
-      <p class="subtle">Once the operations team schedules a visit it will appear here for quick approval.</p>
-      {% endif %}
+              <form method="post" action="{{ url_for('portal_update_appointment', appointment_id=appointment.id) }}">
+                <input type="hidden" name="action" value="decline" />
+                <label>
+                  <span class="subtle">Notes (optional)</span>
+                  <input type="text" name="message" class="appointment-note-input" placeholder="Optional note" />
+                </label>
+                <button class="button small danger" type="submit">Decline</button>
+              </form>
+              <details class="reschedule-panel">
+                <summary>Request a new time</summary>
+                <form class="stacked-form" method="post" action="{{ url_for('portal_update_appointment', appointment_id=appointment.id) }}">
+                  <input type="hidden" name="action" value="reschedule" />
+                  <label>
+                    Preferred date &amp; time
+                    <input type="datetime-local" name="scheduled_for" required />
+                  </label>
+                  <label>
+                    Notes
+                    <textarea name="message" rows="3" placeholder="Share details that help us plan."></textarea>
+                  </label>
+                  <button class="button small secondary" type="submit">Send request</button>
+                </form>
+              </details>
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="subtle">Once the operations team schedules a visit it will appear here for quick approval.</p>
+        {% endif %}
+      </div>
     </section>
   </div>
 </div>
@@ -408,7 +600,8 @@
 <script src="https://js.stripe.com/v3/"></script>
 <script>
   (() => {
-    const publishableKey = "{{ stripe_publishable_key }}";
+    const publishableKey = {{ stripe_publishable_key|tojson }};
+    const loginRedirect = "{{ url_for('portal_login', next=url_for('portal_dashboard')) }}";
     if (!publishableKey) {
       return;
     }
@@ -425,8 +618,19 @@
     const stripe = Stripe(publishableKey);
     const elements = stripe.elements();
     const cardElement = elements.create("card");
+    const cardholderDetails = {
+      name: {{ client.name|tojson }},
+      email: {{ client.email|tojson }},
+    };
     let setupSecret = null;
     let mounted = false;
+    let processing = false;
+
+    const updateSaveState = () => {
+      saveButton.disabled = processing || !setupSecret;
+    };
+
+    updateSaveState();
 
     const openForm = async () => {
       formWrapper.classList.remove("hidden");
@@ -435,15 +639,31 @@
         cardElement.mount("#portal-card-element");
         mounted = true;
       }
-      const response = await fetch("{{ url_for('portal_setup_intent') }}", {
-        headers: { "Accept": "application/json" },
-      });
-      const data = await response.json();
-      if (data.error) {
-        errorField.textContent = data.error;
-        return;
+      setupSecret = null;
+      processing = false;
+      updateSaveState();
+      try {
+        const response = await fetch("{{ url_for('portal_setup_intent') }}", {
+          credentials: "include",
+          headers: {
+            Accept: "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+        });
+        if (response.status === 401) {
+          window.location.href = loginRedirect;
+          return;
+        }
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.error || !data.client_secret) {
+          throw new Error(data.error || "Unable to prepare card entry. Please try again.");
+        }
+        setupSecret = data.client_secret;
+      } catch (err) {
+        setupSecret = null;
+        errorField.textContent = err.message || "Unable to prepare card entry.";
       }
-      setupSecret = data.client_secret;
+      updateSaveState();
     };
 
     const closeForm = () => {
@@ -451,6 +671,8 @@
       setupSecret = null;
       cardElement.clear();
       errorField.textContent = "";
+      processing = false;
+      updateSaveState();
     };
 
     addButton.addEventListener("click", (event) => {
@@ -466,38 +688,84 @@
     saveButton.addEventListener("click", async (event) => {
       event.preventDefault();
       if (!setupSecret) {
+        errorField.textContent =
+          "We're getting things ready. Please try saving the card again.";
         return;
       }
-      saveButton.disabled = true;
+      processing = true;
+      updateSaveState();
       errorField.textContent = "";
-      const { error, setupIntent } = await stripe.confirmCardSetup(setupSecret, {
-        payment_method: {
-          card: cardElement,
-        },
-      });
-      if (error) {
-        errorField.textContent = error.message || "Unable to save card.";
-        saveButton.disabled = false;
+      const billingDetails = {};
+      if (cardholderDetails.name) {
+        billingDetails.name = cardholderDetails.name;
+      }
+      if (cardholderDetails.email) {
+        billingDetails.email = cardholderDetails.email;
+      }
+      let confirmation;
+      try {
+        confirmation = await stripe.confirmCardSetup(
+          setupSecret,
+          {
+            payment_method: {
+              card: cardElement,
+              billing_details: billingDetails,
+            },
+          }
+        );
+      } catch (err) {
+        errorField.textContent = err.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
         return;
       }
-      const response = await fetch("{{ url_for('portal_add_payment_method') }}", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({
-          payment_method_id: setupIntent.payment_method,
-          set_default: true,
-        }),
-      });
-      const result = await response.json();
-      saveButton.disabled = false;
-      if (result.error) {
-        errorField.textContent = result.error;
+      if (confirmation.error) {
+        errorField.textContent = confirmation.error.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
         return;
       }
-      window.location.reload();
+      const setupIntent = confirmation.setupIntent;
+      const setupStatus = setupIntent ? setupIntent.status : null;
+      if (
+        !setupIntent ||
+        !setupIntent.payment_method ||
+        (setupStatus !== "succeeded" && setupStatus !== "processing")
+      ) {
+        errorField.textContent =
+          "Stripe did not confirm the card. Please try again.";
+        processing = false;
+        updateSaveState();
+        return;
+      }
+      try {
+        const response = await fetch("{{ url_for('portal_add_payment_method') }}", {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+          body: JSON.stringify({
+            payment_method_id: setupIntent.payment_method,
+            set_default: true,
+          }),
+        });
+        if (response.status === 401) {
+          window.location.href = loginRedirect;
+          return;
+        }
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.error) {
+          throw new Error(result.error || "Unable to save card. Please try again.");
+        }
+        window.location.reload();
+      } catch (err) {
+        errorField.textContent = err.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
+      }
     });
   })();
 </script>
