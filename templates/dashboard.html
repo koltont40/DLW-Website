@@ -91,125 +91,190 @@
         {% endfor %}
       </div>
       <div class="snapshot-panels">
-        <article class="status-panel">
+        <article class="status-panel collapsible-card" data-collapsible data-default-open="false">
           <header>
-            <h3>Customer Activity</h3>
-            <p class="subtle">Latest signups and account changes.</p>
+            <button
+              class="collapsible-trigger"
+              type="button"
+              data-collapsible-toggle
+              aria-expanded="false"
+              aria-controls="customer-activity-content"
+            >
+              <span class="collapsible-heading">
+                <span class="collapsible-title" role="heading" aria-level="3">Customer Activity</span>
+                <span class="collapsible-description subtle">Latest signups and account changes.</span>
+              </span>
+              <span class="collapsible-icon" aria-hidden="true"></span>
+            </button>
           </header>
-          {% if recent_clients %}
-          <ul class="status-list">
-            {% for customer in recent_clients %}
-            <li>
-              <div class="status-primary">
-                <strong>{{ customer.name }}</strong>
-                <span class="subtle">{{ customer.created_at.strftime('%b %d, %Y') }}</span>
-              </div>
-              <div class="status-secondary">
-                <span>{{ customer.status }}</span>
-                <span class="subtle">{{ customer.service_summary or 'Service TBD' }}</span>
-              </div>
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <p class="subtle">No customers yet. Encourage prospects to complete the signup form.</p>
-          {% endif %}
+          <div class="collapsible-content" id="customer-activity-content" data-collapsible-content hidden>
+            {% if recent_clients %}
+            <ul class="status-list">
+              {% for customer in recent_clients %}
+              <li>
+                <div class="status-primary">
+                  <strong>{{ customer.name }}</strong>
+                  <span class="subtle">{{ customer.created_at.strftime('%b %d, %Y') }}</span>
+                </div>
+                <div class="status-secondary">
+                  <span>{{ customer.status }}</span>
+                  <span class="subtle">{{ customer.service_summary or 'Service TBD' }}</span>
+                </div>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="subtle">No customers yet. Encourage prospects to complete the signup form.</p>
+            {% endif %}
+          </div>
         </article>
-        <article class="status-panel">
+        <article class="status-panel collapsible-card" data-collapsible data-default-open="false">
           <header>
-            <h3>Billing Pulse</h3>
-            <p class="subtle">Monitor invoices landing across the fleet.</p>
+            <button
+              class="collapsible-trigger"
+              type="button"
+              data-collapsible-toggle
+              aria-expanded="false"
+              aria-controls="billing-pulse-content"
+            >
+              <span class="collapsible-heading">
+                <span class="collapsible-title" role="heading" aria-level="3">Billing Pulse</span>
+                <span class="collapsible-description subtle">Monitor invoices landing across the fleet.</span>
+              </span>
+              <span class="collapsible-icon" aria-hidden="true"></span>
+            </button>
           </header>
-          {% if recent_invoices %}
-          <ul class="status-list">
-            {% for invoice in recent_invoices %}
-            <li>
-              <div class="status-primary">
-                <strong>{{ invoice.description }}</strong>
-                <span class="badge">{{ invoice.status }}</span>
-              </div>
-              <div class="status-secondary">
-                <span>{{ invoice.amount_cents|currency }}</span>
-                <span class="subtle">{{ invoice.client.name if invoice.client else 'Unassigned' }}</span>
-              </div>
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <p class="subtle">Post an invoice to start tracking billing momentum.</p>
-          {% endif %}
+          <div class="collapsible-content" id="billing-pulse-content" data-collapsible-content hidden>
+            {% if recent_invoices %}
+            <ul class="status-list">
+              {% for invoice in recent_invoices %}
+              <li>
+                <div class="status-primary">
+                  <strong>{{ invoice.description }}</strong>
+                  <span class="badge">{{ invoice.status }}</span>
+                </div>
+                <div class="status-secondary">
+                  <span>{{ invoice.amount_cents|currency }}</span>
+                  <span class="subtle">{{ invoice.client.name if invoice.client else 'Unassigned' }}</span>
+                </div>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="subtle">Post an invoice to start tracking billing momentum.</p>
+            {% endif %}
+          </div>
         </article>
-        <article class="status-panel">
+        <article class="status-panel collapsible-card" data-collapsible data-default-open="false">
           <header>
-            <h3>Network Deployments</h3>
-            <p class="subtle">Recent equipment placed in the field.</p>
+            <button
+              class="collapsible-trigger"
+              type="button"
+              data-collapsible-toggle
+              aria-expanded="false"
+              aria-controls="network-deployments-content"
+            >
+              <span class="collapsible-heading">
+                <span class="collapsible-title" role="heading" aria-level="3">Network Deployments</span>
+                <span class="collapsible-description subtle">Recent equipment placed in the field.</span>
+              </span>
+              <span class="collapsible-icon" aria-hidden="true"></span>
+            </button>
           </header>
-          {% if recent_equipment %}
-          <ul class="status-list">
-            {% for device in recent_equipment %}
-            <li>
-              <div class="status-primary">
-                <strong>{{ device.name }}</strong>
-                <span class="subtle">{{ device.created_at.strftime('%b %d, %Y') }}</span>
-              </div>
-              <div class="status-secondary">
-                <span>{{ device.model or 'Model pending' }}</span>
-                <span class="subtle">{{ device.client.name if device.client else 'Unassigned' }}</span>
-              </div>
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <p class="subtle">Log your first install to populate the network timeline.</p>
-          {% endif %}
+          <div class="collapsible-content" id="network-deployments-content" data-collapsible-content hidden>
+            {% if recent_equipment %}
+            <ul class="status-list">
+              {% for device in recent_equipment %}
+              <li>
+                <div class="status-primary">
+                  <strong>{{ device.name }}</strong>
+                  <span class="subtle">{{ device.created_at.strftime('%b %d, %Y') }}</span>
+                </div>
+                <div class="status-secondary">
+                  <span>{{ device.model or 'Model pending' }}</span>
+                  <span class="subtle">{{ device.client.name if device.client else 'Unassigned' }}</span>
+                </div>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="subtle">Log your first install to populate the network timeline.</p>
+            {% endif %}
+          </div>
         </article>
-        <article class="status-panel">
+        <article class="status-panel collapsible-card" data-collapsible data-default-open="false">
           <header>
-            <h3>Field Appointments</h3>
-            <p class="subtle">Upcoming visits and client responses.</p>
+            <button
+              class="collapsible-trigger"
+              type="button"
+              data-collapsible-toggle
+              aria-expanded="false"
+              aria-controls="field-appointments-content"
+            >
+              <span class="collapsible-heading">
+                <span class="collapsible-title" role="heading" aria-level="3">Field Appointments</span>
+                <span class="collapsible-description subtle">Upcoming visits and client responses.</span>
+              </span>
+              <span class="collapsible-icon" aria-hidden="true"></span>
+            </button>
           </header>
-          {% if upcoming_appointments %}
-          <ul class="status-list">
-            {% for appointment in upcoming_appointments %}
-            <li>
-              <div class="status-primary">
-                <strong>{{ appointment.title }}</strong>
-                <span class="badge">{{ appointment.status }}</span>
-              </div>
-              <div class="status-secondary">
-                <span>{{ appointment.client.name if appointment.client else 'Unassigned' }}</span>
-                <span class="subtle">{{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}</span>
-              </div>
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <p class="subtle">No field appointments are on the calendar.</p>
-          {% endif %}
+          <div class="collapsible-content" id="field-appointments-content" data-collapsible-content hidden>
+            {% if upcoming_appointments %}
+            <ul class="status-list">
+              {% for appointment in upcoming_appointments %}
+              <li>
+                <div class="status-primary">
+                  <strong>{{ appointment.title }}</strong>
+                  <span class="badge">{{ appointment.status }}</span>
+                </div>
+                <div class="status-secondary">
+                  <span>{{ appointment.client.name if appointment.client else 'Unassigned' }}</span>
+                  <span class="subtle">{{ appointment.scheduled_for.strftime('%b %d, %Y %I:%M %p') }}</span>
+                </div>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="subtle">No field appointments are on the calendar.</p>
+            {% endif %}
+          </div>
         </article>
-        <article class="status-panel">
+        <article class="status-panel collapsible-card" data-collapsible data-default-open="false">
           <header>
-            <h3>Support Signals</h3>
-            <p class="subtle">Ticket velocity from subscribers.</p>
+            <button
+              class="collapsible-trigger"
+              type="button"
+              data-collapsible-toggle
+              aria-expanded="false"
+              aria-controls="support-signals-content"
+            >
+              <span class="collapsible-heading">
+                <span class="collapsible-title" role="heading" aria-level="3">Support Signals</span>
+                <span class="collapsible-description subtle">Ticket velocity from subscribers.</span>
+              </span>
+              <span class="collapsible-icon" aria-hidden="true"></span>
+            </button>
           </header>
-          {% if recent_tickets %}
-          <ul class="status-list">
-            {% for ticket in recent_tickets %}
-            <li>
-              <div class="status-primary">
-                <strong>{{ ticket.subject }}</strong>
-                <span class="badge">{{ ticket.status }}</span>
-              </div>
-              <div class="status-secondary">
-                <span>{{ ticket.client.name if ticket.client else 'Unknown client' }}</span>
-                <span class="subtle">Updated {{ ticket.updated_at.strftime('%b %d, %Y %I:%M %p') }}</span>
-              </div>
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <p class="subtle">No support requests on file—great job keeping the network humming.</p>
-          {% endif %}
+          <div class="collapsible-content" id="support-signals-content" data-collapsible-content hidden>
+            {% if recent_tickets %}
+            <ul class="status-list">
+              {% for ticket in recent_tickets %}
+              <li>
+                <div class="status-primary">
+                  <strong>{{ ticket.subject }}</strong>
+                  <span class="badge">{{ ticket.status }}</span>
+                </div>
+                <div class="status-secondary">
+                  <span>{{ ticket.client.name if ticket.client else 'Unknown client' }}</span>
+                  <span class="subtle">Updated {{ ticket.updated_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+                </div>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="subtle">No support requests on file—great job keeping the network humming.</p>
+            {% endif %}
+          </div>
         </article>
       </div>
       <div class="field-checklist-manager">

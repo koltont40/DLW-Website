@@ -218,6 +218,43 @@
           });
         });
       })();
+
+      (function () {
+        const collapsibleSections = document.querySelectorAll("[data-collapsible]");
+        collapsibleSections.forEach((section, index) => {
+          const toggle = section.querySelector("[data-collapsible-toggle]");
+          const content = section.querySelector("[data-collapsible-content]");
+          if (!toggle || !content) {
+            return;
+          }
+
+          if (!content.id) {
+            content.id = `collapsible-${index}`;
+          }
+          if (!toggle.getAttribute("aria-controls")) {
+            toggle.setAttribute("aria-controls", content.id);
+          }
+
+          const defaultOpen = section.dataset.defaultOpen === "true";
+
+          const setState = (open) => {
+            section.setAttribute("data-collapsible-open", open ? "true" : "false");
+            toggle.setAttribute("aria-expanded", open ? "true" : "false");
+            if (open) {
+              content.removeAttribute("hidden");
+            } else {
+              content.setAttribute("hidden", "");
+            }
+          };
+
+          setState(defaultOpen);
+
+          toggle.addEventListener("click", () => {
+            const isOpen = section.getAttribute("data-collapsible-open") === "true";
+            setState(!isOpen);
+          });
+        });
+      })();
     </script>
   </body>
 </html>

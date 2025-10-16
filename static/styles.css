@@ -1306,6 +1306,86 @@ a.trusted-logo:hover {
   gap: 1rem;
 }
 
+.collapsible-card {
+  padding: 0;
+  overflow: hidden;
+  gap: 0;
+}
+
+.collapsible-card .collapsible-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 1.25rem 1.5rem;
+  color: inherit;
+  text-align: left;
+  gap: 1rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.collapsible-card .collapsible-trigger:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -4px;
+}
+
+.collapsible-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.collapsible-title {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.collapsible-description {
+  font-size: 0.9rem;
+}
+
+.collapsible-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.collapsible-icon::after {
+  content: "";
+  border: solid var(--muted);
+  border-width: 0 2px 2px 0;
+  display: inline-block;
+  padding: 0.3rem;
+  transform: rotate(45deg);
+  transition: transform 0.2s ease;
+}
+
+.collapsible-card[data-collapsible-open="true"] .collapsible-icon::after {
+  transform: rotate(-135deg);
+}
+
+.collapsible-content {
+  padding: 0 1.5rem 1.5rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.collapsible-content > :first-child {
+  margin-top: 0.25rem;
+}
+
+.collapsible-card .status-list {
+  margin-top: 0;
+}
+
 .status-panel header h3 {
   margin-bottom: 0.2rem;
 }
@@ -2944,6 +3024,17 @@ a.trusted-logo:hover {
   flex-direction: column;
   gap: 1.25rem;
   scroll-margin-top: 110px;
+}
+
+.portal-section.collapsible-card .collapsible-trigger {
+  padding: 1.25rem 1.75rem;
+}
+
+.portal-section.collapsible-card .collapsible-content {
+  padding: 0 1.75rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
 }
 
 .hidden {
@@ -5155,6 +5246,17 @@ a.trusted-logo:hover {
   padding: 2rem;
   border: 1px solid var(--border);
   box-shadow: var(--card-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.tech-section.collapsible-card .collapsible-trigger {
+  padding: 1.75rem 2rem;
+}
+
+.tech-section.collapsible-card .collapsible-content {
+  padding: 0 2rem 2rem;
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
