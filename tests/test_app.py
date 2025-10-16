@@ -209,6 +209,7 @@ def app(tmp_path):
     signature_folder = tmp_path / "install_signatures"
     verification_folder = tmp_path / "verification"
     ticket_attachment_folder = tmp_path / "ticket_attachments"
+    invoice_pdf_folder = tmp_path / "invoice_pdfs"
     tls_challenge_folder = tmp_path / "acme-challenges"
     tls_config_folder = tmp_path / "letsencrypt"
     tls_work_folder = tmp_path / "letsencrypt-work"
@@ -232,6 +233,7 @@ def app(tmp_path):
             "INSTALL_SIGNATURE_FOLDER": str(signature_folder),
             "CLIENT_VERIFICATION_FOLDER": str(verification_folder),
             "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(ticket_attachment_folder),
+            "INVOICE_PDF_FOLDER": str(invoice_pdf_folder),
             "TLS_CHALLENGE_FOLDER": str(tls_challenge_folder),
             "TLS_CONFIG_FOLDER": str(tls_config_folder),
             "TLS_WORK_FOLDER": str(tls_work_folder),
@@ -1549,6 +1551,140 @@ def test_admin_can_refund_paid_invoice(app, client, monkeypatch):
         assert events
         assert any(event.status == "refunded" for event in events)
 
+
+def test_admin_invoice_creation_generates_pdf_and_email_attachment(app, client, monkeypatch):
+    login_admin(client)
+
+    with app.app_context():
+        customer = Client(name="Invoice Test", email="invoice@example.com", status="Active")
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    captured: dict[str, object] = {}
+
+    def fake_send_email(app_obj, recipient, subject, body, attachments=None):
+        captured["recipient"] = recipient
+        captured["attachments"] = attachments
+        return True
+
+    monkeypatch.setattr(app_module, "send_email_via_office365", fake_send_email)
+
+    response = client.post(
+        f"/clients/{customer_id}/invoices",
+        data={
+            "description": "Monthly service",
+            "amount": "45.00",
+            "status": "Pending",
+            "next": f"/dashboard/customers/{customer_id}",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        invoice = (
+            Invoice.query.filter_by(client_id=customer_id)
+            .order_by(Invoice.id.desc())
+            .first()
+        )
+        assert invoice is not None
+        assert invoice.pdf_filename
+        assert invoice.pdf_generated_at is not None
+        pdf_path = Path(app.config["INVOICE_PDF_FOLDER"]) / invoice.pdf_filename
+        assert pdf_path.exists()
+
+    assert captured["recipient"] == "invoice@example.com"
+    attachments = captured.get("attachments")
+    assert attachments
+    filename, content, mime_type = attachments[0]
+    assert filename.endswith(".pdf")
+    assert mime_type == "application/pdf"
+    assert isinstance(content, (bytes, bytearray))
+    assert len(content) > 100
+
+
+def test_portal_invoice_pdf_download(app, client):
+    with app.app_context():
+        customer = Client(name="Portal User", email="portal@example.com", status="Active")
+        customer.portal_password_hash = generate_password_hash("PortalPass123")
+        customer.portal_password_updated_at = utcnow()
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+        invoice = Invoice(
+            client_id=customer_id,
+            description="Wireless Service",
+            amount_cents=5000,
+            status="Pending",
+        )
+        db.session.add(invoice)
+        db.session.commit()
+        app_module.refresh_invoice_pdf(invoice)
+        invoice_id = invoice.id
+
+    response = client.get(f"/portal/invoices/{invoice_id}/pdf")
+    assert response.status_code == 302
+    assert "/portal/login" in response.headers["Location"]
+
+    login_response = client.post(
+        "/portal/login",
+        data={"email": "portal@example.com", "password": "PortalPass123"},
+        follow_redirects=True,
+    )
+    assert login_response.status_code == 200
+
+    pdf_response = client.get(f"/portal/invoices/{invoice_id}/pdf")
+    assert pdf_response.status_code == 200
+    assert pdf_response.headers["Content-Type"].startswith("application/pdf")
+    assert pdf_response.data
+
+
+def test_admin_account_uisp_device_search_filters_results(app, client):
+    login_admin(client)
+
+    with app.app_context():
+        customer = Client(name="Search Customer", email="search@example.com", status="Active")
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+        other_client = Client(name="Other", email="other@example.com", status="Active")
+        db.session.add(other_client)
+        db.session.commit()
+
+        device_match = UispDevice(
+            uisp_id="device-match",
+            name="North Sector Radio",
+            status="online",
+        )
+        device_other = UispDevice(
+            uisp_id="device-miss",
+            name="South Panel",
+            status="online",
+        )
+        device_assigned = UispDevice(
+            uisp_id="device-assigned",
+            name="Assigned Sector",
+            status="online",
+            client_id=customer_id,
+        )
+        db.session.add_all([device_match, device_other, device_assigned])
+        db.session.commit()
+
+    search_response = client.get(
+        f"/dashboard/customers/{customer_id}?device_search=North",
+        follow_redirects=True,
+    )
+    assert search_response.status_code == 200
+    assert b"North Sector Radio" in search_response.data
+    assert b"South Panel" not in search_response.data
+
+    default_view = client.get(f"/dashboard/customers/{customer_id}")
+    assert default_view.status_code == 200
+    assert b"North Sector Radio" not in default_view.data
 
 def test_admin_adds_equipment_from_account_view(app, client):
     login_admin(client)

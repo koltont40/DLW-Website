@@ -222,11 +222,20 @@
                   <td><span class="status-pill status-{{ invoice.status|lower|replace(' ', '-') }}">{{ invoice.status }}</span></td>
                   <td>{{ invoice.updated_at.strftime('%b %d, %Y') }}</td>
                   <td>
-                    {% if invoice.status not in ['Paid', 'Cancelled', 'Refunded'] and stripe_ready and stripe_publishable_key %}
-                    <a class="button small primary" href="{{ url_for('portal_pay_invoice', invoice_id=invoice.id) }}">Pay</a>
-                    {% else %}
-                    <span class="subtle">—</span>
-                    {% endif %}
+                    <div class="table-actions">
+                      {% set actions = namespace(rendered=false) %}
+                      {% if invoice.pdf_filename %}
+                      {% set actions.rendered = True %}
+                      <a class="button small secondary" href="{{ url_for('portal_invoice_pdf', invoice_id=invoice.id) }}" target="_blank" rel="noopener">View PDF</a>
+                      {% endif %}
+                      {% if invoice.status not in ['Paid', 'Cancelled', 'Refunded'] and stripe_ready and stripe_publishable_key %}
+                      {% set actions.rendered = True %}
+                      <a class="button small primary" href="{{ url_for('portal_pay_invoice', invoice_id=invoice.id) }}">Pay</a>
+                      {% endif %}
+                      {% if not actions.rendered %}
+                      <span class="subtle">—</span>
+                      {% endif %}
+                    </div>
                   </td>
                 </tr>
                 {% endfor %}
