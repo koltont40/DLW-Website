@@ -351,8 +351,19 @@
             {% else %}
             <p class="subtle">No UISP devices assigned to this account.</p>
             {% endif %}
-            {% if available_uisp_devices %}
-            <h6>Available UISP devices</h6>
+            <h6>Find UISP devices</h6>
+            <form class="inline-form uisp-device-search" method="get" action="{{ url_for('admin_client_account', client_id=client.id) }}">
+              <div class="inline-field stretch">
+                <span class="sr-only">Search unassigned UISP devices</span>
+                <input type="search" name="device_search" value="{{ device_search }}" placeholder="Search by name, MAC, tower, or IP" />
+              </div>
+              <button class="button small secondary" type="submit">Search</button>
+              {% if device_search %}
+              <a class="button small ghost" href="{{ url_for('admin_client_account', client_id=client.id) }}">Clear</a>
+              {% endif %}
+            </form>
+            {% if device_search and available_uisp_devices %}
+            <p class="subtle">Showing {{ available_uisp_devices|length }} result{% if available_uisp_devices|length != 1 %}s{% endif %} for “{{ device_search }}”.</p>
             {% for device in available_uisp_devices %}
             <form class="record-row uisp-device-row" method="post" action="{{ url_for('assign_uisp_device', device_id=device.id) }}">
               <input type="hidden" name="next" value="{{ account_url }}" />
@@ -392,6 +403,10 @@
               </div>
             </form>
             {% endfor %}
+            {% elif device_search %}
+            <p class="subtle">No unassigned devices matched “{{ device_search }}”.</p>
+            {% else %}
+            <p class="subtle">Search to locate an unassigned UISP device to assign.</p>
             {% endif %}
             {% if equipment_items %}
             {% for item in equipment_items %}
@@ -495,6 +510,9 @@
                 </select>
               </label>
               <div class="record-actions">
+                {% if invoice.pdf_filename %}
+                <a class="button small secondary" href="{{ url_for('admin_invoice_pdf', invoice_id=invoice.id) }}" target="_blank" rel="noopener">View PDF</a>
+                {% endif %}
                 <button class="button small primary" type="submit">Update</button>
                 <button class="button small danger" type="submit" form="delete-invoice-{{ invoice.id }}" onclick="return confirm('Delete this invoice?');">Delete</button>
               </div>

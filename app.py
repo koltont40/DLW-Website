@@ -13,6 +13,7 @@ import string
 import subprocess
 import threading
 import time
+from io import BytesIO
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -20,10 +21,18 @@ from email.message import EmailMessage
 from email.utils import formataddr, format_datetime, make_msgid
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Iterable, Sequence
 from urllib.parse import quote_plus, urljoin
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
+
+try:  # pragma: no cover - optional dependency for PDF generation
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+except ImportError:  # pragma: no cover - reportlab is required for invoice PDFs
+    canvas = None
+    letter = (612, 792)
 
 try:  # pragma: no cover - import guard for optional dependency
     import stripe
@@ -92,7 +101,11 @@ FILE_TRANSFER_SURFACES: dict[str, str] = {
     "team-member-photo": "Team member profile photos",
     "trusted-business-logo": "Trusted business logos",
     "support-partner-logo": "Operations partner logos",
+    "invoice-pdf": "Generated invoice PDF documents",
 }
+
+
+EmailAttachment = tuple[str, bytes, str]
 
 
 def _allowed_file_surfaces() -> set[str]:
@@ -1911,6 +1924,8 @@ class Invoice(db.Model):
     stripe_payment_intent_id = db.Column(db.String(64))
     stripe_charge_id = db.Column(db.String(64))
     stripe_refund_id = db.Column(db.String(64))
+    pdf_filename = db.Column(db.String(255))
+    pdf_generated_at = db.Column(db.DateTime(timezone=True))
 
     client = db.relationship("Client", back_populates="invoices")
     autopay_events = db.relationship(
@@ -1919,6 +1934,268 @@ class Invoice(db.Model):
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Invoice {self.id} for client {self.client_id}>"
+
+
+def get_invoice_pdf_folder(app: Flask | None = None) -> Path:
+    if app is None:
+        try:
+            app = current_app._get_current_object()
+        except RuntimeError as exc:  # pragma: no cover - defensive guard
+            raise RuntimeError("Invoice PDF helpers require an application context") from exc
+
+    folder = Path(app.config["INVOICE_PDF_FOLDER"])
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def _invoice_pdf_relative_name(invoice: "Invoice") -> Path:
+    return Path(f"client_{invoice.client_id}") / f"invoice_{invoice.id}.pdf"
+
+
+def invoice_pdf_is_current(
+    invoice: "Invoice", base_folder: Path | None = None
+) -> bool:
+    if not invoice.pdf_filename or not invoice.pdf_generated_at:
+        return False
+
+    if base_folder is None:
+        base_folder = get_invoice_pdf_folder()
+
+    pdf_path = base_folder / invoice.pdf_filename
+    if not pdf_path.exists():
+        return False
+
+    reference_timestamp = invoice.updated_at or invoice.created_at
+    if reference_timestamp is None:
+        return True
+
+    if reference_timestamp.tzinfo is None:
+        reference_timestamp = reference_timestamp.replace(tzinfo=UTC)
+
+    generated_at = invoice.pdf_generated_at
+    if generated_at.tzinfo is None:
+        generated_at = generated_at.replace(tzinfo=UTC)
+
+    return generated_at >= reference_timestamp
+
+
+def refresh_invoice_pdf(
+    invoice: "Invoice", commit: bool = True, base_folder: Path | None = None
+) -> Path | None:
+    try:
+        app = current_app._get_current_object()
+    except RuntimeError as exc:  # pragma: no cover - defensive guard
+        raise RuntimeError("refresh_invoice_pdf requires an application context") from exc
+
+    if invoice.id is None:
+        db.session.flush()
+
+    if base_folder is None:
+        base_folder = get_invoice_pdf_folder(app)
+
+    relative_path = _invoice_pdf_relative_name(invoice)
+    pdf_path = base_folder / relative_path
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+
+    customer = invoice.client or Client.query.get(invoice.client_id)
+    site_name = app.config.get("SITE_NAME") or "DixieLand Wireless"
+    created_at = invoice.created_at or utcnow()
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    local_zone = get_local_timezone(app)
+    created_display = created_at.astimezone(local_zone).strftime("%B %d, %Y %I:%M %p %Z")
+    due_line = (
+        invoice.due_date.strftime("%B %d, %Y")
+        if invoice.due_date
+        else "Not specified"
+    )
+    amount_display = (
+        Decimal(invoice.amount_cents or 0) / Decimal(100)
+    ).quantize(Decimal("0.01"))
+    amount_display_str = f"${amount_display:,.2f}"
+    status_line = f"Status: {invoice.status}"
+
+    billed_lines: list[str] = []
+    if customer:
+        billed_lines.append(customer.name or "Account Holder")
+        if customer.address:
+            billed_lines.append(customer.address)
+        if customer.email:
+            billed_lines.append(f"Email: {customer.email}")
+        if customer.phone:
+            billed_lines.append(f"Phone: {customer.phone}")
+    else:
+        billed_lines.append("Client record unavailable")
+
+    description_lines = [
+        line.strip() for line in (invoice.description or "").splitlines() if line.strip()
+    ]
+    if not description_lines:
+        description_lines = ["No description provided."]
+
+    summary_lines = [
+        site_name,
+        f"Invoice #{invoice.id}",
+        f"Issued: {created_display}",
+        f"Due Date: {due_line}",
+        f"Amount: {amount_display_str}",
+        status_line,
+        "",
+        "Billed To:",
+        *billed_lines,
+        "",
+        "Description:",
+        *description_lines,
+        "",
+        "Thank you for choosing Dixieland Wireless.",
+        "For questions, contact support@dixielandwireless.com.",
+    ]
+
+    if canvas is None:
+        app.logger.info(
+            "ReportLab not installed; using basic PDF generator for invoice %s",
+            invoice.id,
+        )
+        _write_invoice_pdf_basic(pdf_path, summary_lines)
+    else:
+        pdf = canvas.Canvas(str(pdf_path), pagesize=letter)
+        width, height = letter
+        margin = 54
+        y_position = height - margin
+
+        pdf.setFont("Helvetica-Bold", 18)
+        pdf.drawString(margin, y_position, site_name)
+
+        y_position -= 30
+        pdf.setFont("Helvetica", 12)
+        pdf.drawString(margin, y_position, f"Invoice #{invoice.id}")
+
+        y_position -= 18
+        pdf.drawString(margin, y_position, f"Issued: {created_display}")
+
+        y_position -= 18
+        pdf.drawString(margin, y_position, f"Due Date: {due_line}")
+
+        y_position -= 18
+        pdf.drawString(margin, y_position, f"Amount: {amount_display_str}")
+
+        y_position -= 18
+        pdf.drawString(margin, y_position, status_line)
+
+        y_position -= 24
+        pdf.setFont("Helvetica-Bold", 14)
+        pdf.drawString(margin, y_position, "Billed To")
+
+        pdf.setFont("Helvetica", 12)
+        y_position -= 18
+        for line in billed_lines:
+            pdf.drawString(margin, y_position, line)
+            y_position -= 16
+            if y_position <= margin:
+                pdf.showPage()
+                pdf.setFont("Helvetica", 12)
+                y_position = height - margin
+
+        y_position -= 16
+        pdf.setFont("Helvetica-Bold", 14)
+        pdf.drawString(margin, y_position, "Description")
+
+        pdf.setFont("Helvetica", 12)
+        y_position -= 18
+        for line in description_lines:
+            pdf.drawString(margin, y_position, line)
+            y_position -= 16
+            if y_position <= margin:
+                pdf.showPage()
+                pdf.setFont("Helvetica", 12)
+                y_position = height - margin
+
+        pdf.setFont("Helvetica", 10)
+        y_position -= 12
+        pdf.drawString(margin, max(y_position, margin + 10), "Thank you for choosing Dixieland Wireless.")
+        pdf.drawString(
+            margin,
+            max(y_position - 14, margin),
+            "For questions, contact support@dixielandwireless.com.",
+        )
+
+        pdf.save()
+
+    invoice.pdf_filename = str(relative_path)
+    invoice.pdf_generated_at = utcnow()
+
+    if commit:
+        db.session.add(invoice)
+        db.session.commit()
+
+    return pdf_path
+
+
+def _write_invoice_pdf_basic(pdf_path: Path, lines: list[str]) -> None:
+    def _escape(text: str) -> str:
+        return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+    commands = ["BT", "/F1 12 Tf", "14 TL", "72 750 Td"]
+    for line in lines:
+        commands.append(f"({_escape(line)}) Tj")
+        commands.append("T*")
+    commands.append("ET")
+    content_stream = "\n".join(commands).encode("utf-8")
+
+    objects: list[bytes] = [
+        b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+        b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
+        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n",
+        f"4 0 obj << /Length {len(content_stream)} >> stream\n".encode("utf-8")
+        + content_stream
+        + b"\nendstream\nendobj\n",
+        b"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",
+    ]
+
+    buffer = BytesIO()
+    buffer.write(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj in objects:
+        offsets.append(buffer.tell())
+        buffer.write(obj)
+
+    xref_position = buffer.tell()
+    buffer.write(f"xref\n0 {len(offsets)}\n".encode("utf-8"))
+    buffer.write(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        buffer.write(f"{offset:010d} 00000 n \n".encode("utf-8"))
+    buffer.write(f"trailer << /Size {len(offsets)} /Root 1 0 R >>\n".encode("utf-8"))
+    buffer.write(f"startxref\n{xref_position}\n%%EOF\n".encode("utf-8"))
+
+    pdf_path.write_bytes(buffer.getvalue())
+
+
+def ensure_invoices_have_pdfs(
+    invoices: Iterable["Invoice"], commit: bool = True
+) -> None:
+    base_folder = None
+    updated = False
+    for invoice in invoices:
+        if invoice.id is None:
+            continue
+        if base_folder is None:
+            base_folder = get_invoice_pdf_folder()
+        if invoice_pdf_is_current(invoice, base_folder=base_folder):
+            continue
+        generated = refresh_invoice_pdf(invoice, commit=False, base_folder=base_folder)
+        if generated is not None:
+            updated = True
+
+    if updated and commit:
+        db.session.commit()
+
+
+def resolve_invoice_pdf(invoice: "Invoice") -> Path | None:
+    base_folder = get_invoice_pdf_folder()
+    if invoice_pdf_is_current(invoice, base_folder=base_folder):
+        return base_folder / invoice.pdf_filename
+
+    return refresh_invoice_pdf(invoice, commit=True, base_folder=base_folder)
 
 
 class Equipment(db.Model):
@@ -2612,6 +2889,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         "INSTALL_SIGNATURE_FOLDER": str(instance_path / "install_signatures"),
         "CLIENT_VERIFICATION_FOLDER": str(instance_path / "verification"),
         "SUPPORT_TICKET_ATTACHMENT_FOLDER": str(instance_path / "ticket_attachments"),
+        "INVOICE_PDF_FOLDER": str(instance_path / "invoice_pdfs"),
         "TLS_CHALLENGE_FOLDER": str(instance_path / "acme-challenges"),
         "TLS_CONFIG_FOLDER": str(instance_path / "letsencrypt"),
         "TLS_WORK_FOLDER": str(instance_path / "letsencrypt-work"),
@@ -2685,6 +2963,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "INSTALL_SIGNATURE_FOLDER",
             "CLIENT_VERIFICATION_FOLDER",
             "SUPPORT_TICKET_ATTACHMENT_FOLDER",
+            "INVOICE_PDF_FOLDER",
             "TLS_CHALLENGE_FOLDER",
             "TLS_CONFIG_FOLDER",
             "TLS_WORK_FOLDER",
@@ -2862,7 +3141,11 @@ def resolve_tls_certificate_files(
 
 
 def send_email_via_office365(
-    app: Flask, recipient: str, subject: str, body: str
+    app: Flask,
+    recipient: str,
+    subject: str,
+    body: str,
+    attachments: Sequence[EmailAttachment] | None = None,
 ) -> bool:
     config = NotificationConfig.query.first()
     if not config or not recipient:
@@ -2919,6 +3202,24 @@ def send_email_via_office365(
             message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
     message.set_content(body)
+
+    if attachments:
+        for filename, content, mime_type in attachments:
+            if not filename:
+                continue
+            if isinstance(content, str):
+                attachment_bytes = content.encode("utf-8")
+            else:
+                attachment_bytes = bytes(content)
+            mime = (mime_type or "application/octet-stream").split("/", 1)
+            maintype = mime[0]
+            subtype = mime[1] if len(mime) > 1 else "octet-stream"
+            message.add_attachment(
+                attachment_bytes,
+                maintype=maintype,
+                subtype=subtype,
+                filename=filename,
+            )
 
     try:
         with smtplib.SMTP(host, port, timeout=10) as smtp:
@@ -3525,6 +3826,14 @@ def ensure_invoice_payment_fields() -> None:
     if "autopay_status" not in columns:
         statements.append(
             "ALTER TABLE invoices ADD COLUMN autopay_status VARCHAR(40)"
+        )
+    if "pdf_filename" not in columns:
+        statements.append(
+            "ALTER TABLE invoices ADD COLUMN pdf_filename VARCHAR(255)"
+        )
+    if "pdf_generated_at" not in columns:
+        statements.append(
+            "ALTER TABLE invoices ADD COLUMN pdf_generated_at TIMESTAMP"
         )
 
     if statements:
@@ -4515,15 +4824,33 @@ def register_routes(app: Flask) -> None:
         return timestamp.astimezone(UTC).strftime("%Y-%m-%d %H:%M %Z")
 
     def dispatch_notification(
-        recipient: str, subject: str, body: str, category: str = "general"
+        recipient: str,
+        subject: str,
+        body: str,
+        *,
+        category: str = "general",
+        attachments: Sequence[EmailAttachment] | None = None,
     ) -> bool:
         if not recipient:
             return False
 
         if should_send_notification(category):
-            if send_email_via_office365(app, recipient, subject, body):
+            if send_email_via_office365(
+                app,
+                recipient,
+                subject,
+                body,
+                attachments=attachments,
+            ):
                 return True
         else:
+            return False
+
+        if attachments:
+            app.logger.info(
+                "Skipping SNMP fallback for %s because attachments are present.",
+                recipient,
+            )
             return False
 
         sender = app.config.get("SNMP_EMAIL_SENDER")
@@ -5058,6 +5385,7 @@ def register_routes(app: Flask) -> None:
             .order_by(Invoice.due_date.asc())
             .all()
         )
+        ensure_invoices_have_pdfs(invoices)
         equipment_items = (
             Equipment.query.filter_by(client_id=client.id)
             .order_by(Equipment.installed_on.asc())
@@ -5394,6 +5722,27 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
         flash("Autopay is now enabled. Upcoming invoices will charge your saved card.", "success")
         return redirect(url_for("portal_dashboard"))
+
+    @app.get("/portal/invoices/<int:invoice_id>/pdf")
+    @client_login_required
+    def portal_invoice_pdf(client: Client, invoice_id: int):
+        invoice = Invoice.query.get_or_404(invoice_id)
+        if invoice.client_id != client.id:
+            abort(404)
+
+        pdf_path = resolve_invoice_pdf(invoice)
+        if not pdf_path or not invoice.pdf_filename:
+            abort(404)
+
+        base_folder = get_invoice_pdf_folder()
+        return send_site_file(
+            "invoice-pdf",
+            base_folder,
+            invoice.pdf_filename,
+            mimetype="application/pdf",
+            as_attachment=False,
+            download_name=f"Invoice-{invoice.id}.pdf",
+        )
 
     @app.get("/portal/invoices/<int:invoice_id>/pay")
     @client_login_required
@@ -7090,6 +7439,7 @@ def register_routes(app: Flask) -> None:
             .order_by(Invoice.created_at.desc())
             .all()
         )
+        ensure_invoices_have_pdfs(invoices)
         equipment_items = (
             Equipment.query.filter_by(client_id=client.id)
             .order_by(Equipment.created_at.desc())
@@ -7100,11 +7450,30 @@ def register_routes(app: Flask) -> None:
             .order_by(UispDevice.name.asc())
             .all()
         )
-        available_uisp_devices = (
-            UispDevice.query.filter(UispDevice.client_id.is_(None))
-            .order_by(UispDevice.name.asc())
-            .all()
-        )
+        device_search = request.args.get("device_search", "").strip()
+        available_uisp_devices: list[UispDevice] = []
+        if device_search:
+            search_pattern = f"%{device_search}%"
+            unassigned_query = UispDevice.query.filter(
+                UispDevice.client_id.is_(None)
+            )
+            mac_pattern = device_search.replace(":", "").replace("-", "")
+            filters = [
+                UispDevice.name.ilike(search_pattern),
+                UispDevice.nickname.ilike(search_pattern),
+                UispDevice.model.ilike(search_pattern),
+                UispDevice.mac_address.ilike(search_pattern),
+                UispDevice.site_name.ilike(search_pattern),
+                UispDevice.ip_address.ilike(search_pattern),
+            ]
+            if mac_pattern and mac_pattern != device_search:
+                filters.append(UispDevice.mac_address.ilike(f"%{mac_pattern}%"))
+            available_uisp_devices = (
+                unassigned_query.filter(or_(*filters))
+                .order_by(UispDevice.name.asc())
+                .limit(25)
+                .all()
+            )
         tickets = (
             SupportTicket.query.filter_by(client_id=client.id)
             .options(
@@ -7269,6 +7638,7 @@ def register_routes(app: Flask) -> None:
             assigned_uisp_devices=assigned_uisp_devices,
             available_uisp_devices=available_uisp_devices,
             network_towers=network_towers,
+            device_search=device_search,
         )
 
     @app.post("/documents/upload")
@@ -8164,6 +8534,17 @@ def register_routes(app: Flask) -> None:
         recalculate_client_billing_state(client)
         db.session.commit()
 
+        pdf_path = refresh_invoice_pdf(invoice)
+        attachments: list[EmailAttachment] = []
+        if pdf_path and pdf_path.exists():
+            attachments.append(
+                (
+                    f"Invoice-{invoice.id}.pdf",
+                    pdf_path.read_bytes(),
+                    "application/pdf",
+                )
+            )
+
         if client.email:
             amount_display = f"${(Decimal(invoice.amount_cents) / Decimal(100)).quantize(Decimal('0.01')):,.2f}"
             due_line = (
@@ -8183,6 +8564,7 @@ def register_routes(app: Flask) -> None:
                     "You can review this invoice and make payments in your customer portal."
                 ),
                 category="billing",
+                attachments=attachments or None,
             )
 
         flash(f"Invoice added for {client.name}.", "success")
@@ -8241,6 +8623,17 @@ def register_routes(app: Flask) -> None:
         recalculate_client_billing_state(invoice.client)
         db.session.commit()
 
+        pdf_path = refresh_invoice_pdf(invoice)
+        attachments: list[EmailAttachment] = []
+        if pdf_path and pdf_path.exists():
+            attachments.append(
+                (
+                    f"Invoice-{invoice.id}.pdf",
+                    pdf_path.read_bytes(),
+                    "application/pdf",
+                )
+            )
+
         client = invoice.client
         if client and client.email:
             amount_display = f"${(Decimal(invoice.amount_cents) / Decimal(100)).quantize(Decimal('0.01')):,.2f}"
@@ -8262,6 +8655,7 @@ def register_routes(app: Flask) -> None:
                     "Log in to your customer portal to review the latest details."
                 ),
                 category="billing",
+                attachments=attachments or None,
             )
 
         flash("Invoice updated.", "success")
@@ -8277,6 +8671,24 @@ def register_routes(app: Flask) -> None:
         db.session.commit()
         flash("Invoice removed.", "info")
         return _redirect_back_to_dashboard("billing")
+
+    @app.get("/dashboard/invoices/<int:invoice_id>/pdf")
+    @login_required
+    def admin_invoice_pdf(invoice_id: int):
+        invoice = Invoice.query.get_or_404(invoice_id)
+        pdf_path = resolve_invoice_pdf(invoice)
+        if not pdf_path or not invoice.pdf_filename:
+            abort(404)
+
+        base_folder = get_invoice_pdf_folder()
+        return send_site_file(
+            "invoice-pdf",
+            base_folder,
+            invoice.pdf_filename,
+            mimetype="application/pdf",
+            as_attachment=False,
+            download_name=f"Invoice-{invoice.id}.pdf",
+        )
 
     @app.post("/invoices/<int:invoice_id>/refund")
     @login_required

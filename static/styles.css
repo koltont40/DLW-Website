@@ -3058,6 +3058,18 @@ a.trusted-logo:hover {
   border-bottom: 1px solid var(--border);
 }
 
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.table-actions .button {
+  margin: 0;
+}
+
 .field-actions {
   display: flex;
   flex-direction: column;
