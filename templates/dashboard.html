@@ -267,6 +267,47 @@
         {% endif %}
       </div>
     </section>
+    <section class="card operations-allies-card" id="operations-allies">
+      <header class="section-header compact">
+        <div>
+          <h2>Operations Allies</h2>
+          <p class="subtle">Celebrate the companies that help keep DIXIELAND WIRELESS running smoothly.</p>
+        </div>
+        <a class="button small ghost" href="{{ url_for('dashboard', section='story') }}#support-partners">Manage partners</a>
+      </header>
+      {% if support_partners %}
+      <div class="partner-grid">
+        {% for partner in support_partners %}
+        <article class="partner-tile">
+          <div class="partner-media">
+            {% if partner.logo_filename %}
+            <img src="{{ url_for('support_partner_logo', partner_id=partner.id) }}" alt="{{ partner.name }} logo" />
+            {% else %}
+            <div class="partner-placeholder" aria-hidden="true">{{ partner.name[:1] }}</div>
+            {% endif %}
+          </div>
+          <div class="partner-content">
+            <div class="partner-heading">
+              <h3>{{ partner.name }}</h3>
+              {% if partner.website_url %}
+              <a class="inline-link" href="{{ partner.website_url }}" target="_blank" rel="noopener">Visit website</a>
+              {% endif %}
+            </div>
+            {% if partner.description %}
+            <p class="subtle">{{ partner.description }}</p>
+            {% else %}
+            <p class="subtle">Keep a short description on file so teammates know how they support operations.</p>
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="subtle empty-state">
+        Add your supporting companies to highlight the partners who keep the network humming.
+      </p>
+      {% endif %}
+    </section>
     {% elif active_section == 'customers' %}
     {% if selected_client %}
     <section class="card customer-detail-card" id="customer-detail">
@@ -2361,6 +2402,97 @@
             {% endfor %}
             {% else %}
             <p class="subtle">Add the companies you serve to highlight community partnerships.</p>
+            {% endif %}
+          </div>
+        </article>
+        <article class="story-panel" id="support-partners">
+          <header class="story-panel-header">
+            <h3>Operations allies</h3>
+            <p class="subtle">Track the vendors and crews that keep your network humming.</p>
+          </header>
+          <form
+            class="stacked-form story-create-form"
+            method="post"
+            action="{{ url_for('create_support_partner_admin') }}"
+            enctype="multipart/form-data"
+          >
+            <label>
+              Company name
+              <input type="text" name="name" placeholder="Example: River Region Fiber Crew" required />
+            </label>
+            <label>
+              Website URL
+              <input type="url" name="website_url" placeholder="https://operations.example.com" />
+            </label>
+            <label>
+              Brief description
+              <textarea
+                name="description"
+                rows="3"
+                placeholder="Summarize how this company supports day-to-day service."
+              ></textarea>
+            </label>
+            <label class="file-field">
+              Logo
+              <input type="file" name="logo" accept="image/*,.svg" />
+            </label>
+            <button class="button primary" type="submit">Add company</button>
+          </form>
+          <div class="story-list partner-list">
+            {% if support_partners %}
+            {% for partner in support_partners %}
+            <article class="story-item">
+              <div class="story-item-media">
+                {% if partner.logo_filename %}
+                <img
+                  src="{{ url_for('support_partner_logo', partner_id=partner.id) }}"
+                  alt="{{ partner.name }} logo"
+                />
+                {% else %}
+                <div class="story-item-placeholder" aria-hidden="true">{{ partner.name[:1] }}</div>
+                {% endif %}
+              </div>
+              <form
+                class="stacked-form story-item-form"
+                method="post"
+                action="{{ url_for('update_support_partner_admin', partner_id=partner.id) }}"
+                enctype="multipart/form-data"
+              >
+                <label>
+                  Company name
+                  <input type="text" name="name" value="{{ partner.name }}" required />
+                </label>
+                <label>
+                  Website URL
+                  <input type="url" name="website_url" value="{{ partner.website_url or '' }}" />
+                </label>
+                <label>
+                  Brief description
+                  <textarea name="description" rows="3">{{ partner.description or '' }}</textarea>
+                </label>
+                <label class="file-field">
+                  Replace logo
+                  <input type="file" name="logo" accept="image/*,.svg" />
+                </label>
+                <div class="form-actions">
+                  <button class="button small primary" type="submit">Save changes</button>
+                  <button
+                    class="button small danger"
+                    type="submit"
+                    formaction="{{ url_for('delete_support_partner_admin', partner_id=partner.id) }}"
+                    formmethod="post"
+                    onclick="return confirm('Remove {{ partner.name }} from operations allies?');"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </form>
+            </article>
+            {% endfor %}
+            {% else %}
+            <p class="subtle">
+              No support partners logged yet. Add the vendors and contractors that keep the network online.
+            </p>
             {% endif %}
           </div>
         </article>

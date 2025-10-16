@@ -34,6 +34,7 @@ from app import (
     SiteTheme,
     TeamMember,
     TrustedBusiness,
+    SupportPartner,
     StripeConfig,
     NotificationConfig,
     UispDevice,
@@ -155,6 +156,7 @@ def app(tmp_path):
     theme_folder = tmp_path / "theme"
     team_folder = tmp_path / "team"
     trusted_folder = tmp_path / "trusted_businesses"
+    support_partner_folder = tmp_path / "support_partners"
     install_folder = tmp_path / "install_photos"
     signature_folder = tmp_path / "install_signatures"
     verification_folder = tmp_path / "verification"
@@ -177,6 +179,7 @@ def app(tmp_path):
             "THEME_UPLOAD_FOLDER": str(theme_folder),
             "TEAM_UPLOAD_FOLDER": str(team_folder),
             "TRUSTED_BUSINESS_UPLOAD_FOLDER": str(trusted_folder),
+            "SUPPORT_PARTNER_UPLOAD_FOLDER": str(support_partner_folder),
             "INSTALL_PHOTOS_FOLDER": str(install_folder),
             "INSTALL_SIGNATURE_FOLDER": str(signature_folder),
             "CLIENT_VERIFICATION_FOLDER": str(verification_folder),
@@ -564,6 +567,61 @@ def test_admin_can_create_trusted_business_with_logo(app, client):
     logo_response = client.get(f"/trusted-businesses/{business_id}/logo")
     assert logo_response.status_code == 200
     assert b"<svg" in logo_response.data
+
+
+def test_admin_can_create_support_partner_with_logo(app, client):
+    login_admin(client)
+
+    response = client.post(
+        "/support-partners",
+        data={
+            "name": "River Region Fiber Crew",
+            "website_url": "https://fibercrew.example.com",
+            "description": "Handles aerial fiber runs for our backhaul.",
+            "logo": (BytesIO(b"binary-image"), "logo.png"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Added River Region Fiber Crew to your operations allies." in response.data
+
+    with app.app_context():
+        partner = SupportPartner.query.filter_by(name="River Region Fiber Crew").first()
+        assert partner is not None
+        assert partner.website_url == "https://fibercrew.example.com"
+        assert partner.description == "Handles aerial fiber runs for our backhaul."
+        assert partner.logo_filename is not None
+        partner_id = partner.id
+        logo_path = Path(app.config["SUPPORT_PARTNER_UPLOAD_FOLDER"]) / partner.logo_filename
+        assert logo_path.exists()
+
+    logo_response = client.get(f"/support-partners/{partner_id}/logo")
+    assert logo_response.status_code == 200
+    assert b"binary-image" in logo_response.data
+
+
+def test_dashboard_overview_lists_support_partners(app, client):
+    with app.app_context():
+        partner = SupportPartner(
+            name="Tower Guard LLC",
+            description="24/7 monitoring, tower climbs, and emergency repairs.",
+            website_url="https://towerguard.example.com",
+            position=1,
+        )
+        db.session.add(partner)
+        db.session.commit()
+
+    login_admin(client)
+
+    response = client.get("/dashboard", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"Operations Allies" in response.data
+    assert b"Tower Guard LLC" in response.data
+    assert b"24/7 monitoring, tower climbs, and emergency repairs." in response.data
+    assert b"Manage partners" in response.data
 
 
 def test_admin_can_view_security_settings(client):

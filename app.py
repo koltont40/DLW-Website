@@ -85,6 +85,7 @@ FILE_TRANSFER_SURFACES: dict[str, str] = {
     "theme-background": "Site background images",
     "team-member-photo": "Team member profile photos",
     "trusted-business-logo": "Trusted business logos",
+    "support-partner-logo": "Operations partner logos",
 }
 
 
@@ -520,6 +521,55 @@ def delete_trusted_business_logo(app: Flask, business: "TrustedBusiness") -> Non
     business.logo_filename = None
     business.logo_original = None
     business.updated_at = utcnow()
+
+
+def store_support_partner_logo(app: Flask, partner: "SupportPartner", file) -> None:
+    if not file or not file.filename:
+        return
+
+    extension = Path(file.filename).suffix.lower()
+    if extension not in ALLOWED_SUPPORT_PARTNER_LOGO_EXTENSIONS:
+        allowed = ", ".join(
+            sorted(ext.lstrip(".") for ext in ALLOWED_SUPPORT_PARTNER_LOGO_EXTENSIONS)
+        )
+        raise ValueError(f"Support partner logos must be one of: {allowed}.")
+
+    upload_folder = Path(app.config["SUPPORT_PARTNER_UPLOAD_FOLDER"])
+    upload_folder.mkdir(parents=True, exist_ok=True)
+
+    timestamp = utcnow().strftime("%Y%m%d%H%M%S")
+    stored_filename = f"partner_{partner.id}_{timestamp}{extension}"
+    file_path = upload_folder / stored_filename
+    file.save(file_path)
+
+    if partner.logo_filename:
+        previous_path = upload_folder / partner.logo_filename
+        try:
+            if previous_path.exists():
+                previous_path.unlink()
+        except OSError:
+            pass
+
+    partner.logo_filename = stored_filename
+    partner.logo_original = file.filename or stored_filename
+    partner.updated_at = utcnow()
+
+
+def delete_support_partner_logo(app: Flask, partner: "SupportPartner") -> None:
+    if not partner.logo_filename:
+        return
+
+    upload_folder = Path(app.config["SUPPORT_PARTNER_UPLOAD_FOLDER"])
+    file_path = upload_folder / partner.logo_filename
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError:
+        pass
+
+    partner.logo_filename = None
+    partner.logo_original = None
+    partner.updated_at = utcnow()
 
 
 def recalculate_client_billing_state(client: "Client") -> None:
@@ -1203,6 +1253,13 @@ ALLOWED_TICKET_ATTACHMENT_EXTENSIONS = {
 }
 ALLOWED_TEAM_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 ALLOWED_TRUSTED_LOGO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".svg"}
+ALLOWED_SUPPORT_PARTNER_LOGO_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".svg",
+}
 
 
 def get_default_navigation_items() -> list[tuple[str, str, bool]]:
@@ -1867,6 +1924,25 @@ class TrustedBusiness(db.Model):
         return f"<TrustedBusiness {self.name}>"
 
 
+class SupportPartner(db.Model):
+    __tablename__ = "support_partners"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(160), nullable=False)
+    website_url = db.Column(db.String(500))
+    description = db.Column(db.Text())
+    logo_filename = db.Column(db.String(255))
+    logo_original = db.Column(db.String(255))
+    position = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<SupportPartner {self.name}>"
+
+
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, instance_relative_config=True)
 
@@ -1896,6 +1972,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         "THEME_UPLOAD_FOLDER": str(instance_path / "theme"),
         "TEAM_UPLOAD_FOLDER": str(instance_path / "team"),
         "TRUSTED_BUSINESS_UPLOAD_FOLDER": str(instance_path / "trusted_businesses"),
+        "SUPPORT_PARTNER_UPLOAD_FOLDER": str(instance_path / "support_partners"),
         "INSTALL_PHOTOS_FOLDER": str(instance_path / "install_photos"),
         "INSTALL_SIGNATURE_FOLDER": str(instance_path / "install_signatures"),
         "CLIENT_VERIFICATION_FOLDER": str(instance_path / "verification"),
@@ -1956,6 +2033,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "THEME_UPLOAD_FOLDER",
             "TEAM_UPLOAD_FOLDER",
             "TRUSTED_BUSINESS_UPLOAD_FOLDER",
+            "SUPPORT_PARTNER_UPLOAD_FOLDER",
             "INSTALL_PHOTOS_FOLDER",
             "INSTALL_SIGNATURE_FOLDER",
             "CLIENT_VERIFICATION_FOLDER",
@@ -5267,6 +5345,7 @@ def register_routes(app: Flask) -> None:
         suspended_clients: list[Client] = []
         team_members: list[TeamMember] = []
         trusted_businesses: list[TrustedBusiness] = []
+        support_partners: list[SupportPartner] = []
         stripe_config: StripeConfig | None = None
         pending_schedule_requests: list[TechnicianSchedule] = []
         recent_schedule_decisions: list[TechnicianSchedule] = []
@@ -5319,6 +5398,17 @@ def register_routes(app: Flask) -> None:
                     TrustedBusiness.position.asc(), TrustedBusiness.id.asc()
                 )
                 .all()
+            )
+            support_partners = (
+                SupportPartner.query.order_by(
+                    SupportPartner.position.asc(), SupportPartner.id.asc()
+                ).all()
+            )
+        elif active_section == "overview":
+            support_partners = (
+                SupportPartner.query.order_by(
+                    SupportPartner.position.asc(), SupportPartner.id.asc()
+                ).all()
             )
 
         if active_section == "customers" and focus_client_id:
@@ -5705,6 +5795,7 @@ def register_routes(app: Flask) -> None:
             site_theme=site_theme,
             team_members=team_members,
             trusted_businesses=trusted_businesses,
+            support_partners=support_partners,
             recent_autopay_events=recent_autopay_events,
             suspended_clients=suspended_clients,
             stripe_config=stripe_config,
@@ -8717,6 +8808,108 @@ def register_routes(app: Flask) -> None:
             business.logo_filename,
             as_attachment=False,
             download_name=business.logo_original or "trusted-business",
+        )
+
+    @app.post("/support-partners")
+    @login_required
+    def create_support_partner_admin():
+        name = request.form.get("name", "").strip()
+        website_url = request.form.get("website_url", "").strip() or None
+        description = request.form.get("description", "").strip() or None
+        logo = request.files.get("logo")
+
+        if not name:
+            flash("Provide a company name to highlight.", "danger")
+            return redirect(url_for("dashboard", section="story"))
+
+        next_position = (
+            db.session.query(db.func.max(SupportPartner.position)).scalar() or 0
+        ) + 1
+
+        partner = SupportPartner(
+            name=name,
+            website_url=website_url,
+            description=description,
+            position=next_position,
+        )
+        db.session.add(partner)
+        db.session.commit()
+
+        if logo and logo.filename:
+            ensure_file_surface_enabled("support-partner-logo")
+            try:
+                store_support_partner_logo(app, partner, logo)
+            except ValueError as exc:
+                db.session.delete(partner)
+                db.session.commit()
+                flash(str(exc), "danger")
+                return redirect(url_for("dashboard", section="story"))
+            else:
+                db.session.commit()
+
+        flash(f"Added {partner.name} to your operations allies.", "success")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.post("/support-partners/<int:partner_id>")
+    @login_required
+    def update_support_partner_admin(partner_id: int):
+        partner = SupportPartner.query.get_or_404(partner_id)
+
+        name = request.form.get("name", "").strip()
+        website_url = request.form.get("website_url", "").strip() or None
+        description = request.form.get("description", "").strip() or None
+        logo = request.files.get("logo")
+
+        if not name:
+            flash("Company name is required.", "danger")
+            return redirect(url_for("dashboard", section="story"))
+
+        partner.name = name
+        partner.website_url = website_url
+        partner.description = description
+
+        if logo and logo.filename:
+            ensure_file_surface_enabled("support-partner-logo")
+            try:
+                store_support_partner_logo(app, partner, logo)
+            except ValueError as exc:
+                db.session.rollback()
+                flash(str(exc), "danger")
+                return redirect(url_for("dashboard", section="story"))
+
+        db.session.commit()
+        flash(f"Updated {partner.name}.", "success")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.post("/support-partners/<int:partner_id>/delete")
+    @login_required
+    def delete_support_partner_admin(partner_id: int):
+        partner = SupportPartner.query.get_or_404(partner_id)
+
+        delete_support_partner_logo(app, partner)
+        db.session.delete(partner)
+        db.session.commit()
+
+        flash("Support partner removed.", "info")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.get("/support-partners/<int:partner_id>/logo")
+    def support_partner_logo(partner_id: int):
+        partner = SupportPartner.query.get_or_404(partner_id)
+        if not partner.logo_filename:
+            abort(404)
+
+        upload_folder = Path(app.config["SUPPORT_PARTNER_UPLOAD_FOLDER"])
+        file_path = upload_folder / partner.logo_filename
+        if not file_path.exists():
+            abort(404)
+
+        return send_site_file(
+            "support-partner-logo",
+            upload_folder,
+            partner.logo_filename,
+            as_attachment=False,
+            download_name=partner.logo_original or "support-partner",
         )
 
     @app.post("/blog/posts/<int:post_id>/delete")
