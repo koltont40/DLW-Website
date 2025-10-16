@@ -3305,6 +3305,12 @@ a.trusted-logo:hover {
   color: var(--secondary);
 }
 
+.stacked-form label .optional {
+  font-weight: 400;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 .stacked-form input,
 .stacked-form select,
 .stacked-form textarea {
