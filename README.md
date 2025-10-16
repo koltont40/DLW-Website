@@ -43,6 +43,18 @@ When new releases are published you can stay up to date without rerunning the in
 
 The helper script verifies you have `git` available, fetches the latest commits for your current branch, rebases your local copy, and refreshes dependencies inside the existing virtual environment. If you have local changes you will be prompted to commit or stash them before continuing.
 
+### Obtaining TLS Certificates with Certbot
+
+Use [Certbot](https://certbot.eff.org/) to request publicly trusted TLS certificates once DNS is pointed at the server. Because this stack does not bundle automatic web server configuration, run Certbot in "certificate only" mode and then wire the resulting files into your chosen HTTP server manually:
+
+```bash
+sudo certbot certonly
+```
+
+When prompted, choose either the **standalone** authenticator (Certbot temporarily runs its own HTTP server) or provide the path to your existing webroot so the **webroot** authenticator can drop the challenge files under `.well-known/acme-challenge/`. After the challenge succeeds, Certbot will store the certificate and private key—by default in `/etc/letsencrypt/live/<your-domain>/`—and print the exact locations. For example, the current deployment writes the active files to `/etc/letsencrypt/live/new1.dixielandwireless.com/fullchain.pem` and `/etc/letsencrypt/live/new1.dixielandwireless.com/privkey.pem`.
+
+Update your web server configuration to reference those paths (or the values printed during your Certbot run), then reload or restart the service to begin serving traffic over HTTPS. Repeat the command to renew certificates as needed, or enable the packaged `certbot.timer` systemd unit so renewal attempts run automatically.
+
 ### Creating the First Administrator
 
 Set the `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and optional `ADMIN_EMAIL` environment variables before the first launch to auto-create your initial administrator. If those values are omitted the database will be initialized without an admin account—sign in via another trusted path (for example, `flask shell`) to create one manually before exposing the dashboard.

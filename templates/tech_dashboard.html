@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% set page_surface_class = 'page-surface full-bleed' %}
 {% block title %}Field Portal | DIXIELAND WIRELESS LLC{% endblock %}
 {% block content %}
 <div class="tech-portal">
-  <header class="tech-header">
+  <header class="tech-header" id="dashboard-overview">
     <div>
       <h1>Welcome, {{ technician.name }}</h1>
       <p class="subtle">Review your installs, capture required photos, and keep DixieLand Wireless customers online.</p>
@@ -11,13 +12,29 @@
       <a class="button secondary" href="{{ url_for('tech_logout') }}">Sign out</a>
     </div>
   </header>
-  <nav class="tech-quick-links" aria-label="Dashboard sections">
-    <a href="#calendar">Calendar</a>
-    <a href="#schedule">My schedule</a>
-    <a href="#jobs-current">Current jobs</a>
-    <a href="#jobs-upcoming">Upcoming jobs</a>
-    <a href="#jobs-completed">Completed jobs</a>
-  </nav>
+  <aside class="tech-sidebar-card">
+    <nav class="tech-quick-links" aria-label="Dashboard sections" data-sidebar data-expanded="false">
+      <a class="tech-nav-primary" href="#dashboard-overview">Overview</a>
+      <button
+        class="sidebar-toggle tech-nav-toggle"
+        type="button"
+        data-sidebar-toggle
+        data-expand-label="Show tools"
+        data-collapse-label="Hide tools"
+        aria-expanded="false"
+        aria-controls="tech-nav-sections"
+      >
+        Show tools
+      </button>
+      <div class="tech-nav-sections" id="tech-nav-sections" data-sidebar-content>
+        <a href="#calendar">Calendar</a>
+        <a href="#schedule">My schedule</a>
+        <a href="#jobs-current">Current jobs</a>
+        <a href="#jobs-upcoming">Upcoming jobs</a>
+        <a href="#jobs-completed">Completed jobs</a>
+      </div>
+    </nav>
+  </aside>
   <section class="tech-summary">
     <div class="summary-tile">
       <span class="summary-label">Current jobs</span>
