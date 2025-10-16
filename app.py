@@ -578,8 +578,103 @@ def _coerce_int(value: object | None) -> int | None:
     return None
 
 
-def parse_uisp_timestamp(value: str | int | float | None) -> datetime | None:
+def parse_uisp_timestamp(value: object | None) -> datetime | None:
     if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        timestamp = value
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
+        return timestamp.astimezone(UTC)
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            timestamp = parse_uisp_timestamp(item)
+            if timestamp is not None:
+                return timestamp
+        return None
+
+    if isinstance(value, dict):
+        direct_keys = (
+            "timestamp",
+            "value",
+            "dateTime",
+            "datetime",
+            "date",
+            "time",
+            "iso",
+            "iso8601",
+            "at",
+            "lastSeen",
+            "last_seen",
+            "lastSeenAt",
+            "last_seen_at",
+            "lastHeartbeat",
+            "last_heartbeat",
+            "lastHeartbeatAt",
+            "last_heartbeat_at",
+            "lastCommunication",
+            "last_communication",
+            "lastCommunicationAt",
+            "last_communication_at",
+            "lastReachable",
+            "last_reachable",
+            "lastReachableAt",
+            "last_reachable_at",
+            "heartbeatAt",
+            "heartbeat_at",
+            "updatedAt",
+            "updated_at",
+            "$date",
+        )
+        for key in direct_keys:
+            if key in value:
+                timestamp = parse_uisp_timestamp(value.get(key))
+                if timestamp is not None:
+                    return timestamp
+
+        seconds = _coerce_int(
+            value.get("seconds")
+            or value.get("secs")
+            or value.get("epoch")
+            or value.get("epochSeconds")
+            or value.get("epoch_seconds")
+        )
+        millis = _coerce_int(
+            value.get("millis")
+            or value.get("milliseconds")
+            or value.get("ms")
+            or value.get("epochMillis")
+            or value.get("epoch_millis")
+        )
+        micros = _coerce_int(
+            value.get("micros")
+            or value.get("microseconds")
+            or value.get("us")
+            or value.get("epochMicros")
+            or value.get("epoch_micros")
+        )
+        nanos = _coerce_int(
+            value.get("nanos")
+            or value.get("nanoseconds")
+            or value.get("ns")
+            or value.get("epochNanos")
+            or value.get("epoch_nanos")
+        )
+
+        if any(component is not None for component in (seconds, millis, micros, nanos)):
+            total_seconds = 0.0
+            if seconds is not None:
+                total_seconds += float(seconds)
+            if millis is not None:
+                total_seconds += float(millis) / 1000.0
+            if micros is not None:
+                total_seconds += float(micros) / 1_000_000.0
+            if nanos is not None:
+                total_seconds += float(nanos) / 1_000_000_000.0
+            return parse_uisp_timestamp(total_seconds)
+
         return None
 
     if isinstance(value, (int, float)):
@@ -593,20 +688,28 @@ def parse_uisp_timestamp(value: str | int | float | None) -> datetime | None:
         except (OverflowError, OSError, ValueError):
             return None
 
-    cleaned: str
+    if isinstance(value, bool):
+        # True/False do not represent useful timestamps.
+        return None
+
     if isinstance(value, str):
         cleaned = value.strip()
         if not cleaned:
             return None
-        if cleaned.endswith("Z"):
-            cleaned = cleaned[:-1] + "+00:00"
-        if cleaned.isdigit():
-            return parse_uisp_timestamp(int(cleaned))
+        normalized = cleaned
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        if re.search(r"[+-]\d{4}$", normalized):
+            normalized = normalized[:-5] + normalized[-5:-2] + ":" + normalized[-2:]
+        if normalized.lower().endswith(" utc"):
+            normalized = normalized[:-4].rstrip() + "+00:00"
+        if normalized.isdigit():
+            return parse_uisp_timestamp(int(normalized))
         try:
-            timestamp = datetime.fromisoformat(cleaned)
+            timestamp = datetime.fromisoformat(normalized)
         except ValueError:
             try:
-                return datetime.fromtimestamp(float(cleaned), tz=UTC)
+                return datetime.fromtimestamp(float(normalized), tz=UTC)
             except (TypeError, ValueError, OverflowError, OSError):
                 return None
         if timestamp.tzinfo is None:
