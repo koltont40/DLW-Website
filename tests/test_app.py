@@ -2149,6 +2149,125 @@ def test_admin_syncs_uisp_devices_with_nested_heartbeat_payload(app, client, mon
         assert device.last_heartbeat_at >= device.last_seen_at
 
 
+def test_admin_syncs_uisp_devices_with_unknown_heartbeat_status(app, client, monkeypatch):
+    login_admin(client)
+
+    monkeypatch.setattr(app_module, "send_email_via_office365", lambda *args, **kwargs: True)
+
+    epoch_seconds = 1_700_000_500
+    last_seen_epoch = epoch_seconds - 75
+
+    device_payload = {
+        "items": [
+            {
+                "id": "device-unknown",
+                "identification": {
+                    "name": "Unknown Heartbeat Sensor",
+                    "model": "UISP Test",
+                    "mac": "AA:BB:CC:00:11:22",
+                },
+                "status": {
+                    "value": "UNKNOWN",
+                    "details": {
+                        "metrics": {
+                            "lastActivity": {
+                                "timestamp": {"seconds": last_seen_epoch, "nanos": 0}
+                            }
+                        }
+                    },
+                },
+                "heartbeat": {
+                    "status": {"message": "Heartbeat Unknown"},
+                    "details": {
+                        "metrics": {
+                            "lastSeenTime": {
+                                "seconds": last_seen_epoch,
+                                "nanos": 0,
+                            }
+                        }
+                    },
+                },
+            }
+        ],
+        "pagination": {"page": 1, "perPage": 200, "totalPages": 1},
+    }
+
+    heartbeat_payload = {
+        "items": [
+            {
+                "deviceId": "device-unknown",
+                "status": {
+                    "message": "Heartbeat Unknown",
+                    "description": "Heartbeat unknown due to unreachable radio",
+                },
+                "details": {
+                    "metrics": {
+                        "lastHeartbeat": {
+                            "time": {"seconds": epoch_seconds, "nanos": 0}
+                        }
+                    }
+                },
+            }
+        ]
+    }
+
+    class DummyResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        @property
+        def text(self):
+            return "ok"
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if any(
+            segment in url
+            for segment in (
+                "device-heartbeats",
+                "devices/heartbeats",
+                "devices/monitoring",
+            )
+        ):
+            return DummyResponse(heartbeat_payload)
+        return DummyResponse(device_payload)
+
+    monkeypatch.setattr(app_module.requests, "get", fake_get)
+
+    with app.app_context():
+        config = UispConfig(base_url="https://uisp.example.com", api_token="token")
+        db.session.add(config)
+        db.session.commit()
+
+    response = client.post("/uisp/devices/import", follow_redirects=True)
+    assert response.status_code == 200
+
+    with app.app_context():
+        device = UispDevice.query.filter_by(uisp_id="device-unknown").first()
+        assert device is not None
+        assert device.status == "offline"
+        assert device.heartbeat_status == "offline"
+        assert device.last_seen_at is not None
+        assert device.last_heartbeat_at is not None
+        expected_heartbeat = datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
+        device_last_seen = (
+            device.last_seen_at
+            if device.last_seen_at.tzinfo
+            else device.last_seen_at.replace(tzinfo=timezone.utc)
+        )
+        device_last_heartbeat = (
+            device.last_heartbeat_at
+            if device.last_heartbeat_at.tzinfo
+            else device.last_heartbeat_at.replace(tzinfo=timezone.utc)
+        )
+        assert abs((device_last_heartbeat - expected_heartbeat).total_seconds()) < 1
+        assert device_last_heartbeat >= device_last_seen
+        assert (device_last_heartbeat - device_last_seen) <= timedelta(minutes=5)
+
 def test_admin_manages_uisp_settings_and_towers(app, client):
     login_admin(client)
 
