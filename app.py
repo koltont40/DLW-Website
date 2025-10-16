@@ -4140,6 +4140,39 @@ def register_routes(app: Flask) -> None:
         except StripeError as error:
             db.session.rollback()
             return jsonify({"error": describe_stripe_error(error)}), 400
+        except IntegrityError as error:
+            db.session.rollback()
+            current_app.logger.exception(
+                "Failed to save Stripe payment method for client %s", client.id
+            )
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "We couldn't save that card. Please try again "
+                            "or contact support."
+                        )
+                    }
+                ),
+                400,
+            )
+        except Exception as error:  # pragma: no cover - defensive catch-all
+            db.session.rollback()
+            current_app.logger.exception(
+                "Unexpected error while saving payment method for client %s",
+                client.id,
+            )
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "Something went wrong while saving your card. "
+                            "Please try again."
+                        )
+                    }
+                ),
+                500,
+            )
 
         db.session.commit()
 
