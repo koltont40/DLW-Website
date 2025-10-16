@@ -1985,6 +1985,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_down_detector_configuration()
         ensure_tls_configuration()
         ensure_site_theme()
+        ensure_uisp_schema()
 
     return app
 
@@ -2012,6 +2013,7 @@ def init_db() -> None:
         ensure_down_detector_configuration()
         ensure_tls_configuration()
         ensure_site_theme()
+        ensure_uisp_schema()
 
 
 def issue_lets_encrypt_certificate(
@@ -2747,6 +2749,61 @@ def ensure_site_theme_background_fields() -> None:
         alterations.append(
             "ALTER TABLE site_theme ADD COLUMN background_image_original VARCHAR(255)"
         )
+
+    if not alterations:
+        return
+
+    with db.engine.begin() as connection:
+        for statement in alterations:
+            connection.execute(text(statement))
+
+
+def ensure_uisp_schema() -> None:
+    inspector = inspect(db.engine)
+
+    try:
+        table_names = set(inspector.get_table_names())
+    except Exception:  # pragma: no cover - safety guard
+        table_names = set()
+
+    if {"network_towers", "uisp_config"} - table_names:
+        # Let SQLAlchemy create any newly introduced UISP-related tables.
+        db.create_all()
+        inspector = inspect(db.engine)
+
+    try:
+        device_columns = {
+            column["name"] for column in inspector.get_columns("uisp_devices")
+        }
+    except NoSuchTableError:
+        # The UISP device table does not exist yet; create_all will take care of it.
+        db.create_all()
+        return
+
+    alterations: list[str] = []
+    column_statements = {
+        "nickname": "ALTER TABLE uisp_devices ADD COLUMN nickname VARCHAR(120)",
+        "site_name": "ALTER TABLE uisp_devices ADD COLUMN site_name VARCHAR(120)",
+        "ip_address": "ALTER TABLE uisp_devices ADD COLUMN ip_address VARCHAR(64)",
+        "status": (
+            "ALTER TABLE uisp_devices ADD COLUMN status VARCHAR(20) "
+            "NOT NULL DEFAULT 'unknown'"
+        ),
+        "last_seen_at": "ALTER TABLE uisp_devices ADD COLUMN last_seen_at TIMESTAMP",
+        "firmware_version": (
+            "ALTER TABLE uisp_devices ADD COLUMN firmware_version VARCHAR(64)"
+        ),
+        "tower_id": "ALTER TABLE uisp_devices ADD COLUMN tower_id INTEGER",
+        "notes": "ALTER TABLE uisp_devices ADD COLUMN notes TEXT",
+        "outage_notified_at": (
+            "ALTER TABLE uisp_devices ADD COLUMN outage_notified_at TIMESTAMP"
+        ),
+        "updated_at": "ALTER TABLE uisp_devices ADD COLUMN updated_at TIMESTAMP",
+    }
+
+    for column_name, statement in column_statements.items():
+        if column_name not in device_columns:
+            alterations.append(statement)
 
     if not alterations:
         return
