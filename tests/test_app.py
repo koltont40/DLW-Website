@@ -264,6 +264,19 @@ def test_parse_uisp_timestamp_accepts_multiple_formats():
     parsed_string_epoch = app_module.parse_uisp_timestamp(str(epoch_seconds))
     assert parsed_string_epoch == parsed_epoch
 
+    nested_payload = {
+        "timestamp": {"seconds": epoch_seconds, "nanos": 500_000_000},
+        "alt": {"iso": "2024-05-01T12:00:00Z"},
+    }
+    parsed_nested = app_module.parse_uisp_timestamp(nested_payload)
+    assert parsed_nested == datetime.fromtimestamp(
+        epoch_seconds + 0.5, tz=timezone.utc
+    )
+
+    utc_suffix_value = "2024-05-01T12:00:00 UTC"
+    parsed_utc_suffix = app_module.parse_uisp_timestamp(utc_suffix_value)
+    assert parsed_utc_suffix == datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc)
+
 
 @pytest.fixture
 def client(app):
@@ -2043,6 +2056,217 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
         assert device.client_id is None
         assert device.tower_id is None
 
+
+def test_admin_syncs_uisp_devices_with_nested_heartbeat_payload(app, client, monkeypatch):
+    login_admin(client)
+
+    sent_notifications: list[tuple[str, str, str]] = []
+
+    def fake_send_email(app_obj, recipient, subject, body, attachments=None):
+        sent_notifications.append((recipient, subject, body))
+        return True
+
+    monkeypatch.setattr(app_module, "send_email_via_office365", fake_send_email)
+
+    epoch_seconds = 1_700_000_000
+    heartbeat_epoch_millis = (epoch_seconds + 120) * 1000
+
+    device_payload = {
+        "items": [
+            {
+                "id": "device-nested",
+                "identification": {
+                    "name": "Nested Sensor",
+                    "model": "UISP Nano",
+                    "mac": "AA:BB:CC:DD:EE:99",
+                },
+                "status": {
+                    "value": "warning",
+                    "lastSeen": {"seconds": epoch_seconds - 60, "nanos": 0},
+                },
+                "ipAddress": "10.1.1.50",
+            }
+        ],
+        "pagination": {"page": 1, "perPage": 200, "totalPages": 1},
+    }
+
+    heartbeat_payload = {
+        "items": [
+            {
+                "device": {
+                    "identification": {
+                        "id": "device-nested",
+                        "mac": "AA:BB:CC:DD:EE:99",
+                    }
+                },
+                "status": {"label": "Heartbeat Lost!"},
+                "heartbeat": {
+                    "status": {"label": "Link Down"},
+                    "timestamp": {"epochMillis": heartbeat_epoch_millis},
+                },
+                "timestamp": {"epochMillis": heartbeat_epoch_millis},
+            }
+        ]
+    }
+
+    class DummyResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        @property
+        def text(self):
+            return "ok"
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if any(
+            segment in url
+            for segment in ("device-heartbeats", "devices/heartbeats", "devices/monitoring")
+        ):
+            return DummyResponse(heartbeat_payload)
+        return DummyResponse(device_payload)
+
+    monkeypatch.setattr(app_module.requests, "get", fake_get)
+
+    with app.app_context():
+        config = UispConfig(base_url="https://uisp.example.com", api_token="token")
+        db.session.add(config)
+        db.session.commit()
+
+    response = client.post("/uisp/devices/import", follow_redirects=True)
+    assert response.status_code == 200
+
+    with app.app_context():
+        device = UispDevice.query.filter_by(uisp_id="device-nested").one()
+        assert device.status == "offline"
+        assert device.heartbeat_status == "offline"
+        assert device.last_seen_at is not None
+        assert device.last_heartbeat_at is not None
+        assert device.last_heartbeat_at >= device.last_seen_at
+
+
+def test_admin_syncs_uisp_devices_with_unknown_heartbeat_status(app, client, monkeypatch):
+    login_admin(client)
+
+    monkeypatch.setattr(app_module, "send_email_via_office365", lambda *args, **kwargs: True)
+
+    epoch_seconds = 1_700_000_500
+    last_seen_epoch = epoch_seconds - 75
+
+    device_payload = {
+        "items": [
+            {
+                "id": "device-unknown",
+                "identification": {
+                    "name": "Unknown Heartbeat Sensor",
+                    "model": "UISP Test",
+                    "mac": "AA:BB:CC:00:11:22",
+                },
+                "status": {
+                    "value": "UNKNOWN",
+                    "details": {
+                        "metrics": {
+                            "lastActivity": {
+                                "timestamp": {"seconds": last_seen_epoch, "nanos": 0}
+                            }
+                        }
+                    },
+                },
+                "heartbeat": {
+                    "status": {"message": "Heartbeat Unknown"},
+                    "details": {
+                        "metrics": {
+                            "lastSeenTime": {
+                                "seconds": last_seen_epoch,
+                                "nanos": 0,
+                            }
+                        }
+                    },
+                },
+            }
+        ],
+        "pagination": {"page": 1, "perPage": 200, "totalPages": 1},
+    }
+
+    heartbeat_payload = {
+        "items": [
+            {
+                "deviceId": "device-unknown",
+                "status": {
+                    "message": "Heartbeat Unknown",
+                    "description": "Heartbeat unknown due to unreachable radio",
+                },
+                "details": {
+                    "metrics": {
+                        "lastHeartbeat": {
+                            "time": {"seconds": epoch_seconds, "nanos": 0}
+                        }
+                    }
+                },
+            }
+        ]
+    }
+
+    class DummyResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        @property
+        def text(self):
+            return "ok"
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if any(
+            segment in url
+            for segment in (
+                "device-heartbeats",
+                "devices/heartbeats",
+                "devices/monitoring",
+            )
+        ):
+            return DummyResponse(heartbeat_payload)
+        return DummyResponse(device_payload)
+
+    monkeypatch.setattr(app_module.requests, "get", fake_get)
+
+    with app.app_context():
+        config = UispConfig(base_url="https://uisp.example.com", api_token="token")
+        db.session.add(config)
+        db.session.commit()
+
+    response = client.post("/uisp/devices/import", follow_redirects=True)
+    assert response.status_code == 200
+
+    with app.app_context():
+        device = UispDevice.query.filter_by(uisp_id="device-unknown").first()
+        assert device is not None
+        assert device.status == "offline"
+        assert device.heartbeat_status == "offline"
+        assert device.last_seen_at is not None
+        assert device.last_heartbeat_at is not None
+        expected_heartbeat = datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
+        device_last_seen = (
+            device.last_seen_at
+            if device.last_seen_at.tzinfo
+            else device.last_seen_at.replace(tzinfo=timezone.utc)
+        )
+        device_last_heartbeat = (
+            device.last_heartbeat_at
+            if device.last_heartbeat_at.tzinfo
+            else device.last_heartbeat_at.replace(tzinfo=timezone.utc)
+        )
+        assert abs((device_last_heartbeat - expected_heartbeat).total_seconds()) < 1
+        assert device_last_heartbeat >= device_last_seen
+        assert (device_last_heartbeat - device_last_seen) <= timedelta(minutes=5)
 
 def test_admin_manages_uisp_settings_and_towers(app, client):
     login_admin(client)
