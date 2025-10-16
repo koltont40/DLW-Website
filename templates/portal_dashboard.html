@@ -112,7 +112,14 @@
           <h3>Saved cards &amp; autopay</h3>
           {% set default_method = client.default_payment_method() %}
           {% if client.autopay_enabled and default_method %}
-          <p class="subtle">Autopay charges {{ default_method.describe() }} when invoices are due.</p>
+          <p class="subtle">
+            Autopay charges {{ default_method.describe() }}
+            {% if client.autopay_day %}
+            on day {{ client.autopay_day }} of each month.
+            {% else %}
+            when invoices are due.
+            {% endif %}
+          </p>
           {% else %}
           <p class="subtle">Add a card and enable autopay to keep service active automatically.</p>
           {% endif %}
@@ -167,6 +174,29 @@
             <button class="button small primary" type="submit" disabled>Enable autopay</button>
             {% endif %}
             {% endif %}
+          </form>
+          <div class="autopay-schedule-status">
+            {% if client.autopay_day %}
+            <p class="subtle">Autopay is scheduled for day {{ client.autopay_day }} each month.</p>
+            {% else %}
+            <p class="subtle">Autopay runs on each invoice due date.</p>
+            {% endif %}
+            {% if client.autopay_day_pending %}
+            <p class="subtle warning">Requested day {{ client.autopay_day_pending }} is awaiting approval.</p>
+            {% endif %}
+          </div>
+          <form class="stacked-form autopay-schedule-form" method="post" action="{{ url_for('portal_autopay_schedule') }}">
+            {% set selected_day = client.autopay_day_pending or client.autopay_day %}
+            <label>
+              Preferred autopay day
+              <select name="requested_day">
+                <option value="">Charge on invoice due dates</option>
+                {% for day in range(1, 29) %}
+                <option value="{{ day }}" {% if selected_day == day %}selected{% endif %}>Day {{ day }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="button small secondary" type="submit">Submit schedule request</button>
           </form>
         </div>
         <div class="portal-invoice-card">
@@ -280,9 +310,14 @@
               </select>
             </label>
             <label>
-              Photos (optional)
-              <input type="file" name="attachments" accept="image/*" multiple />
-              <span class="subtle">Attach images that illustrate the issue.</span>
+              Attachments (optional)
+              <input
+                type="file"
+                name="attachments"
+                accept=".jpg,.jpeg,.png,.gif,.heic,.heif,.pdf,.txt,.csv,.zip,.doc,.docx,.xls,.xlsx"
+                multiple
+              />
+              <span class="subtle">Include screenshots, documents, or logs that help explain the issue.</span>
             </label>
             <button class="button primary" type="submit">Submit ticket</button>
           </form>
@@ -291,7 +326,7 @@
           {% if tickets %}
           <ul class="ticket-list">
             {% for ticket in tickets %}
-            <li class="ticket-card">
+            <li class="ticket-card" id="ticket-{{ ticket.id }}">
               <div class="ticket-card-header">
                 <div>
                   <strong>{{ ticket.subject }}</strong>
@@ -300,29 +335,69 @@
                 <span class="status-pill status-{{ ticket.status|lower|replace(' ', '-') }}">{{ ticket.status }}</span>
               </div>
               <p class="subtle">Priority: {{ ticket.priority }}</p>
-              <p>{{ ticket.message }}</p>
-              {% if ticket.attachments %}
+              <div class="ticket-conversation">
+                {% for message in ticket.messages %}
+                <article class="ticket-message {% if message.sender == 'admin' %}from-staff{% else %}from-client{% endif %}">
+                  <header class="ticket-message-header">
+                    <strong>
+                      {% if message.sender == 'admin' %}
+                      Dixieland Wireless Support
+                      {% else %}
+                      You
+                      {% endif %}
+                    </strong>
+                    <span class="subtle">{{ message.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+                  </header>
+                  <p>{{ message.body }}</p>
+                  {% if message.attachments %}
+                  <div class="ticket-attachments">
+                    <div class="ticket-attachment-strip">
+                      {% for attachment in message.attachments %}
+                      <a class="file-chip" href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
+                        {{ attachment.original_filename }}
+                      </a>
+                      {% endfor %}
+                    </div>
+                  </div>
+                  {% endif %}
+                </article>
+                {% endfor %}
+              </div>
+              {% set legacy_attachments = ticket.attachments | selectattr('message_id', 'equalto', None) | list %}
+              {% if legacy_attachments %}
               <div class="ticket-attachments">
-                <p class="subtle">Attached photos:</p>
                 <div class="ticket-attachment-strip">
-                  {% for attachment in ticket.attachments %}
-                  <a href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
-                    <img
-                      src="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}"
-                      alt="Ticket attachment {{ loop.index }}"
-                      loading="lazy"
-                    />
+                  {% for attachment in legacy_attachments %}
+                  <a class="file-chip" href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
+                    {{ attachment.original_filename }}
                   </a>
                   {% endfor %}
                 </div>
               </div>
               {% endif %}
               {% if ticket.resolution_notes %}
-              <div class="resolution">
-                <h4>Latest update</h4>
+              <div class="ticket-resolution">
                 <p>{{ ticket.resolution_notes }}</p>
               </div>
               {% endif %}
+              <form
+                class="stacked-form ticket-reply-form"
+                method="post"
+                action="{{ url_for('portal_ticket_message', ticket_id=ticket.id) }}"
+                enctype="multipart/form-data"
+              >
+                <label>
+                  Message
+                  <textarea name="message" rows="3" placeholder="Share an update for our support team."></textarea>
+                </label>
+                <label class="file-upload">
+                  Attach files
+                  <input type="file" name="attachments" multiple />
+                </label>
+                <div class="button-row">
+                  <button class="button small primary" type="submit">Send reply</button>
+                </div>
+              </form>
             </li>
             {% endfor %}
           </ul>
@@ -409,6 +484,7 @@
 <script>
   (() => {
     const publishableKey = "{{ stripe_publishable_key }}";
+    const loginRedirect = "{{ url_for('portal_login', next=url_for('portal_dashboard')) }}";
     if (!publishableKey) {
       return;
     }
@@ -425,8 +501,19 @@
     const stripe = Stripe(publishableKey);
     const elements = stripe.elements();
     const cardElement = elements.create("card");
+    const cardholderDetails = {
+      name: {{ client.name|tojson }},
+      email: {{ client.email|tojson }},
+    };
     let setupSecret = null;
     let mounted = false;
+    let processing = false;
+
+    const updateSaveState = () => {
+      saveButton.disabled = processing || !setupSecret;
+    };
+
+    updateSaveState();
 
     const openForm = async () => {
       formWrapper.classList.remove("hidden");
@@ -435,15 +522,31 @@
         cardElement.mount("#portal-card-element");
         mounted = true;
       }
-      const response = await fetch("{{ url_for('portal_setup_intent') }}", {
-        headers: { "Accept": "application/json" },
-      });
-      const data = await response.json();
-      if (data.error) {
-        errorField.textContent = data.error;
-        return;
+      setupSecret = null;
+      processing = false;
+      updateSaveState();
+      try {
+        const response = await fetch("{{ url_for('portal_setup_intent') }}", {
+          credentials: "include",
+          headers: {
+            Accept: "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+        });
+        if (response.status === 401) {
+          window.location.href = loginRedirect;
+          return;
+        }
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.error || !data.client_secret) {
+          throw new Error(data.error || "Unable to prepare card entry. Please try again.");
+        }
+        setupSecret = data.client_secret;
+      } catch (err) {
+        setupSecret = null;
+        errorField.textContent = err.message || "Unable to prepare card entry.";
       }
-      setupSecret = data.client_secret;
+      updateSaveState();
     };
 
     const closeForm = () => {
@@ -451,6 +554,8 @@
       setupSecret = null;
       cardElement.clear();
       errorField.textContent = "";
+      processing = false;
+      updateSaveState();
     };
 
     addButton.addEventListener("click", (event) => {
@@ -466,38 +571,85 @@
     saveButton.addEventListener("click", async (event) => {
       event.preventDefault();
       if (!setupSecret) {
+        errorField.textContent =
+          "We're getting things ready. Please try saving the card again.";
         return;
       }
-      saveButton.disabled = true;
+      processing = true;
+      updateSaveState();
       errorField.textContent = "";
-      const { error, setupIntent } = await stripe.confirmCardSetup(setupSecret, {
-        payment_method: {
-          card: cardElement,
-        },
-      });
-      if (error) {
-        errorField.textContent = error.message || "Unable to save card.";
-        saveButton.disabled = false;
+      const billingDetails = {};
+      if (cardholderDetails.name) {
+        billingDetails.name = cardholderDetails.name;
+      }
+      if (cardholderDetails.email) {
+        billingDetails.email = cardholderDetails.email;
+      }
+      let confirmation;
+      try {
+        confirmation = await stripe.confirmCardSetup(
+          setupSecret,
+          {
+            payment_method: {
+              card: cardElement,
+              billing_details: billingDetails,
+            },
+            redirect: "if_required",
+          }
+        );
+      } catch (err) {
+        errorField.textContent = err.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
         return;
       }
-      const response = await fetch("{{ url_for('portal_add_payment_method') }}", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({
-          payment_method_id: setupIntent.payment_method,
-          set_default: true,
-        }),
-      });
-      const result = await response.json();
-      saveButton.disabled = false;
-      if (result.error) {
-        errorField.textContent = result.error;
+      if (confirmation.error) {
+        errorField.textContent = confirmation.error.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
         return;
       }
-      window.location.reload();
+      const setupIntent = confirmation.setupIntent;
+      const setupStatus = setupIntent ? setupIntent.status : null;
+      if (
+        !setupIntent ||
+        !setupIntent.payment_method ||
+        (setupStatus !== "succeeded" && setupStatus !== "processing")
+      ) {
+        errorField.textContent =
+          "Stripe did not confirm the card. Please try again.";
+        processing = false;
+        updateSaveState();
+        return;
+      }
+      try {
+        const response = await fetch("{{ url_for('portal_add_payment_method') }}", {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+          },
+          body: JSON.stringify({
+            payment_method_id: setupIntent.payment_method,
+            set_default: true,
+          }),
+        });
+        if (response.status === 401) {
+          window.location.href = loginRedirect;
+          return;
+        }
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.error) {
+          throw new Error(result.error || "Unable to save card. Please try again.");
+        }
+        window.location.reload();
+      } catch (err) {
+        errorField.textContent = err.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
+      }
     });
   })();
 </script>

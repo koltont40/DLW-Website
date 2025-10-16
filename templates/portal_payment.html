@@ -6,6 +6,99 @@
   <h1>Pay Invoice</h1>
   <p class="subtle">Invoice {{ invoice.description }} for {{ invoice.amount_cents|currency }}.</p>
   <form id="portal-payment-form" class="stacked-form portal-payment-form">
+    <label>
+      Name on card
+      <input
+        type="text"
+        name="billing_name"
+        id="billing-name"
+        autocomplete="cc-name"
+        required
+      />
+    </label>
+    <div class="two-column">
+      <label>
+        Email
+        <input
+          type="email"
+          name="billing_email"
+          id="billing-email"
+          autocomplete="email"
+          required
+        />
+      </label>
+      <label>
+        Phone
+        <input
+          type="tel"
+          name="billing_phone"
+          id="billing-phone"
+          autocomplete="tel"
+        />
+      </label>
+    </div>
+    <label>
+      Address line 1
+      <input
+        type="text"
+        name="billing_line1"
+        id="billing-line1"
+        autocomplete="address-line1"
+        required
+      />
+    </label>
+    <label>
+      Address line 2 <span class="optional">(optional)</span>
+      <input
+        type="text"
+        name="billing_line2"
+        id="billing-line2"
+        autocomplete="address-line2"
+      />
+    </label>
+    <div class="two-column">
+      <label>
+        City
+        <input
+          type="text"
+          name="billing_city"
+          id="billing-city"
+          autocomplete="address-level2"
+          required
+        />
+      </label>
+      <label>
+        State / Province
+        <input
+          type="text"
+          name="billing_state"
+          id="billing-state"
+          autocomplete="address-level1"
+          required
+        />
+      </label>
+    </div>
+    <div class="two-column">
+      <label>
+        Postal code
+        <input
+          type="text"
+          name="billing_postal_code"
+          id="billing-postal-code"
+          autocomplete="postal-code"
+          required
+        />
+      </label>
+      <label>
+        Country / Region
+        <input
+          type="text"
+          name="billing_country"
+          id="billing-country"
+          autocomplete="country-name"
+        />
+      </label>
+    </div>
     <div id="portal-payment-element" class="portal-payment-element"></div>
     <p class="form-help" id="portal-payment-errors"></p>
     <div class="button-row">
@@ -19,26 +112,84 @@
   (() => {
     const publishableKey = "{{ stripe_publishable_key }}";
     const clientSecret = "{{ payment_intent_client_secret }}";
+    const errorField = document.getElementById("portal-payment-errors");
     if (!publishableKey || !clientSecret) {
+      if (errorField) {
+        errorField.textContent =
+          "Online payments are unavailable because Stripe is not configured.";
+      }
       return;
     }
     const stripe = Stripe(publishableKey);
     const elements = stripe.elements({ clientSecret });
-    const paymentElement = elements.create("payment");
+    const paymentElement = elements.create("payment", {
+      fields: {
+        billingDetails: {
+          name: "always",
+          email: "auto",
+          phone: "auto",
+          address: "auto",
+        },
+      },
+    });
     paymentElement.mount("#portal-payment-element");
     const form = document.getElementById("portal-payment-form");
     const submitButton = document.getElementById("portal-payment-submit");
-    const errorField = document.getElementById("portal-payment-errors");
+    const toOptionalValue = (value) => {
+      if (typeof value !== "string") {
+        return undefined;
+      }
+      const trimmed = value.trim();
+      return trimmed.length ? trimmed : undefined;
+    };
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       submitButton.disabled = true;
       errorField.textContent = "";
-      const { error } = await stripe.confirmPayment({
+      const formData = new FormData(form);
+      const billingDetails = {
+        name: toOptionalValue(formData.get("billing_name")),
+        email: toOptionalValue(formData.get("billing_email")),
+        phone: toOptionalValue(formData.get("billing_phone")),
+        address: {
+          line1: toOptionalValue(formData.get("billing_line1")),
+          line2: toOptionalValue(formData.get("billing_line2")),
+          city: toOptionalValue(formData.get("billing_city")),
+          state: toOptionalValue(formData.get("billing_state")),
+          postal_code: toOptionalValue(formData.get("billing_postal_code")),
+          country: toOptionalValue(formData.get("billing_country")),
+        },
+      };
+      const address = billingDetails.address;
+      Object.keys(address).forEach((key) => {
+        if (!address[key]) {
+          delete address[key];
+        }
+      });
+      if (!Object.keys(address).length) {
+        delete billingDetails.address;
+      }
+      if (!billingDetails.name) {
+        delete billingDetails.name;
+      }
+      if (!billingDetails.email) {
+        delete billingDetails.email;
+      }
+      if (!billingDetails.phone) {
+        delete billingDetails.phone;
+      }
+      const confirmOptions = {
         elements,
         confirmParams: {
           return_url: "{{ url_for('portal_dashboard', _external=True) }}",
         },
-      });
+      };
+      if (Object.keys(billingDetails).length) {
+        confirmOptions.confirmParams.payment_method_data = {
+          billing_details: billingDetails,
+        };
+      }
+      const { error } = await stripe.confirmPayment(confirmOptions);
       if (error) {
         errorField.textContent = error.message || "Payment could not be completed.";
         submitButton.disabled = false;
