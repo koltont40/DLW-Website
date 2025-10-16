@@ -1364,41 +1364,64 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
 
     monkeypatch.setattr(app_module, "send_email_via_office365", fake_send_email)
 
-    payload_holder = {
-        "data": [
-            {
-                "id": "device-1",
-                "identification": {"name": "North Sector", "model": "UISP Wave"},
-                "site": {"name": "North Tower"},
-                "status": {"value": "online", "lastSeen": "2024-05-01T12:00:00Z"},
-                "ipAddress": "10.0.0.10",
-                "macAddress": "AA:BB:CC:DD:EE:01",
-                "firmware": {"version": "1.2.3"},
-            },
-            {
-                "id": "device-2",
-                "identification": {"name": "Backhaul Link", "model": "UISP Wave"},
-                "site": {"name": "Backhaul Ridge"},
-                "status": {"value": "offline", "lastSeen": "2024-05-01T11:45:00Z"},
-                "ipAddress": "10.0.0.11",
-                "macAddress": "AA:BB:CC:DD:EE:02",
-                "firmware": {"version": "1.2.3"},
-            },
-        ]
-    }
+    payload_pages = [
+        {
+            "items": [
+                {
+                    "id": "device-1",
+                    "identification": {"name": "North Sector", "model": "UISP Wave"},
+                    "site": {"name": "North Tower"},
+                    "status": {"value": "online", "lastSeen": "2024-05-01T12:00:00Z"},
+                    "ipAddress": "10.0.0.10",
+                    "macAddress": "AA:BB:CC:DD:EE:01",
+                    "firmware": {"version": "1.2.3"},
+                }
+            ],
+            "_links": {"next": "/nms/api/v2.1/devices?page=2"},
+            "pagination": {"page": 1, "perPage": 200, "totalPages": 2},
+        },
+        {
+            "data": [
+                {
+                    "id": "device-2",
+                    "identification": {"name": "Backhaul Link", "model": "UISP Wave"},
+                    "site": {"name": "Backhaul Ridge"},
+                    "status": {"value": "offline", "lastSeen": "2024-05-01T11:45:00Z"},
+                    "ipAddress": "10.0.0.11",
+                    "macAddress": "AA:BB:CC:DD:EE:02",
+                    "firmware": {"version": "1.2.3"},
+                }
+            ],
+            "pagination": {"page": 2, "perPage": 200, "totalPages": 2},
+        },
+    ]
 
     class DummyResponse:
         status_code = 200
 
+        def __init__(self, payload):
+            self._payload = payload
+
         def json(self):
-            return payload_holder["data"]
+            return self._payload
 
         @property
         def text(self):
             return "ok"
 
-    def fake_get(url, headers=None, timeout=None):
-        return DummyResponse()
+    def fake_get(url, headers=None, params=None, timeout=None):
+        request_page = 1
+        if params and "page" in params:
+            try:
+                request_page = int(params["page"])
+            except (TypeError, ValueError):
+                request_page = 1
+        elif "page=2" in url:
+            request_page = 2
+
+        index = max(1, request_page) - 1
+        index = min(index, len(payload_pages) - 1)
+        return DummyResponse(payload_pages[index])
 
     monkeypatch.setattr(app_module.requests, "get", fake_get)
 
@@ -1464,11 +1487,17 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
         assert device.notes == "Feeds subdivision"
         assert device.tower_id == lake_tower_id
 
-    payload_holder["data"][1]["status"] = {"value": "online", "lastSeen": "2024-05-01T12:30:00Z"}
+    payload_pages[1]["data"][0]["status"] = {
+        "value": "online",
+        "lastSeen": "2024-05-01T12:30:00Z",
+    }
     client.post("/uisp/devices/import", follow_redirects=True)
     assert not sent_notifications
 
-    payload_holder["data"][1]["status"] = {"value": "offline", "lastSeen": "2024-05-01T12:45:00Z"}
+    payload_pages[1]["data"][0]["status"] = {
+        "value": "offline",
+        "lastSeen": "2024-05-01T12:45:00Z",
+    }
     sent_notifications.clear()
     client.post("/uisp/devices/import", follow_redirects=True)
 
