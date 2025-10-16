@@ -621,6 +621,28 @@ a.trusted-logo:hover {
   color: var(--secondary);
 }
 
+.allies {
+  padding: 2rem 0 0;
+}
+
+.allies-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.allies-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.allies .empty-state {
+  border-radius: 1.1rem;
+  border: 1px dashed rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.02);
+}
+
 .trusted-initial {
   font-size: 1.75rem;
   font-weight: 700;

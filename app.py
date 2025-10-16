@@ -3773,8 +3773,17 @@ def register_routes(app: Flask) -> None:
             .limit(12)
             .all()
         )
+        support_partners = (
+            SupportPartner.query.order_by(
+                SupportPartner.position.asc(), SupportPartner.id.asc()
+            )
+            .limit(9)
+            .all()
+        )
         return render_template(
-            "index.html", trusted_businesses=trusted_businesses
+            "index.html",
+            trusted_businesses=trusted_businesses,
+            support_partners=support_partners,
         )
 
     @app.route("/services")

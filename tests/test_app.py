@@ -624,6 +624,26 @@ def test_dashboard_overview_lists_support_partners(app, client):
     assert b"Manage partners" in response.data
 
 
+def test_homepage_lists_support_partners(app, client):
+    with app.app_context():
+        partner = SupportPartner(
+            name="Backhaul Brothers",
+            description="Fiber construction crew keeping our backbone online.",
+            website_url="https://backhaul.example.com",
+            position=1,
+        )
+        db.session.add(partner)
+        db.session.commit()
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert b"Operations allies" in response.data
+    assert b"Backhaul Brothers" in response.data
+    assert b"Fiber construction crew keeping our backbone online." in response.data
+    assert b"Visit site" in response.data
+
+
 def test_admin_can_view_security_settings(client):
     login_admin(client)
 
