@@ -1223,10 +1223,12 @@ DOCUMENT_MIME_TYPES = {
 TRUTHY_VALUES = {"1", "true", "yes", "on", "y"}
 
 
-def is_truthy(value: str | None) -> bool:
+def is_truthy(value: str | bool | None) -> bool:
+    if isinstance(value, bool):
+        return value
     if value is None:
         return False
-    return value.strip().lower() in TRUTHY_VALUES
+    return str(value).strip().lower() in TRUTHY_VALUES
 
 PORTAL_SESSION_KEY = "client_portal_id"
 TECH_SESSION_KEY = "technician_portal_id"
@@ -4129,13 +4131,18 @@ def register_routes(app: Flask) -> None:
                 400,
             )
 
-        payload = request.get_json(silent=True) or {}
-        payment_method_id = (
-            payload.get("payment_method_id")
-            or request.form.get("payment_method_id", "").strip()
-        )
-        set_default_flag = payload.get("set_default") or request.form.get("set_default")
-        set_default = bool(set_default_flag) or not client.payment_methods
+        payload = request.get_json(silent=True)
+        if payload is None:
+            payload = {}
+        payment_method_id_raw = payload.get("payment_method_id")
+        if payment_method_id_raw is None:
+            payment_method_id_raw = request.form.get("payment_method_id", "")
+        payment_method_id = (payment_method_id_raw or "").strip()
+        if "set_default" in payload:
+            set_default_flag = payload.get("set_default")
+        else:
+            set_default_flag = request.form.get("set_default")
+        set_default = is_truthy(set_default_flag) or not client.payment_methods
 
         if not payment_method_id:
             return jsonify({"error": "Missing Stripe payment method id."}), 400
@@ -6434,24 +6441,76 @@ def register_routes(app: Flask) -> None:
         flash("Verification photo updated.", "success")
         return _redirect_back_to_dashboard("customers")
 
+    @app.get("/clients/<int:client_id>/payment-methods/setup-intent")
+    @login_required
+    def admin_payment_method_setup_intent(client_id: int):
+        client = Client.query.get_or_404(client_id)
+
+        if not stripe_active():
+            return jsonify({"error": "Stripe is not configured."}), 400
+
+        customer_id = ensure_stripe_customer(client)
+        if customer_id is None:
+            return jsonify({"error": "Unable to prepare Stripe customer."}), 400
+
+        setup_intent = stripe.SetupIntent.create(
+            customer=customer_id,
+            usage="off_session",
+            payment_method_types=["card"],
+            metadata={
+                "client_id": str(client.id),
+                "created_by": "admin",
+            },
+        )
+
+        return jsonify({"client_secret": setup_intent.client_secret})
+
     @app.post("/clients/<int:client_id>/payment-methods")
     @login_required
     def add_payment_method(client_id: int):
         client = Client.query.get_or_404(client_id)
+
+        payload = request.get_json(silent=True)
+        wants_json = payload is not None
+
         if not stripe_active():
+            if wants_json:
+                return (
+                    jsonify({"error": "Stripe is not configured."}),
+                    400,
+                )
             flash(
                 "Configure Stripe API keys before adding payment methods.",
                 "danger",
             )
             return _redirect_back_to_dashboard("billing", focus=client.id)
 
-        stripe_payment_method_id = (
-            request.form.get("stripe_payment_method_id", "").strip()
-        )
-        nickname = request.form.get("nickname", "").strip() or None
-        set_default = bool(request.form.get("set_default")) or not client.payment_methods
+        if payload is None:
+            payload = {}
+
+        payment_method_raw = payload.get("payment_method_id")
+        if payment_method_raw is None:
+            payment_method_raw = request.form.get("stripe_payment_method_id", "")
+        stripe_payment_method_id = (payment_method_raw or "").strip()
+
+        if "set_default" in payload:
+            set_default_flag = payload.get("set_default")
+        else:
+            set_default_flag = request.form.get("set_default")
+        set_default = is_truthy(set_default_flag) or not client.payment_methods
+
+        if "nickname" in payload:
+            nickname_raw = payload.get("nickname")
+            nickname = (nickname_raw or "").strip() or None
+        else:
+            nickname = request.form.get("nickname", "").strip() or None
 
         if not stripe_payment_method_id:
+            if wants_json:
+                return (
+                    jsonify({"error": "Provide a Stripe payment method identifier."}),
+                    400,
+                )
             flash("Provide a Stripe payment method identifier.", "danger")
             return _redirect_back_to_dashboard("billing", focus=client.id)
 
@@ -6462,17 +6521,85 @@ def register_routes(app: Flask) -> None:
                 set_default=set_default,
             )
         except StripeError as error:
+            db.session.rollback()
+            error_message = describe_stripe_error(error)
+            if wants_json:
+                return (
+                    jsonify({"error": f"Unable to save the payment method: {error_message}"}),
+                    400,
+                )
             flash(
-                f"Unable to save the payment method: {describe_stripe_error(error)}",
+                f"Unable to save the payment method: {error_message}",
                 "danger",
             )
+            return _redirect_back_to_dashboard("billing", focus=client.id)
+        except IntegrityError:
             db.session.rollback()
+            current_app.logger.exception(
+                "Failed to save Stripe payment method for client %s", client.id
+            )
+            if wants_json:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "We couldn't save that card. Please try again or contact support."
+                            )
+                        }
+                    ),
+                    400,
+                )
+            flash(
+                "We couldn't save that card. Please try again or contact support.",
+                "danger",
+            )
+            return _redirect_back_to_dashboard("billing", focus=client.id)
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception(
+                "Unexpected error while saving payment method for client %s",
+                client.id,
+            )
+            if wants_json:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "Something went wrong while saving the card. Please try again."
+                            )
+                        }
+                    ),
+                    500,
+                )
+            flash(
+                "Something went wrong while saving the card. Please try again.",
+                "danger",
+            )
             return _redirect_back_to_dashboard("billing", focus=client.id)
 
         if nickname:
             payment_method.nickname = nickname
 
         db.session.commit()
+
+        if wants_json:
+            return (
+                jsonify(
+                    {
+                        "status": "ok",
+                        "method": {
+                            "id": payment_method.id,
+                            "brand": payment_method.brand,
+                            "last4": payment_method.last4,
+                            "exp_month": payment_method.exp_month,
+                            "exp_year": payment_method.exp_year,
+                            "cardholder_name": payment_method.cardholder_name,
+                            "is_default": payment_method.is_default,
+                        },
+                    }
+                ),
+                200,
+            )
 
         flash(f"Saved {payment_method.describe()} for {client.name}.", "success")
 

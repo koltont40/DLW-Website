@@ -2449,6 +2449,45 @@ def test_portal_customer_adds_card_via_stripe(app, client, monkeypatch):
         assert refreshed_client.stripe_customer_id == "cus_test"
 
 
+def test_admin_adds_card_via_stripe(app, client, monkeypatch):
+    install_stripe_stub(app, monkeypatch)
+    login_admin(client)
+
+    with app.app_context():
+        account = Client(
+            name="Admin Managed Account",
+            email="managed@example.com",
+            status="Active",
+        )
+        db.session.add(account)
+        db.session.commit()
+        account_id = account.id
+
+    setup_response = client.get(
+        f"/clients/{account_id}/payment-methods/setup-intent"
+    )
+    assert setup_response.status_code == 200
+    setup_payload = setup_response.get_json()
+    assert setup_payload["client_secret"] == "seti_secret"
+
+    save_response = client.post(
+        f"/clients/{account_id}/payment-methods",
+        json={"payment_method_id": "pm_new", "set_default": True},
+    )
+    assert save_response.status_code == 200
+    result = save_response.get_json()
+    assert result["status"] == "ok"
+
+    with app.app_context():
+        stored_method = PaymentMethod.query.filter_by(client_id=account_id).one()
+        assert stored_method.is_default is True
+        assert stored_method.brand == "Visa"
+        assert stored_method.last4 == "4242"
+        assert stored_method.cardholder_name == "Test User"
+        refreshed = Client.query.get(account_id)
+        assert refreshed.stripe_customer_id == "cus_test"
+
+
 def test_client_can_request_reschedule_and_notify_admin(app, client):
     notifications: list[tuple[str, str, str]] = []
     app.config["SNMP_ADMIN_EMAIL"] = "ops@example.com"

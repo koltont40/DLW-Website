@@ -2736,12 +2736,14 @@ a.trusted-logo:hover {
   gap: 1rem;
 }
 
-.portal-card-controls {
+.portal-card-controls,
+.admin-card-controls {
   display: flex;
   justify-content: flex-start;
 }
 
-.portal-card-form {
+.portal-card-form,
+.admin-card-form {
   border: 1px dashed var(--border);
   border-radius: 0.75rem;
   padding: 1rem;
@@ -2751,11 +2753,19 @@ a.trusted-logo:hover {
   gap: 0.75rem;
 }
 
-.portal-card-element {
+.portal-card-element,
+.admin-card-element {
   padding: 0.75rem;
   border-radius: 0.65rem;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(148, 163, 184, 0.4);
+}
+
+.portal-card-form .button-row,
+.admin-card-form .button-row {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-start;
 }
 
 .portal-autopay-form .button {

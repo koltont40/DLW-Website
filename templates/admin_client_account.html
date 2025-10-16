@@ -569,6 +569,23 @@
             <p class="subtle">No payment methods on file.</p>
             {% endif %}
           </div>
+          {% if stripe_ready and stripe_publishable_key %}
+          <div class="admin-card-controls">
+            <button class="button small primary" type="button" id="admin-add-card">Add card</button>
+          </div>
+          <div class="admin-card-form hidden" id="admin-card-form">
+            <div id="admin-card-element" class="admin-card-element"></div>
+            <label class="checkbox-inline">
+              <input type="checkbox" id="admin-set-default" {% if not payment_methods %}checked{% endif %} />
+              Set as default for autopay
+            </label>
+            <p class="form-help" id="admin-card-errors"></p>
+            <div class="button-row">
+              <button class="button small primary" type="button" id="admin-save-card">Save card</button>
+              <button class="button small secondary" type="button" id="admin-cancel-card">Cancel</button>
+            </div>
+          </div>
+          {% endif %}
           {% if stripe_ready %}
           <form class="stacked-form autopay-add-form" method="post" action="{{ url_for('add_payment_method', client_id=client.id) }}">
             <input type="hidden" name="next" value="{{ account_url }}" />
@@ -581,7 +598,7 @@
               Set as default for autopay
             </label>
             <button class="button small primary" type="submit">Attach payment method</button>
-            <p class="form-help">Admins can paste a payment method ID from Stripe or ask the customer to add a card through the portal.</p>
+            <p class="form-help">Admins can paste a payment method ID from Stripe or use the add card tool above.</p>
           </form>
           {% else %}
           <p class="subtle">Configure Stripe to attach payment methods or direct the customer to the portal.</p>
@@ -823,6 +840,148 @@
         {% endfor %}
       </div>
     </section>
-  </div>
 </div>
+</div>
+{% if stripe_ready and stripe_publishable_key %}
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+  (() => {
+    const publishableKey = {{ stripe_publishable_key|tojson }};
+    if (!publishableKey) {
+      return;
+    }
+    const addButton = document.getElementById("admin-add-card");
+    const formWrapper = document.getElementById("admin-card-form");
+    const saveButton = document.getElementById("admin-save-card");
+    const cancelButton = document.getElementById("admin-cancel-card");
+    const errorField = document.getElementById("admin-card-errors");
+    const cardContainer = document.getElementById("admin-card-element");
+    const setDefaultInput = document.getElementById("admin-set-default");
+    if (!addButton || !formWrapper || !saveButton || !cancelButton || !errorField || !cardContainer) {
+      return;
+    }
+
+    const stripe = Stripe(publishableKey);
+    const elements = stripe.elements();
+    const cardElement = elements.create("card");
+    const cardholderDetails = {
+      name: {{ client.name|tojson }},
+      email: {{ client.email|tojson }},
+    };
+    let setupSecret = null;
+    let mounted = false;
+    let processing = false;
+
+    const updateSaveState = () => {
+      saveButton.disabled = processing || !setupSecret;
+    };
+
+    const openForm = async () => {
+      formWrapper.classList.remove("hidden");
+      errorField.textContent = "";
+      if (!mounted) {
+        cardElement.mount("#admin-card-element");
+        mounted = true;
+      }
+      setupSecret = null;
+      processing = false;
+      updateSaveState();
+      try {
+        const response = await fetch("{{ url_for('admin_payment_method_setup_intent', client_id=client.id) }}", {
+          credentials: "same-origin",
+          headers: { Accept: "application/json" },
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.error || !data.client_secret) {
+          throw new Error(data.error || "Unable to prepare card entry. Please try again.");
+        }
+        setupSecret = data.client_secret;
+      } catch (err) {
+        setupSecret = null;
+        errorField.textContent = err.message || "Unable to prepare card entry.";
+      }
+      updateSaveState();
+    };
+
+    const closeForm = () => {
+      formWrapper.classList.add("hidden");
+      setupSecret = null;
+      cardElement.clear();
+      errorField.textContent = "";
+      processing = false;
+      updateSaveState();
+    };
+
+    addButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      openForm();
+    });
+
+    cancelButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      closeForm();
+    });
+
+    saveButton.addEventListener("click", async (event) => {
+      event.preventDefault();
+      if (!setupSecret) {
+        errorField.textContent = "We're getting things ready. Please try saving the card again.";
+        return;
+      }
+      processing = true;
+      updateSaveState();
+      errorField.textContent = "";
+      const billingDetails = {};
+      if (cardholderDetails.name) {
+        billingDetails.name = cardholderDetails.name;
+      }
+      if (cardholderDetails.email) {
+        billingDetails.email = cardholderDetails.email;
+      }
+      const confirmation = await stripe.confirmCardSetup(setupSecret, {
+        payment_method: {
+          card: cardElement,
+          billing_details: billingDetails,
+        },
+      });
+      if (confirmation.error) {
+        errorField.textContent = confirmation.error.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
+        return;
+      }
+      const setupIntent = confirmation.setupIntent;
+      if (!setupIntent || !setupIntent.payment_method) {
+        errorField.textContent = "Stripe did not return a payment method id.";
+        processing = false;
+        updateSaveState();
+        return;
+      }
+      try {
+        const response = await fetch("{{ url_for('add_payment_method', client_id=client.id) }}", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            payment_method_id: setupIntent.payment_method,
+            set_default: setDefaultInput ? setDefaultInput.checked : true,
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.error) {
+          throw new Error(payload.error || "Unable to save card. Please try again.");
+        }
+        window.location.reload();
+      } catch (err) {
+        errorField.textContent = err.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
+      }
+    });
+  })();
+</script>
+{% endif %}
 {% endblock %}
