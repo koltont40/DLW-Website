@@ -2554,13 +2554,6 @@ a.trusted-logo:hover {
   gap: 0.3rem;
 }
 
-.ticket-row .ticket-message {
-  padding: 0.75rem;
-  background: rgba(148, 163, 184, 0.15);
-  border-radius: 0.5rem;
-  margin: 0;
-}
-
 .ticket-row textarea {
   min-height: 100px;
 }
@@ -2752,6 +2745,34 @@ a.trusted-logo:hover {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+.autopay-schedule-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.autopay-schedule-status p {
+  margin: 0;
+}
+
+.autopay-schedule-form {
+  margin-top: 0.5rem;
+}
+
+.autopay-schedule-form .button {
+  align-self: flex-start;
+}
+
+.autopay-pending-callout {
+  margin-top: 0.75rem;
+  gap: 0.5rem;
+}
+
+.autopay-approval-actions .button-row {
+  display: flex;
+  gap: 0.5rem;
 }
 
 .portal-card-element,
@@ -3144,11 +3165,90 @@ a.trusted-logo:hover {
   gap: 1rem;
 }
 
-.ticket-card p {
+.ticket-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ticket-message {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  background: var(--surface-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.ticket-message.from-client {
+  border-color: color-mix(in srgb, var(--accent-blue) 60%, var(--border) 40%);
+}
+
+.ticket-message.from-staff {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border) 45%);
+}
+
+.ticket-message-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.ticket-message-header strong {
+  font-size: 1rem;
+}
+
+.ticket-message p {
   margin: 0;
 }
 
-.ticket-card .resolution {
+.ticket-reply-form {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+  gap: 0.75rem;
+}
+
+.ticket-reply-form .button-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.ticket-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ticket-attachment-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 55%, var(--border) 45%);
+  background: rgba(167, 139, 250, 0.12);
+  color: var(--secondary);
+  font-size: 0.85rem;
+  text-decoration: none;
+  line-height: 1.2;
+}
+
+.file-chip:hover {
+  border-color: var(--accent-blue);
+  background: rgba(167, 139, 250, 0.2);
+}
+
+.ticket-resolution {
   background: var(--surface-elevated);
   padding: 0.75rem;
   border-radius: 0.75rem;

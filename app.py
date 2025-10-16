@@ -185,10 +185,14 @@ class UispApiClient:
         }
 
         devices: list[dict] = []
-        page = 1
         per_page = 200
         next_url: str | None = endpoint
-        params: dict[str, object] | None = {"page": page, "perPage": per_page}
+        params: dict[str, object] | None = None
+        page_param_name: str | None = None
+        per_page_param_name: str | None = None
+        offset_param_name: str | None = None
+        limit_param_name: str | None = None
+        last_offset: int | None = None
 
         while next_url:
             response = requests.get(
@@ -262,23 +266,102 @@ class UispApiClient:
             if next_link:
                 next_url = urljoin(self.base_url + "/", next_link)
             elif pagination:
-                current_page = _coerce_int(pagination.get("page") or pagination.get("current"))
+                current_page = _coerce_int(
+                    pagination.get("page")
+                    or pagination.get("current")
+                    or pagination.get("currentPage")
+                    or pagination.get("pageIndex")
+                )
+                if page_param_name is None:
+                    for candidate in ("page", "current", "currentPage", "pageIndex"):
+                        if candidate in pagination:
+                            page_param_name = candidate
+                            break
+
                 total_pages = _coerce_int(
                     pagination.get("totalPages")
                     or pagination.get("total_pages")
                     or pagination.get("pages")
                 )
+
                 per_page_value = _coerce_int(
                     pagination.get("perPage")
                     or pagination.get("per_page")
                     or pagination.get("limit")
+                    or pagination.get("size")
                 )
                 if per_page_value:
                     per_page = per_page_value
-                if total_pages and current_page and current_page < total_pages:
-                    page = current_page + 1
+                    if per_page_param_name is None:
+                        for candidate in ("perPage", "per_page", "limit", "size"):
+                            if candidate in pagination:
+                                per_page_param_name = candidate
+                                if candidate in ("limit", "size"):
+                                    limit_param_name = candidate
+                                break
+
+                offset_value = _coerce_int(
+                    pagination.get("offset")
+                    or pagination.get("skip")
+                    or pagination.get("start")
+                )
+                if offset_value is not None:
+                    last_offset = offset_value
+                    if offset_param_name is None:
+                        for candidate in ("offset", "skip", "start"):
+                            if candidate in pagination:
+                                offset_param_name = candidate
+                                break
+
+                limit_value = _coerce_int(
+                    pagination.get("limit")
+                    or pagination.get("perPage")
+                    or pagination.get("per_page")
+                    or pagination.get("size")
+                )
+                if limit_value:
+                    per_page = limit_value
+                    if limit_param_name is None:
+                        for candidate in ("limit", "perPage", "per_page", "size"):
+                            if candidate in pagination:
+                                limit_param_name = candidate
+                                if per_page_param_name is None and candidate in (
+                                    "perPage",
+                                    "per_page",
+                                ):
+                                    per_page_param_name = candidate
+                                break
+
+                total_items = _coerce_int(
+                    pagination.get("totalItems")
+                    or pagination.get("total_items")
+                    or pagination.get("total")
+                )
+
+                if (
+                    page_param_name
+                    and total_pages
+                    and current_page
+                    and current_page < total_pages
+                ):
                     next_url = endpoint
-                    params = {"page": page, "perPage": per_page}
+                    params = {page_param_name: current_page + 1}
+                    if per_page_param_name and per_page:
+                        params[per_page_param_name] = per_page
+                elif (
+                    offset_param_name
+                    and (last_offset is not None or offset_value is not None)
+                    and (limit_value or per_page)
+                    and (total_items is None
+                        or (last_offset or 0) + (limit_value or per_page) < total_items)
+                ):
+                    next_url = endpoint
+                    next_offset = (last_offset or 0) + (limit_value or per_page)
+                    params = {offset_param_name: next_offset}
+                    if limit_param_name:
+                        params[limit_param_name] = limit_value or per_page
+                    elif per_page_param_name and (limit_value or per_page):
+                        params[per_page_param_name] = limit_value or per_page
 
         return devices
 
@@ -455,7 +538,12 @@ def store_client_verification_photo(app: Flask, client: "Client", file) -> None:
     client.verification_photo_uploaded_at = utcnow()
 
 
-def store_ticket_attachment(app: Flask, ticket: "SupportTicket", file) -> "SupportTicketAttachment":
+def store_ticket_attachment(
+    app: Flask,
+    ticket: "SupportTicket",
+    file,
+    message: "SupportTicketMessage | None" = None,
+) -> "SupportTicketAttachment":
     attachments_folder = (
         Path(app.config["SUPPORT_TICKET_ATTACHMENT_FOLDER"]) / f"ticket_{ticket.id}"
     )
@@ -471,6 +559,7 @@ def store_ticket_attachment(app: Flask, ticket: "SupportTicket", file) -> "Suppo
         ticket_id=ticket.id,
         original_filename=file.filename or stored_filename,
         stored_filename=str(relative_path),
+        message_id=message.id if message else None,
     )
     db.session.add(attachment)
     return attachment
@@ -1138,6 +1227,8 @@ class Client(db.Model):
     verification_photo_filename = db.Column(db.String(255))
     verification_photo_uploaded_at = db.Column(db.DateTime(timezone=True))
     autopay_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    autopay_day = db.Column(db.Integer)
+    autopay_day_pending = db.Column(db.Integer)
     stripe_customer_id = db.Column(db.String(64), unique=True)
     billing_status = db.Column(db.String(40), nullable=False, default="Good Standing")
     billing_status_updated_at = db.Column(
@@ -1386,6 +1477,14 @@ ALLOWED_TICKET_ATTACHMENT_EXTENSIONS = {
     ".gif",
     ".heic",
     ".heif",
+    ".pdf",
+    ".txt",
+    ".csv",
+    ".zip",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
 }
 ALLOWED_TEAM_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 ALLOWED_TRUSTED_LOGO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".svg"}
@@ -1803,9 +1902,39 @@ class SupportTicket(db.Model):
         back_populates="ticket",
         cascade="all, delete-orphan",
     )
+    messages = db.relationship(
+        "SupportTicketMessage",
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+        order_by="SupportTicketMessage.created_at.asc()",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<SupportTicket {self.id} for client {self.client_id}>"
+
+
+class SupportTicketMessage(db.Model):
+    __tablename__ = "support_ticket_messages"
+
+    id = db.Column(db.Integer, primary_key=True)
+    ticket_id = db.Column(
+        db.Integer, db.ForeignKey("support_tickets.id"), nullable=False, index=True
+    )
+    sender = db.Column(db.String(20), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    admin_id = db.Column(db.Integer, db.ForeignKey("admin_users.id"))
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"))
+
+    ticket = db.relationship("SupportTicket", back_populates="messages")
+    attachments = db.relationship(
+        "SupportTicketAttachment",
+        back_populates="message",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<SupportTicketMessage {self.id} ticket={self.ticket_id}>"
 
 
 class SupportTicketAttachment(db.Model):
@@ -1815,11 +1944,13 @@ class SupportTicketAttachment(db.Model):
     ticket_id = db.Column(
         db.Integer, db.ForeignKey("support_tickets.id"), nullable=False, index=True
     )
+    message_id = db.Column(db.Integer, db.ForeignKey("support_ticket_messages.id"))
     original_filename = db.Column(db.String(255), nullable=False)
     stored_filename = db.Column(db.String(255), nullable=False)
     uploaded_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
 
     ticket = db.relationship("SupportTicket", back_populates="attachments")
+    message = db.relationship("SupportTicketMessage", back_populates="attachments")
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<SupportTicketAttachment {self.id} ticket={self.ticket_id}>"
@@ -2192,6 +2323,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_notification_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_support_ticket_message_schema()
         ensure_install_photo_requirements_seeded()
         ensure_technician_schedule_review_fields()
         ensure_team_member_bio_field()
@@ -2220,6 +2352,7 @@ def init_db() -> None:
         ensure_notification_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_support_ticket_message_schema()
         ensure_install_photo_requirements_seeded()
         ensure_technician_schedule_review_fields()
         ensure_team_member_bio_field()
@@ -2731,6 +2864,78 @@ def ensure_support_ticket_priority_field() -> None:
         )
 
 
+def ensure_support_ticket_message_schema() -> None:
+    inspector = inspect(db.engine)
+    tables = set(inspector.get_table_names())
+
+    if "support_ticket_messages" not in tables:
+        with db.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE support_ticket_messages (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        ticket_id INTEGER NOT NULL REFERENCES support_tickets (id),
+                        sender VARCHAR(20) NOT NULL,
+                        body TEXT NOT NULL,
+                        created_at TIMESTAMP,
+                        admin_id INTEGER,
+                        client_id INTEGER
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX ix_support_ticket_messages_ticket_id"
+                    " ON support_ticket_messages (ticket_id)"
+                )
+            )
+
+    try:
+        attachment_columns = {
+            column["name"]
+            for column in inspector.get_columns("support_ticket_attachments")
+        }
+    except NoSuchTableError:
+        attachment_columns = set()
+
+    if "message_id" not in attachment_columns:
+        with db.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE support_ticket_attachments ADD COLUMN message_id INTEGER"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS"
+                    " ix_support_ticket_attachments_message_id"
+                    " ON support_ticket_attachments (message_id)"
+                )
+            )
+
+    created = False
+    for ticket in SupportTicket.query.all():
+        if ticket.messages:
+            continue
+        body = (ticket.message or "").strip()
+        if not body:
+            continue
+        message = SupportTicketMessage(
+            ticket_id=ticket.id,
+            sender="client",
+            body=body,
+            client_id=ticket.client_id,
+            created_at=ticket.created_at,
+        )
+        db.session.add(message)
+        created = True
+
+    if created:
+        db.session.commit()
+
+
 def ensure_install_photo_requirements_seeded() -> None:
     inspector = inspect(db.engine)
     try:
@@ -2812,6 +3017,10 @@ def ensure_client_billing_fields() -> None:
         statements.append(
             "ALTER TABLE clients ADD COLUMN autopay_enabled BOOLEAN DEFAULT 0 NOT NULL"
         )
+    if "autopay_day" not in columns:
+        statements.append("ALTER TABLE clients ADD COLUMN autopay_day INTEGER")
+    if "autopay_day_pending" not in columns:
+        statements.append("ALTER TABLE clients ADD COLUMN autopay_day_pending INTEGER")
     if "billing_status" not in columns:
         statements.append(
             "ALTER TABLE clients ADD COLUMN billing_status VARCHAR(40)"
@@ -3789,6 +3998,111 @@ def register_routes(app: Flask) -> None:
 
         return send_email_via_snmp(app, recipient, subject, body)
 
+    def _admin_notification_recipient() -> str | None:
+        admin_email = (app.config.get("ADMIN_EMAIL") or "").strip()
+        if not admin_email:
+            admin_email = (app.config.get("CONTACT_EMAIL") or "").strip()
+        return admin_email or None
+
+    def notify_autopay_schedule_request(client: Client, requested_day: int) -> None:
+        recipient = _admin_notification_recipient()
+        if not recipient:
+            return
+
+        subject = f"Autopay schedule request from {client.name}"
+        dashboard_link = url_for(
+            "admin_client_account", client_id=client.id, _external=True
+        )
+        body = (
+            f"{client.name} asked to run autopay on day {requested_day} of each month.\n\n"
+            f"Review the account: {dashboard_link}"
+        )
+        dispatch_notification(recipient, subject, body, category="billing")
+
+    def notify_autopay_schedule_update(
+        client: Client, new_day: int | None, status: str
+    ) -> None:
+        recipient = (client.email or "").strip()
+        if not recipient:
+            return
+
+        if new_day:
+            schedule_line = f"on day {new_day} of each month."
+        else:
+            schedule_line = "on each invoice due date."
+
+        status_key = status.lower()
+        if status_key == "approved":
+            subject = "Autopay schedule approved"
+            intro = "We've approved your autopay schedule request."
+        elif status_key == "cleared":
+            subject = "Autopay schedule cleared"
+            intro = "We've cleared your autopay schedule preference."
+        elif status_key == "rejected":
+            subject = "Autopay schedule request needs attention"
+            intro = (
+                "We were unable to approve your recent autopay schedule request."
+            )
+        else:
+            subject = "Autopay schedule updated"
+            intro = "We've updated your autopay schedule."
+
+        portal_link = url_for("portal_dashboard", _external=True)
+        if status_key == "rejected":
+            follow_up = (
+                "Please reply to this email or submit a new request with the day you'd "
+                "prefer."
+            )
+        else:
+            follow_up = ""
+
+        body_lines = [intro, "", f"Your payments will run {schedule_line}"]
+        if follow_up:
+            body_lines.extend(["", follow_up])
+        body_lines.extend(["", f"Manage billing: {portal_link}"])
+
+        body = "\n".join(body_lines)
+        dispatch_notification(recipient, subject, body, category="billing")
+
+    def notify_ticket_message(ticket: SupportTicket, message: SupportTicketMessage) -> None:
+        attachment_note = ""
+        if message.attachments:
+            attachment_note = (
+                f"\n\nAttachments: {len(message.attachments)} file(s) uploaded. Log in to "
+                "review them."
+            )
+
+        if message.sender == "client":
+            recipient = _admin_notification_recipient()
+            if not recipient:
+                return
+
+            subject = f"Ticket #{ticket.id} update from {ticket.client.name}"
+            dashboard_link = url_for(
+                "admin_client_account", client_id=ticket.client_id, _external=True
+            )
+            body = (
+                f"{ticket.client.name} added a message to support ticket "
+                f"'{ticket.subject}'.\n\n{message.body}\n\nReview the ticket: "
+                f"{dashboard_link}"
+                f"{attachment_note}"
+            )
+            dispatch_notification(recipient, subject, body, category="customer")
+        else:
+            recipient = (ticket.client.email or "").strip()
+            if not recipient:
+                return
+
+            subject = f"Support ticket update: {ticket.subject}"
+            portal_link = url_for("portal_dashboard", _external=True)
+            portal_link = f"{portal_link}#ticket-{ticket.id}"
+            body = (
+                "We just added an update to your support ticket.\n\n"
+                f"{message.body}\n\nView your ticket: {portal_link}"
+                f"{attachment_note}"
+            )
+            dispatch_notification(recipient, subject, body, category="customer")
+
     @app.template_filter("currency")
     def format_currency(value: int | float | Decimal | None):
         if value is None:
@@ -4249,6 +4563,102 @@ def register_routes(app: Flask) -> None:
             if plan
         ]
 
+        if stripe_active():
+            redirect_after_stripe = False
+
+            setup_intent_id = request.args.get("setup_intent")
+            if setup_intent_id:
+                redirect_after_stripe = True
+                try:
+                    setup_intent = stripe.SetupIntent.retrieve(setup_intent_id)
+                except StripeError as error:
+                    db.session.rollback()
+                    flash(
+                        (
+                            "Stripe could not finish saving your card: "
+                            f"{describe_stripe_error(error)}"
+                        ),
+                        "danger",
+                    )
+                else:
+                    metadata = _metadata_dict(setup_intent)
+                    intended_client_id = metadata.get("client_id")
+                    payment_method_id = getattr(setup_intent, "payment_method", None)
+                    status = getattr(setup_intent, "status", "")
+                    if intended_client_id and str(intended_client_id) != str(client.id):
+                        flash(
+                            "We couldn't verify that card belongs to your account.",
+                            "danger",
+                        )
+                    elif status in {"succeeded", "processing"} and payment_method_id:
+                        try:
+                            sync_stripe_payment_method(
+                                client,
+                                payment_method_id,
+                                set_default=not client.payment_methods,
+                            )
+                        except StripeError as error:
+                            db.session.rollback()
+                            flash(
+                                (
+                                    "Stripe could not save your card: "
+                                    f"{describe_stripe_error(error)}"
+                                ),
+                                "danger",
+                            )
+                        else:
+                            db.session.commit()
+                            flash(
+                                "Card saved. You're ready for autopay and online payments.",
+                                "success",
+                            )
+                    else:
+                        flash(
+                            "Stripe still needs you to finish verifying that card.",
+                            "warning",
+                        )
+
+            payment_intent_id = request.args.get("payment_intent")
+            if payment_intent_id:
+                redirect_after_stripe = True
+                try:
+                    payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+                except StripeError as error:
+                    db.session.rollback()
+                    flash(
+                        (
+                            "Stripe could not confirm the payment: "
+                            f"{describe_stripe_error(error)}"
+                        ),
+                        "danger",
+                    )
+                else:
+                    status = getattr(payment_intent, "status", "")
+                    if status in {"succeeded", "processing"}:
+                        if _handle_payment_intent_succeeded(
+                            SimpleNamespace(id=None), payment_intent
+                        ):
+                            db.session.commit()
+                            flash("Payment received. Thank you!", "success")
+                        else:
+                            flash(
+                                "We couldn't match that payment to your invoices.",
+                                "warning",
+                            )
+                    elif status == "requires_payment_method":
+                        flash(
+                            "Stripe needs another card before the payment can complete.",
+                            "danger",
+                        )
+                    else:
+                        flash(
+                            "Stripe is still processing your payment. Refresh in a moment.",
+                            "info",
+                        )
+
+            if redirect_after_stripe:
+                return redirect(url_for("portal_dashboard"))
+
         return render_template(
             "portal_dashboard.html",
             client=client,
@@ -4506,7 +4916,7 @@ def register_routes(app: Flask) -> None:
         for file in uploaded_files:
             if not allowed_ticket_attachment(file.filename):
                 flash(
-                    "Upload JPG, PNG, GIF, or HEIC images for ticket attachments.",
+                    "Upload JPG, PNG, GIF, HEIC, PDF, text, spreadsheet, archive, or document files.",
                     "danger",
                 )
                 return redirect(url_for("portal_dashboard"))
@@ -4524,14 +4934,132 @@ def register_routes(app: Flask) -> None:
         db.session.add(ticket)
         db.session.flush()
 
+        message_record = SupportTicketMessage(
+            ticket_id=ticket.id,
+            sender="client",
+            body=message,
+            client_id=client.id,
+        )
+        db.session.add(message_record)
+        db.session.flush()
+
         if uploaded_files:
             for file in uploaded_files:
-                store_ticket_attachment(current_app, ticket, file)
-            ticket.updated_at = utcnow()
+                store_ticket_attachment(
+                    current_app, ticket, file, message=message_record
+                )
+
+        ticket.updated_at = utcnow()
         db.session.commit()
+
+        notify_ticket_message(ticket, message_record)
 
         flash("Your support request has been submitted. We'll reach out shortly.", "success")
         return redirect(url_for("portal_dashboard"))
+
+    @app.post("/portal/autopay/schedule")
+    @client_login_required
+    def portal_autopay_schedule(client: Client):
+        requested_value = (request.form.get("requested_day") or "").strip()
+
+        if not requested_value:
+            if client.autopay_day_pending:
+                client.autopay_day_pending = None
+                db.session.commit()
+                flash("Autopay schedule request cleared.", "info")
+            else:
+                flash("No schedule changes submitted.", "info")
+            return redirect(url_for("portal_dashboard"))
+
+        try:
+            requested_day = int(requested_value)
+        except ValueError:
+            flash("Choose a valid autopay day between 1 and 28.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        if requested_day < 1 or requested_day > 28:
+            flash("Choose a valid autopay day between 1 and 28.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        if client.autopay_day == requested_day:
+            client.autopay_day_pending = None
+            db.session.commit()
+            flash("Autopay already runs on that day.", "info")
+            return redirect(url_for("portal_dashboard"))
+
+        client.autopay_day_pending = requested_day
+        db.session.commit()
+
+        notify_autopay_schedule_request(client, requested_day)
+
+        if client.autopay_enabled:
+            flash(
+                "Thanks! We'll review the new autopay day and send a confirmation soon.",
+                "success",
+            )
+        else:
+            flash(
+                "Schedule request received. Enable autopay once you're ready to activate monthly payments.",
+                "info",
+            )
+        return redirect(url_for("portal_dashboard"))
+
+    @app.post("/portal/tickets/<int:ticket_id>/messages")
+    @client_login_required
+    def portal_ticket_message(client: Client, ticket_id: int):
+        ticket = (
+            SupportTicket.query.filter_by(id=ticket_id, client_id=client.id)
+            .options(joinedload(SupportTicket.attachments))
+            .first()
+        )
+        if not ticket:
+            flash("We couldn't find that ticket.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        body = (request.form.get("message") or "").strip()
+        uploaded_files = [
+            file
+            for file in request.files.getlist("attachments")
+            if file and getattr(file, "filename", "")
+        ]
+
+        if not body and not uploaded_files:
+            flash("Add a message or attachment before sending.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        if uploaded_files:
+            ensure_file_surface_enabled("support-ticket-attachments")
+            for file in uploaded_files:
+                if not allowed_ticket_attachment(file.filename):
+                    flash(
+                        "Upload JPG, PNG, GIF, HEIC, PDF, text, spreadsheet, or document files.",
+                        "danger",
+                    )
+                    return redirect(url_for("portal_dashboard"))
+
+        message_text = body or "Attachments uploaded"
+
+        message_record = SupportTicketMessage(
+            ticket_id=ticket.id,
+            sender="client",
+            body=message_text,
+            client_id=client.id,
+        )
+        db.session.add(message_record)
+        db.session.flush()
+
+        for file in uploaded_files:
+            store_ticket_attachment(
+                current_app, ticket, file, message=message_record
+            )
+
+        ticket.updated_at = utcnow()
+        db.session.commit()
+
+        notify_ticket_message(ticket, message_record)
+
+        flash("Message sent to our support team.", "success")
+        return redirect(url_for("portal_dashboard") + f"#ticket-{ticket.id}")
 
     @app.post("/portal/appointments/<int:appointment_id>/action")
     @client_login_required
@@ -6892,6 +7420,92 @@ def register_routes(app: Flask) -> None:
             return redirect(next_url)
         return redirect(url_for("admin_client_account", client_id=client.id))
 
+    @app.post("/clients/<int:client_id>/autopay/schedule")
+    @login_required
+    def configure_autopay_schedule(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        action = (request.form.get("action") or "set").strip().lower()
+        next_url = request.form.get("next") or request.args.get("next")
+
+        if action == "approve":
+            pending_day = client.autopay_day_pending
+            if not pending_day:
+                flash("No pending schedule to approve.", "info")
+            else:
+                client.autopay_day = pending_day
+                client.autopay_day_pending = None
+                db.session.commit()
+                notify_autopay_schedule_update(client, pending_day, "approved")
+                flash(
+                    f"Approved autopay for day {pending_day} of each month.", "success"
+                )
+            redirect_url = next_url or url_for(
+                "admin_client_account", client_id=client.id
+            )
+            return redirect(redirect_url)
+
+        if action == "reject":
+            pending_day = client.autopay_day_pending
+            if not pending_day:
+                flash("No pending schedule to reject.", "info")
+            else:
+                client.autopay_day_pending = None
+                db.session.commit()
+                notify_autopay_schedule_update(
+                    client, client.autopay_day, "rejected"
+                )
+                flash("Autopay schedule request dismissed.", "info")
+            redirect_url = next_url or url_for(
+                "admin_client_account", client_id=client.id
+            )
+            return redirect(redirect_url)
+
+        day_value = (request.form.get("autopay_day") or "").strip()
+        if not day_value:
+            cleared = client.autopay_day is not None or client.autopay_day_pending is not None
+            client.autopay_day = None
+            client.autopay_day_pending = None
+            db.session.commit()
+            if cleared:
+                notify_autopay_schedule_update(client, None, "cleared")
+                flash("Autopay will run on each invoice due date.", "info")
+            else:
+                flash("Autopay schedule unchanged.", "info")
+            redirect_url = next_url or url_for(
+                "admin_client_account", client_id=client.id
+            )
+            return redirect(redirect_url)
+
+        try:
+            selected_day = int(day_value)
+        except ValueError:
+            flash("Select a valid autopay day between 1 and 28.", "danger")
+            return redirect(
+                next_url or url_for("admin_client_account", client_id=client.id)
+            )
+
+        if selected_day < 1 or selected_day > 28:
+            flash("Select a valid autopay day between 1 and 28.", "danger")
+            return redirect(
+                next_url or url_for("admin_client_account", client_id=client.id)
+            )
+
+        if client.autopay_day == selected_day and not client.autopay_day_pending:
+            flash("Autopay is already scheduled for that day.", "info")
+            return redirect(
+                next_url or url_for("admin_client_account", client_id=client.id)
+            )
+
+        client.autopay_day = selected_day
+        client.autopay_day_pending = None
+        db.session.commit()
+
+        notify_autopay_schedule_update(client, selected_day, "updated")
+        flash(f"Autopay will process on day {selected_day} each month.", "success")
+
+        redirect_url = next_url or url_for("admin_client_account", client_id=client.id)
+        return redirect(redirect_url)
+
     @app.post("/autopay/run")
     @login_required
     def run_autopay():
@@ -6917,6 +7531,25 @@ def register_routes(app: Flask) -> None:
                 if invoice.status in {"Pending", "Overdue"}
                 and (invoice.due_date is None or invoice.due_date <= today)
             ]
+
+            scheduled_day = client.autopay_day
+            if scheduled_day:
+                today_day = today.day
+                if today_day != scheduled_day:
+                    if due_invoices:
+                        record_autopay_event(
+                            client=client,
+                            invoice=None,
+                            payment_method=default_method,
+                            status="scheduled",
+                            message=(
+                                "Waiting for scheduled autopay day "
+                                f"{scheduled_day} to process invoices"
+                            ),
+                            amount_cents=0,
+                        )
+                    skipped_accounts += 1
+                    continue
 
             if not due_invoices:
                 if default_method:
@@ -8106,6 +8739,61 @@ def register_routes(app: Flask) -> None:
         )
         return _redirect_back_to_dashboard("field")
 
+    @app.post("/tickets/<int:ticket_id>/messages")
+    @login_required
+    def admin_ticket_message(ticket_id: int):
+        ticket = SupportTicket.query.get_or_404(ticket_id)
+
+        body = (request.form.get("message") or "").strip()
+        uploaded_files = [
+            file
+            for file in request.files.getlist("attachments")
+            if file and getattr(file, "filename", "")
+        ]
+
+        if not body and not uploaded_files:
+            flash("Add a message or attachment before sending.", "danger")
+            next_url = request.form.get("next") or request.args.get("next")
+            return redirect(next_url or url_for("admin_client_account", client_id=ticket.client_id))
+
+        if uploaded_files:
+            ensure_file_surface_enabled("support-ticket-attachments")
+            for file in uploaded_files:
+                if not allowed_ticket_attachment(file.filename):
+                    flash(
+                        "Upload JPG, PNG, GIF, HEIC, PDF, text, spreadsheet, or document files.",
+                        "danger",
+                    )
+                    next_url = request.form.get("next") or request.args.get("next")
+                    return redirect(
+                        next_url
+                        or url_for("admin_client_account", client_id=ticket.client_id)
+                    )
+
+        message_text = body or "Attachments uploaded"
+        message_record = SupportTicketMessage(
+            ticket_id=ticket.id,
+            sender="admin",
+            body=message_text,
+            admin_id=session.get("admin_user_id"),
+        )
+        db.session.add(message_record)
+        db.session.flush()
+
+        for file in uploaded_files:
+            store_ticket_attachment(
+                current_app, ticket, file, message=message_record
+            )
+
+        ticket.updated_at = utcnow()
+        db.session.commit()
+
+        notify_ticket_message(ticket, message_record)
+
+        flash("Reply sent to the customer.", "success")
+        next_url = request.form.get("next") or request.args.get("next")
+        return redirect(next_url or url_for("admin_client_account", client_id=ticket.client_id))
+
     @app.post("/tickets/<int:ticket_id>/update")
     @login_required
     def update_ticket(ticket_id: int):
@@ -8128,7 +8816,7 @@ def register_routes(app: Flask) -> None:
         for file in uploaded_files:
             if not allowed_ticket_attachment(file.filename):
                 flash(
-                    "Upload JPG, PNG, GIF, or HEIC images for ticket attachments.",
+                    "Upload JPG, PNG, GIF, HEIC, PDF, text, spreadsheet, archive, or document files.",
                     "danger",
                 )
                 return _redirect_back_to_dashboard("support")

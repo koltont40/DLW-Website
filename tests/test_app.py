@@ -28,6 +28,7 @@ from app import (
     NavigationItem,
     BlogPost,
     SupportTicket,
+    SupportTicketMessage,
     SupportTicketAttachment,
     PaymentMethod,
     AutopayEvent,
@@ -83,20 +84,34 @@ class StripeStub:
 
     class PaymentIntent:
         created: list[dict] = []
+        retrieve_map: dict[str, SimpleNamespace] = {}
 
         @classmethod
         def create(cls, **kwargs):
             cls.created.append(kwargs)
-            return SimpleNamespace(
-                id=f"pi_{len(cls.created)}",
-                client_secret="pi_secret",
+            intent_id = f"pi_{len(cls.created)}"
+            intent = SimpleNamespace(
+                id=intent_id,
+                client_secret=f"{intent_id}_secret",
+                status=kwargs.get("status", "requires_payment_method"),
                 charges=SimpleNamespace(data=[]),
                 metadata=kwargs.get("metadata", {}),
+                payment_method=kwargs.get("payment_method"),
             )
+            cls.retrieve_map[intent_id] = intent
+            return intent
 
         @staticmethod
         def retrieve(intent_id):
-            return SimpleNamespace(id=intent_id, status="requires_payment_method")
+            return StripeStub.PaymentIntent.retrieve_map.get(
+                intent_id,
+                SimpleNamespace(
+                    id=intent_id,
+                    status="requires_payment_method",
+                    metadata={},
+                    charges=SimpleNamespace(data=[]),
+                ),
+            )
 
         @staticmethod
         def confirm(intent_id, payment_method=None):
@@ -108,9 +123,33 @@ class StripeStub:
             )
 
     class SetupIntent:
+        retrieve_map: dict[str, SimpleNamespace] = {}
+
+        @classmethod
+        def create(cls, **kwargs):
+            intent_id = f"seti_{len(cls.retrieve_map) + 1}"
+            intent = SimpleNamespace(
+                id=intent_id,
+                client_secret="seti_secret",
+                payment_method="pm_new",
+                status=kwargs.get("status", "requires_confirmation"),
+                metadata=kwargs.get("metadata", {}),
+                customer=kwargs.get("customer"),
+            )
+            cls.retrieve_map[intent_id] = intent
+            return intent
+
         @staticmethod
-        def create(**kwargs):
-            return SimpleNamespace(client_secret="seti_secret", payment_method="pm_new")
+        def retrieve(intent_id):
+            return StripeStub.SetupIntent.retrieve_map.get(
+                intent_id,
+                SimpleNamespace(
+                    id=intent_id,
+                    status="requires_payment_method",
+                    payment_method=None,
+                    metadata={},
+                ),
+            )
 
     class Refund:
         @staticmethod
@@ -133,9 +172,16 @@ class StripeStub:
     api_key = None
     default_http_client = None
 
+    @staticmethod
+    def reset():
+        StripeStub.PaymentIntent.created = []
+        StripeStub.PaymentIntent.retrieve_map = {}
+        StripeStub.SetupIntent.retrieve_map = {}
+
 
 def install_stripe_stub(flask_app, monkeypatch, stub=None):
     stub = stub or StripeStub()
+    stub.reset()
     monkeypatch.setattr(app_module, "stripe", stub, raising=False)
     monkeypatch.setattr(app_module, "StripeError", Exception, raising=False)
     monkeypatch.setattr(app_module, "SignatureVerificationError", Exception, raising=False)
@@ -1160,6 +1206,58 @@ def test_autopay_run_submits_payment_intents(app, client, monkeypatch):
         assert events[0].status == "pending"
 
 
+def test_autopay_run_defers_until_scheduled_day(app, client, monkeypatch):
+    install_stripe_stub(app, monkeypatch)
+    login_admin(client)
+
+    today_day = date.today().day
+    scheduled_day = today_day + 1 if today_day < 28 else 1
+
+    with app.app_context():
+        customer = Client(
+            name="Autopay Scheduled",
+            email="scheduled@example.com",
+            status="Active",
+            autopay_enabled=True,
+            autopay_day=scheduled_day,
+        )
+        db.session.add(customer)
+        db.session.commit()
+
+        method = PaymentMethod(
+            client_id=customer.id,
+            nickname="Primary",
+            brand="Visa",
+            last4="1111",
+            exp_month=12,
+            exp_year=date.today().year + 1,
+            token="pm_success",
+            is_default=True,
+        )
+        invoice = Invoice(
+            client_id=customer.id,
+            description="Internet service",
+            amount_cents=5000,
+            status="Pending",
+            due_date=date.today(),
+        )
+        db.session.add_all([method, invoice])
+        db.session.commit()
+        customer_id = customer.id
+        invoice_id = invoice.id
+
+    response = client.post("/autopay/run", follow_redirects=True)
+    assert response.status_code == 200
+
+    with app.app_context():
+        invoice = Invoice.query.get(invoice_id)
+        assert invoice.autopay_status is None
+        events = AutopayEvent.query.filter_by(client_id=customer_id).all()
+        assert events
+        assert events[0].status == "scheduled"
+        assert str(scheduled_day) in (events[0].message or "")
+
+
 def test_autopay_run_suspends_when_no_method(app, client, monkeypatch):
     install_stripe_stub(app, monkeypatch)
     login_admin(client)
@@ -1197,6 +1295,74 @@ def test_autopay_run_suspends_when_no_method(app, client, monkeypatch):
         assert customer.billing_status == "Delinquent"
         events = AutopayEvent.query.filter_by(client_id=customer_id).all()
         assert any(event.status == "failed" for event in events)
+
+
+def test_autopay_schedule_request_and_approval(app, client, monkeypatch):
+    sent_notifications: list[tuple[str, str, str]] = []
+
+    def fake_send_email(app_obj, recipient, subject, body):
+        sent_notifications.append((recipient, subject, body))
+        return True
+
+    monkeypatch.setattr(app_module, "send_email_via_office365", fake_send_email)
+
+    password = "PortalPass123!"
+    app.config["ADMIN_EMAIL"] = "billing@example.com"
+
+    with app.app_context():
+        customer = Client(
+            name="Schedule Customer",
+            email="schedule@example.com",
+            status="Active",
+            autopay_enabled=True,
+        )
+        customer.portal_password_hash = generate_password_hash(password)
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    login_response = client.post(
+        "/portal/login",
+        data={"email": "schedule@example.com", "password": password},
+        follow_redirects=True,
+    )
+    assert login_response.status_code == 200
+
+    request_response = client.post(
+        "/portal/autopay/schedule",
+        data={"requested_day": "15"},
+        follow_redirects=True,
+    )
+    assert request_response.status_code == 200
+
+    with app.app_context():
+        customer = Client.query.get(customer_id)
+        assert customer.autopay_day_pending == 15
+        assert customer.autopay_day is None
+
+    assert any(
+        recipient == "billing@example.com" and "Autopay schedule request" in subject
+        for recipient, subject, _ in sent_notifications
+    )
+
+    login_admin(client)
+
+    approve_response = client.post(
+        f"/clients/{customer_id}/autopay/schedule",
+        data={"action": "approve"},
+        follow_redirects=True,
+    )
+    assert approve_response.status_code == 200
+
+    with app.app_context():
+        customer = Client.query.get(customer_id)
+        assert customer.autopay_day == 15
+        assert customer.autopay_day_pending is None
+
+    assert any(
+        recipient == "schedule@example.com" and "Autopay schedule approved" in subject
+        for recipient, subject, _ in sent_notifications
+    )
 
 
 def test_stripe_webhook_marks_invoice_paid(app, client, monkeypatch):
@@ -2476,6 +2642,203 @@ def test_portal_customer_adds_card_via_stripe(app, client, monkeypatch):
         assert stored_method.token == "pm_new"
         refreshed_client = Client.query.get(portal_client_id)
         assert refreshed_client.stripe_customer_id == "cus_test"
+
+
+def test_ticket_messaging_allows_replies_with_attachments(app, client, monkeypatch):
+    sent_notifications: list[tuple[str, str, str]] = []
+
+    def fake_send_email(app_obj, recipient, subject, body):
+        sent_notifications.append((recipient, subject, body))
+        return True
+
+    monkeypatch.setattr(app_module, "send_email_via_office365", fake_send_email)
+
+    app.config["ADMIN_EMAIL"] = "support@example.com"
+    password = "PortalPass123!"
+
+    with app.app_context():
+        portal_client = Client(
+            name="Messaging Customer",
+            email="messaging@example.com",
+            status="Active",
+        )
+        portal_client.portal_password_hash = generate_password_hash(password)
+        db.session.add(portal_client)
+        db.session.commit()
+        client_id = portal_client.id
+
+    client.post(
+        "/portal/login",
+        data={"email": "messaging@example.com", "password": password},
+        follow_redirects=True,
+    )
+
+    client.post(
+        "/portal/tickets",
+        data={
+            "subject": "Connectivity issue",
+            "message": "Our radios reboot each night.",
+            "priority": "High",
+            "attachments": (BytesIO(b"initial"), "signal.pdf"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        ticket = SupportTicket.query.filter_by(client_id=client_id).one()
+        assert ticket.messages
+        assert ticket.messages[0].body == "Our radios reboot each night."
+        attachments = SupportTicketAttachment.query.filter_by(ticket_id=ticket.id).all()
+        assert attachments[0].message_id == ticket.messages[0].id
+        ticket_id = ticket.id
+
+    client.post(
+        f"/portal/tickets/{ticket_id}/messages",
+        data={
+            "message": "Here are additional logs.",
+            "attachments": (BytesIO(b"log-data"), "logs.txt"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    login_admin(client)
+
+    client.post(
+        f"/tickets/{ticket_id}/messages",
+        data={
+            "message": "We pushed a firmware update.",
+            "attachments": (BytesIO(b"patch-notes"), "notes.pdf"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        ticket = SupportTicket.query.get(ticket_id)
+        assert len(ticket.messages) == 3
+        assert ticket.messages[1].sender == "client"
+        assert ticket.messages[2].sender == "admin"
+        admin_attachment = next(
+            attachment
+            for attachment in ticket.attachments
+            if attachment.original_filename == "notes.pdf"
+        )
+        assert admin_attachment.message_id == ticket.messages[2].id
+
+    assert any(
+        recipient == "support@example.com" and "ticket" in subject.lower()
+        for recipient, subject, _ in sent_notifications
+    )
+    assert any(
+        recipient == "messaging@example.com" and "Support ticket update" in subject
+        for recipient, subject, _ in sent_notifications
+    )
+
+
+def test_portal_dashboard_processes_setup_intent_query(app, client, monkeypatch):
+    password = "PortalPass123!"
+    stub = install_stripe_stub(app, monkeypatch)
+
+    with app.app_context():
+        portal_client = Client(
+            name="Setup Intent Customer",
+            email="setup@example.com",
+            status="Active",
+        )
+        portal_client.portal_password_hash = generate_password_hash(password)
+        portal_client.portal_password_updated_at = utcnow()
+        db.session.add(portal_client)
+        db.session.commit()
+        portal_client_id = portal_client.id
+
+    login_response = client.post(
+        "/portal/login",
+        data={"email": "setup@example.com", "password": password},
+        follow_redirects=True,
+    )
+    assert login_response.status_code == 200
+
+    stub.SetupIntent.retrieve_map["seti_success"] = SimpleNamespace(
+        id="seti_success",
+        status="succeeded",
+        payment_method="pm_new",
+        metadata={"client_id": str(portal_client_id)},
+        customer="cus_test",
+    )
+
+    response = client.get(
+        "/portal?setup_intent=seti_success",
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"Card saved" in response.data
+
+    with app.app_context():
+        stored_method = PaymentMethod.query.filter_by(
+            client_id=portal_client_id
+        ).one()
+        assert stored_method.token == "pm_new"
+        assert stored_method.is_default is True
+
+
+def test_portal_dashboard_processes_payment_intent_query(app, client, monkeypatch):
+    password = "PortalPass123!"
+    stub = install_stripe_stub(app, monkeypatch)
+
+    with app.app_context():
+        portal_client = Client(
+            name="Invoice Payer",
+            email="payer@example.com",
+            status="Active",
+        )
+        portal_client.portal_password_hash = generate_password_hash(password)
+        portal_client.portal_password_updated_at = utcnow()
+        db.session.add(portal_client)
+        db.session.commit()
+        portal_client_id = portal_client.id
+
+        invoice = Invoice(
+            client_id=portal_client_id,
+            description="Monthly service",
+            amount_cents=6500,
+            status="Pending",
+        )
+        db.session.add(invoice)
+        db.session.commit()
+        invoice_id = invoice.id
+
+    login_response = client.post(
+        "/portal/login",
+        data={"email": "payer@example.com", "password": password},
+        follow_redirects=True,
+    )
+    assert login_response.status_code == 200
+
+    stub.PaymentIntent.retrieve_map["pi_success"] = SimpleNamespace(
+        id="pi_success",
+        status="succeeded",
+        metadata={
+            "invoice_id": str(invoice_id),
+            "client_id": str(portal_client_id),
+            app_module.STRIPE_AUTOPAY_METADATA_FLAG: "false",
+        },
+        payment_method="pm_card_visa",
+        charges=SimpleNamespace(data=[SimpleNamespace(id="ch_123")]),
+    )
+
+    response = client.get(
+        "/portal?payment_intent=pi_success",
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"Payment received. Thank you!" in response.data
+
+    with app.app_context():
+        refreshed_invoice = Invoice.query.get(invoice_id)
+        assert refreshed_invoice.status == "Paid"
+        assert refreshed_invoice.stripe_payment_intent_id == "pi_success"
 
 
 def test_admin_adds_card_via_stripe(app, client, monkeypatch):

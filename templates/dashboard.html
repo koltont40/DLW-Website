@@ -1704,18 +1704,41 @@
                   <strong>{{ ticket.subject }}</strong>
                   <span class="subtle">Opened {{ ticket.created_at.strftime('%b %d, %Y %I:%M %p') }} · Priority {{ ticket.priority }}</span>
                 </div>
-                <p class="ticket-message">{{ ticket.message }}</p>
-                {% if ticket.attachments %}
+                <div class="ticket-conversation">
+                  {% for message in ticket.messages %}
+                  <article class="ticket-message {% if message.sender == 'admin' %}from-staff{% else %}from-client{% endif %}">
+                    <header class="ticket-message-header">
+                      <strong>
+                        {% if message.sender == 'admin' %}
+                        Dixieland Wireless Support
+                        {% else %}
+                        {{ ticket.client.name }}
+                        {% endif %}
+                      </strong>
+                      <span class="subtle">{{ message.created_at.strftime('%b %d, %Y %I:%M %p') }}</span>
+                    </header>
+                    <p>{{ message.body }}</p>
+                    {% if message.attachments %}
+                    <div class="ticket-attachments">
+                      <div class="ticket-attachment-strip">
+                        {% for attachment in message.attachments %}
+                        <a class="file-chip" href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
+                          {{ attachment.original_filename }}
+                        </a>
+                        {% endfor %}
+                      </div>
+                    </div>
+                    {% endif %}
+                  </article>
+                  {% endfor %}
+                </div>
+                {% set legacy_attachments = ticket.attachments | selectattr('message_id', 'equalto', None) | list %}
+                {% if legacy_attachments %}
                 <div class="ticket-attachments">
-                  <p class="subtle">Photos provided:</p>
                   <div class="ticket-attachment-strip">
-                    {% for attachment in ticket.attachments %}
-                    <a href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
-                      <img
-                        src="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}"
-                        alt="Ticket attachment {{ loop.index }}"
-                        loading="lazy"
-                      />
+                    {% for attachment in legacy_attachments %}
+                    <a class="file-chip" href="{{ url_for('serve_ticket_attachment', attachment_id=attachment.id) }}" target="_blank">
+                      {{ attachment.original_filename }}
                     </a>
                     {% endfor %}
                   </div>
@@ -1742,13 +1765,42 @@
                   <textarea name="resolution_notes" rows="3" placeholder="Document updates shared with the client.">{{ ticket.resolution_notes or '' }}</textarea>
                 </label>
                 <label>
-                  Add photos
-                  <input type="file" name="attachments" accept="image/*" multiple />
+                  Add files
+                  <input
+                    type="file"
+                    name="attachments"
+                    accept=".jpg,.jpeg,.png,.gif,.heic,.heif,.pdf,.txt,.csv,.zip,.doc,.docx,.xls,.xlsx"
+                    multiple
+                  />
                   <span class="subtle">Optional: include additional documentation.</span>
                 </label>
                 <div class="record-actions">
                   <button class="button small primary" type="submit">Update</button>
                   <button class="button small danger" type="submit" form="delete-ticket-{{ ticket.id }}" onclick="return confirm('Delete this ticket?');">Delete</button>
+                </div>
+              </form>
+              <form
+                class="stacked-form ticket-reply-form"
+                method="post"
+                action="{{ url_for('admin_ticket_message', ticket_id=ticket.id) }}"
+                enctype="multipart/form-data"
+              >
+                <input type="hidden" name="next" value="{{ request.full_path }}" />
+                <label>
+                  Message
+                  <textarea name="message" rows="3" placeholder="Share an update with {{ ticket.client.name }}"></textarea>
+                </label>
+                <label class="file-upload">
+                  Attach files
+                  <input
+                    type="file"
+                    name="attachments"
+                    multiple
+                    accept=".jpg,.jpeg,.png,.gif,.heic,.heif,.pdf,.txt,.csv,.zip,.doc,.docx,.xls,.xlsx"
+                  />
+                </label>
+                <div class="button-row">
+                  <button class="button small secondary" type="submit">Send message</button>
                 </div>
               </form>
               <form id="delete-ticket-{{ ticket.id }}" class="inline-form" method="post" action="{{ url_for('delete_ticket', ticket_id=ticket.id, section='support', status=request.args.get('status')) }}"></form>
