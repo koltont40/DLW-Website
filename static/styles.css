@@ -27,6 +27,7 @@
   --success: #22c55e;
   --warning: #f59e0b;
   --card-shadow: 0 24px 45px -32px rgba(76, 29, 149, 0.75);
+  --card-shadow-light: 0 18px 38px -28px rgba(167, 139, 250, 0.55);
   --accent-green: #8b5cf6;
   --accent-blue: rgba(167, 139, 250, 0.65);
   font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -2361,8 +2362,160 @@ a.trusted-logo:hover {
 
 .record-row input,
 .record-row select,
-.record-row textarea {
+.record-row textarea,
+.inline-field input,
+.inline-field select,
+.inline-field textarea {
   font-size: 0.95rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--secondary);
+  font: inherit;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.record-row input::placeholder,
+.inline-field input::placeholder,
+.record-row textarea::placeholder,
+.inline-field textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+.record-row input:focus,
+.record-row select:focus,
+.record-row textarea:focus,
+.inline-field input:focus,
+.inline-field select:focus,
+.inline-field textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.2);
+}
+
+.record-row textarea,
+.inline-field textarea {
+  resize: vertical;
+}
+
+.inline-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.inline-field span {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.inline-field.stretch {
+  width: 100%;
+}
+
+.inline-actions {
+  justify-content: flex-end;
+}
+
+.uisp-config-panel {
+  margin-bottom: 1.5rem;
+}
+
+.uisp-config-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: end;
+}
+
+.uisp-config-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.uisp-config-actions .subtle {
+  margin: 0;
+}
+
+.inline-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-top: 0.25rem;
+}
+
+.inline-checkbox span {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.inline-checkbox input {
+  width: auto;
+}
+
+.uisp-device-row {
+  grid-template-columns:
+    minmax(240px, 1.4fr)
+    minmax(160px, 1fr)
+    minmax(180px, 1fr)
+    minmax(180px, 1fr)
+    minmax(220px, 1.3fr)
+    auto;
+  align-items: center;
+}
+
+.uisp-device-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.uisp-device-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.uisp-device-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.tower-management {
+  margin-top: 2rem;
+}
+
+.tower-row {
+  grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(220px, 1.2fr) auto;
+  align-items: center;
+}
+
+.tower-empty {
+  margin-top: 0.75rem;
+}
+
+@media (max-width: 960px) {
+  .uisp-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .uisp-device-row,
+  .tower-row {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-actions {
+    justify-content: flex-start;
+  }
 }
 
 .record-actions {
@@ -3720,6 +3873,93 @@ a.trusted-logo:hover {
 
 .story-item-form .form-actions {
   justify-content: flex-start;
+}
+
+.operations-allies-card {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.partner-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.25rem;
+}
+
+.partner-tile {
+  display: flex;
+  gap: 1rem;
+  padding: 1.1rem;
+  border-radius: 1.1rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--card-shadow-light);
+  align-items: flex-start;
+}
+
+.partner-media {
+  width: 72px;
+  height: 72px;
+  border-radius: 1rem;
+  background: rgba(56, 189, 248, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.partner-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--surface-soft);
+}
+
+.partner-placeholder {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--secondary);
+}
+
+.partner-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.partner-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.partner-heading h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.partner-heading a {
+  font-size: 0.9rem;
+}
+
+.partner-content p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.operations-allies-card .empty-state {
+  text-align: center;
+  padding: 1.5rem;
+  border-radius: 1rem;
+  border: 1px dashed rgba(148, 163, 184, 0.3);
+}
+
+.partner-list .story-item {
+  background: var(--surface);
 }
 
 .file-field {

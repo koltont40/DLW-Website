@@ -34,8 +34,12 @@ from app import (
     SiteTheme,
     TeamMember,
     TrustedBusiness,
+    SupportPartner,
     StripeConfig,
     NotificationConfig,
+    UispDevice,
+    UispConfig,
+    NetworkTower,
     create_app,
     db,
     get_install_photo_category_choices,
@@ -152,6 +156,7 @@ def app(tmp_path):
     theme_folder = tmp_path / "theme"
     team_folder = tmp_path / "team"
     trusted_folder = tmp_path / "trusted_businesses"
+    support_partner_folder = tmp_path / "support_partners"
     install_folder = tmp_path / "install_photos"
     signature_folder = tmp_path / "install_signatures"
     verification_folder = tmp_path / "verification"
@@ -174,6 +179,7 @@ def app(tmp_path):
             "THEME_UPLOAD_FOLDER": str(theme_folder),
             "TEAM_UPLOAD_FOLDER": str(team_folder),
             "TRUSTED_BUSINESS_UPLOAD_FOLDER": str(trusted_folder),
+            "SUPPORT_PARTNER_UPLOAD_FOLDER": str(support_partner_folder),
             "INSTALL_PHOTOS_FOLDER": str(install_folder),
             "INSTALL_SIGNATURE_FOLDER": str(signature_folder),
             "CLIENT_VERIFICATION_FOLDER": str(verification_folder),
@@ -561,6 +567,61 @@ def test_admin_can_create_trusted_business_with_logo(app, client):
     logo_response = client.get(f"/trusted-businesses/{business_id}/logo")
     assert logo_response.status_code == 200
     assert b"<svg" in logo_response.data
+
+
+def test_admin_can_create_support_partner_with_logo(app, client):
+    login_admin(client)
+
+    response = client.post(
+        "/support-partners",
+        data={
+            "name": "River Region Fiber Crew",
+            "website_url": "https://fibercrew.example.com",
+            "description": "Handles aerial fiber runs for our backhaul.",
+            "logo": (BytesIO(b"binary-image"), "logo.png"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Added River Region Fiber Crew to your operations allies." in response.data
+
+    with app.app_context():
+        partner = SupportPartner.query.filter_by(name="River Region Fiber Crew").first()
+        assert partner is not None
+        assert partner.website_url == "https://fibercrew.example.com"
+        assert partner.description == "Handles aerial fiber runs for our backhaul."
+        assert partner.logo_filename is not None
+        partner_id = partner.id
+        logo_path = Path(app.config["SUPPORT_PARTNER_UPLOAD_FOLDER"]) / partner.logo_filename
+        assert logo_path.exists()
+
+    logo_response = client.get(f"/support-partners/{partner_id}/logo")
+    assert logo_response.status_code == 200
+    assert b"binary-image" in logo_response.data
+
+
+def test_dashboard_overview_lists_support_partners(app, client):
+    with app.app_context():
+        partner = SupportPartner(
+            name="Tower Guard LLC",
+            description="24/7 monitoring, tower climbs, and emergency repairs.",
+            website_url="https://towerguard.example.com",
+            position=1,
+        )
+        db.session.add(partner)
+        db.session.commit()
+
+    login_admin(client)
+
+    response = client.get("/dashboard", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"Operations Allies" in response.data
+    assert b"Tower Guard LLC" in response.data
+    assert b"24/7 monitoring, tower climbs, and emergency repairs." in response.data
+    assert b"Manage partners" in response.data
 
 
 def test_admin_can_view_security_settings(client):
@@ -1270,6 +1331,221 @@ def test_admin_adds_equipment_from_account_view(app, client):
         assert len(devices) == 1
         assert devices[0].name == "Subscriber Router"
         assert str(devices[0].installed_on) == "2024-08-01"
+
+
+def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypatch):
+    login_admin(client)
+
+    sent_notifications: list[tuple[str, str, str]] = []
+
+    def fake_send_email(app_obj, recipient, subject, body):
+        sent_notifications.append((recipient, subject, body))
+        return True
+
+    monkeypatch.setattr(app_module, "send_email_via_office365", fake_send_email)
+
+    payload_holder = {
+        "data": [
+            {
+                "id": "device-1",
+                "identification": {"name": "North Sector", "model": "UISP Wave"},
+                "site": {"name": "North Tower"},
+                "status": {"value": "online", "lastSeen": "2024-05-01T12:00:00Z"},
+                "ipAddress": "10.0.0.10",
+                "macAddress": "AA:BB:CC:DD:EE:01",
+                "firmware": {"version": "1.2.3"},
+            },
+            {
+                "id": "device-2",
+                "identification": {"name": "Backhaul Link", "model": "UISP Wave"},
+                "site": {"name": "Backhaul Ridge"},
+                "status": {"value": "offline", "lastSeen": "2024-05-01T11:45:00Z"},
+                "ipAddress": "10.0.0.11",
+                "macAddress": "AA:BB:CC:DD:EE:02",
+                "firmware": {"version": "1.2.3"},
+            },
+        ]
+    }
+
+    class DummyResponse:
+        status_code = 200
+
+        def json(self):
+            return payload_holder["data"]
+
+        @property
+        def text(self):
+            return "ok"
+
+    def fake_get(url, headers=None, timeout=None):
+        return DummyResponse()
+
+    monkeypatch.setattr(app_module.requests, "get", fake_get)
+
+    with app.app_context():
+        config = UispConfig(base_url="https://uisp.example.com", api_token="token")
+        north_tower = NetworkTower(name="North Tower", location="Hilltop bluff")
+        lake_tower = NetworkTower(name="Lake Tower", location="Reservoir access road")
+        customer = Client(name="Managed Customer", email="managed@example.com", status="Active")
+        db.session.add_all([config, north_tower, lake_tower, customer])
+        technician = Technician(
+            name="Network Tech",
+            email="tech@example.com",
+            password_hash=generate_password_hash("TechPass123!"),
+            is_active=True,
+        )
+        db.session.add(technician)
+        db.session.commit()
+        customer_id = customer.id
+        north_tower_id = north_tower.id
+        lake_tower_id = lake_tower.id
+
+    response = client.post("/uisp/devices/import", follow_redirects=True)
+    assert response.status_code == 200
+    assert sent_notifications
+
+    with app.app_context():
+        config = UispConfig.query.first()
+        assert config is not None
+        assert config.last_synced_at is not None
+        devices = UispDevice.query.order_by(UispDevice.uisp_id.asc()).all()
+        assert len(devices) == 2
+        online_device = next(device for device in devices if device.uisp_id == "device-1")
+        assert online_device.tower_id == north_tower_id
+        offline_device = next(device for device in devices if device.uisp_id == "device-2")
+        assert offline_device.status == "offline"
+        assert offline_device.outage_notified_at is not None
+        offline_id = offline_device.id
+
+    recipients = {entry[0] for entry in sent_notifications}
+    assert "ops@example.com" in recipients
+    assert "tech@example.com" in recipients
+
+    sent_notifications.clear()
+
+    account_url = f"/dashboard/customers/{customer_id}"
+    assign_response = client.post(
+        f"/uisp/devices/{offline_id}/assign",
+        data={
+            "client_id": str(customer_id),
+            "nickname": "Backhaul",
+            "notes": "Feeds subdivision",
+            "tower_id": str(lake_tower_id),
+            "next": account_url,
+        },
+        follow_redirects=True,
+    )
+    assert assign_response.status_code == 200
+
+    with app.app_context():
+        device = UispDevice.query.get(offline_id)
+        assert device.client_id == customer_id
+        assert device.nickname == "Backhaul"
+        assert device.notes == "Feeds subdivision"
+        assert device.tower_id == lake_tower_id
+
+    payload_holder["data"][1]["status"] = {"value": "online", "lastSeen": "2024-05-01T12:30:00Z"}
+    client.post("/uisp/devices/import", follow_redirects=True)
+    assert not sent_notifications
+
+    payload_holder["data"][1]["status"] = {"value": "offline", "lastSeen": "2024-05-01T12:45:00Z"}
+    sent_notifications.clear()
+    client.post("/uisp/devices/import", follow_redirects=True)
+
+    recipients = {entry[0] for entry in sent_notifications}
+    assert "managed@example.com" in recipients
+    assert "ops@example.com" in recipients
+    assert "tech@example.com" in recipients
+
+    account_view = client.get(account_url)
+    assert account_view.status_code == 200
+    assert b"Backhaul" in account_view.data
+    assert b"Lake Tower" in account_view.data
+
+    unassign_response = client.post(
+        f"/uisp/devices/{offline_id}/assign",
+        data={"client_id": "", "tower_id": "", "next": account_url},
+        follow_redirects=True,
+    )
+    assert unassign_response.status_code == 200
+
+    with app.app_context():
+        device = UispDevice.query.get(offline_id)
+        assert device.client_id is None
+        assert device.tower_id is None
+
+
+def test_admin_manages_uisp_settings_and_towers(app, client):
+    login_admin(client)
+
+    settings_response = client.post(
+        "/uisp/config",
+        data={
+            "base_url": "https://uisp.ops",
+            "api_token": "secret-token",
+            "auto_sync_enabled": "on",
+            "auto_sync_interval": "90",
+        },
+        follow_redirects=True,
+    )
+    assert settings_response.status_code == 200
+
+    create_response = client.post(
+        "/network/towers",
+        data={
+            "name": "River Tower",
+            "location": "Bayou Road",
+            "notes": "Primary uplink",
+        },
+        follow_redirects=True,
+    )
+    assert create_response.status_code == 200
+
+    with app.app_context():
+        config = UispConfig.query.first()
+        assert config is not None
+        assert config.base_url == "https://uisp.ops"
+        assert config.api_token == "secret-token"
+        assert config.auto_sync_enabled is True
+        assert config.auto_sync_interval_minutes == 90
+
+        tower = NetworkTower.query.filter_by(name="River Tower").first()
+        assert tower is not None
+        tower_id = tower.id
+
+        device = UispDevice(uisp_id="tower-test", name="Tower Device", tower=tower)
+        db.session.add(device)
+        db.session.commit()
+        device_id = device.id
+
+    update_response = client.post(
+        f"/network/towers/{tower_id}/update",
+        data={
+            "name": "Riverfront Tower",
+            "location": "Bayou Road",
+            "notes": "Updated notes",
+        },
+        follow_redirects=True,
+    )
+    assert update_response.status_code == 200
+
+    with app.app_context():
+        tower = NetworkTower.query.get(tower_id)
+        assert tower is not None
+        assert tower.name == "Riverfront Tower"
+        assert tower.notes == "Updated notes"
+
+    delete_response = client.post(
+        f"/network/towers/{tower_id}/delete",
+        follow_redirects=True,
+    )
+    assert delete_response.status_code == 200
+
+    with app.app_context():
+        assert NetworkTower.query.get(tower_id) is None
+        device = UispDevice.query.get(device_id)
+        assert device is not None
+        assert device.tower_id is None
 
 
 def test_admin_schedules_appointment_from_account_view(app, client):
@@ -2260,6 +2536,183 @@ def test_admin_can_send_manual_snmp_email(app, client):
     ]
 
 
+def test_invoice_notifications_sent_on_create_and_update(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    login_admin(client)
+
+    with app.app_context():
+        customer = Client(
+            name="Billing Notice",
+            email="billing@example.com",
+            status="Active",
+        )
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    response = client.post(
+        f"/clients/{customer_id}/invoices",
+        data={
+            "description": "Installation deposit",
+            "amount": "150.00",
+            "due_date": "2024-02-01",
+            "status": "Pending",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "billing@example.com"
+    assert subject.startswith("Invoice posted: Installation deposit")
+    assert "new invoice" in body.lower()
+    assert "$150.00" in body
+    assert "Due date: 2024-02-01" in body
+
+    with app.app_context():
+        invoice = Invoice.query.filter_by(client_id=customer_id).one()
+        invoice_id = invoice.id
+
+    notifications.clear()
+
+    response = client.post(
+        f"/invoices/{invoice_id}/update",
+        data={
+            "description": "Installation deposit",
+            "amount": "175.00",
+            "due_date": "2024-02-15",
+            "status": "Pending",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "billing@example.com"
+    assert subject.startswith("Invoice updated: Installation deposit")
+    assert "updated your invoice" in body
+    assert "$175.00" in body
+    assert "Due date: 2024-02-15" in body
+
+
+def test_equipment_notifications_sent_on_create_and_update(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    login_admin(client)
+
+    with app.app_context():
+        customer = Client(
+            name="Equipment Notice",
+            email="gear@example.com",
+            status="Active",
+        )
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    response = client.post(
+        f"/clients/{customer_id}/equipment",
+        data={
+            "name": "Customer Router",
+            "model": "XR500",
+            "serial_number": "SN-100",
+            "notes": "Initial install",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "gear@example.com"
+    assert subject.startswith("Equipment added: Customer Router")
+    assert "new equipment" in body.lower()
+    assert "Customer Router" in body
+
+    with app.app_context():
+        equipment = Equipment.query.filter_by(client_id=customer_id).one()
+        equipment_id = equipment.id
+
+    notifications.clear()
+
+    response = client.post(
+        f"/equipment/{equipment_id}/update",
+        data={
+            "name": "Customer Router",
+            "model": "XR500",
+            "serial_number": "SN-100",
+            "installed_on": date(2024, 1, 15).strftime("%Y-%m-%d"),
+            "notes": "Mounted in hallway",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "gear@example.com"
+    assert subject.startswith("Equipment updated: Customer Router")
+    assert "mounted in hallway" in body.lower()
+    assert "Installed on: 2024-01-15" in body
+
+
+def test_appointment_update_uses_all_activity_flag(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    login_admin(client)
+
+    with app.app_context():
+        config = app_module.ensure_notification_configuration()
+        config.notify_customer_activity = False
+        config.notify_all_account_activity = True
+        db.session.commit()
+
+        customer = Client(
+            name="All Activity Customer",
+            email="notify-all@example.com",
+            status="Active",
+        )
+        appointment = Appointment(
+            client=customer,
+            title="Follow-up visit",
+            scheduled_for=utcnow() + timedelta(days=1),
+            status="Pending",
+        )
+        db.session.add_all([customer, appointment])
+        db.session.commit()
+        appointment_id = appointment.id
+
+    response = client.post(
+        f"/appointments/{appointment_id}/update",
+        data={"status": "Completed"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        updated = Appointment.query.get(appointment_id)
+        assert updated.status == "Completed"
+
+    assert notifications, "Expected an appointment notification when all-activity flag is enabled"
+    recipient, subject, body = notifications[-1]
+    assert recipient == "notify-all@example.com"
+    assert subject.startswith("Appointment update: Follow-up visit")
+    assert "completed" in body.lower()
+
+
 def test_admin_can_update_snmp_settings(app, client):
     login_admin(client)
 
@@ -2447,6 +2900,25 @@ def test_admin_can_update_notification_preferences(app, client):
         config = NotificationConfig.query.first()
         assert config.notify_install_activity is True
         assert config.notify_customer_activity is False
+        assert config.notify_all_account_activity is False
+
+    response = client.post(
+        "/dashboard/notifications/preferences",
+        data={
+            "notify_installs": "on",
+            "notify_customers": "on",
+            "notify_all_activity": "on",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        config = NotificationConfig.query.first()
+        assert config.notify_install_activity is True
+        assert config.notify_customer_activity is True
+        assert config.notify_all_account_activity is True
 
 
 def test_technician_portal_login_and_dashboard(app, client):
