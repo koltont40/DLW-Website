@@ -43,6 +43,8 @@ from app import (
     NetworkTower,
     create_app,
     db,
+    get_stripe_publishable_key,
+    apply_stripe_config_from_database,
     get_install_photo_category_choices,
     get_required_install_photo_categories,
     utcnow,
@@ -904,6 +906,59 @@ def test_admin_can_disable_stripe_configuration(app, client):
         assert app.config["STRIPE_PUBLISHABLE_KEY"] is None
         assert app.config["STRIPE_WEBHOOK_SECRET"] is None
 
+
+def test_get_stripe_publishable_key_uses_env_alias(app):
+    with app.app_context():
+        StripeConfig.query.delete()
+        db.session.commit()
+
+        app.config["STRIPE_PUBLISHABLE_KEY"] = None
+        app.config["STRIPE_PUBLIC_KEY"] = "pk_alias_env"
+        app.config["STRIPE_PK"] = None
+
+        value = get_stripe_publishable_key(app)
+
+        assert value == "pk_alias_env"
+        assert app.config["STRIPE_PUBLISHABLE_KEY"] == "pk_alias_env"
+
+
+def test_get_stripe_publishable_key_reads_database_when_missing(app):
+    with app.app_context():
+        StripeConfig.query.delete()
+        db.session.commit()
+
+        config = StripeConfig(
+            secret_key="sk_saved",
+            publishable_key="pk_saved",
+            webhook_secret=None,
+        )
+        db.session.add(config)
+        db.session.commit()
+
+        app.config["STRIPE_PUBLISHABLE_KEY"] = None
+        app.config["STRIPE_PUBLIC_KEY"] = None
+        app.config["STRIPE_PK"] = None
+
+        value = get_stripe_publishable_key(app)
+
+        assert value == "pk_saved"
+        assert app.config["STRIPE_PUBLISHABLE_KEY"] == "pk_saved"
+
+
+def test_apply_stripe_config_uses_publishable_fallback(app):
+    with app.app_context():
+        StripeConfig.query.delete()
+        db.session.commit()
+
+        app.config["STRIPE_SECRET_KEY"] = "sk_env"
+        app.config["STRIPE_PUBLISHABLE_KEY"] = None
+        app.config["STRIPE_PUBLIC_KEY"] = "pk_env_public"
+        app.config["STRIPE_PK"] = None
+
+        config = apply_stripe_config_from_database(app)
+
+        assert config.publishable_key == "pk_env_public"
+        assert app.config["STRIPE_PUBLISHABLE_KEY"] == "pk_env_public"
 
 def test_admin_can_add_customer_via_dashboard(app, client):
     login_admin(client)

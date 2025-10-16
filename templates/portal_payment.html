@@ -110,8 +110,8 @@
 <script src="https://js.stripe.com/v3/"></script>
 <script>
   (() => {
-    const publishableKey = "{{ stripe_publishable_key }}";
-    const clientSecret = "{{ payment_intent_client_secret }}";
+    const publishableKey = {{ stripe_publishable_key|tojson }};
+    const clientSecret = {{ payment_intent_client_secret|tojson }};
     const errorField = document.getElementById("portal-payment-errors");
     if (!publishableKey || !clientSecret) {
       if (errorField) {

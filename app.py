@@ -164,6 +164,40 @@ def stripe_active(app: Flask | None = None) -> bool:
     return bool(app.config.get("STRIPE_SECRET_KEY"))
 
 
+def get_stripe_publishable_key(app: Flask | None = None) -> str | None:
+    app = app or current_app
+    if app is None:
+        return None
+
+    def _normalized(value: object) -> str | None:
+        if not value:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    existing = _normalized(app.config.get("STRIPE_PUBLISHABLE_KEY"))
+    if existing:
+        return existing
+
+    for fallback_key in ("STRIPE_PUBLIC_KEY", "STRIPE_PK"):
+        fallback = _normalized(app.config.get(fallback_key))
+        if fallback:
+            app.config["STRIPE_PUBLISHABLE_KEY"] = fallback
+            return fallback
+
+    try:
+        config = StripeConfig.query.first()  # type: ignore[name-defined]
+    except Exception:  # pragma: no cover - safeguard when DB unavailable
+        return None
+
+    normalized = _normalized(config.publishable_key) if config else None
+    if normalized:
+        app.config["STRIPE_PUBLISHABLE_KEY"] = normalized
+        return normalized
+
+    return None
+
+
 class UispApiError(RuntimeError):
     """Raised when the UISP API responds with an error."""
 
@@ -2227,6 +2261,12 @@ def create_app(test_config: dict | None = None) -> Flask:
     except ValueError:
         snmp_port = 162
 
+    publishable_env = (
+        os.environ.get("STRIPE_PUBLISHABLE_KEY")
+        or os.environ.get("STRIPE_PUBLIC_KEY")
+        or os.environ.get("STRIPE_PK")
+    )
+
     default_config = {
         "SECRET_KEY": secret_key,
         "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
@@ -2253,7 +2293,9 @@ def create_app(test_config: dict | None = None) -> Flask:
         ),
         "CONTACT_PHONE": os.environ.get("CONTACT_PHONE", "2053343969"),
         "STRIPE_SECRET_KEY": os.environ.get("STRIPE_SECRET_KEY"),
-        "STRIPE_PUBLISHABLE_KEY": os.environ.get("STRIPE_PUBLISHABLE_KEY"),
+        "STRIPE_PUBLISHABLE_KEY": publishable_env,
+        "STRIPE_PUBLIC_KEY": os.environ.get("STRIPE_PUBLIC_KEY"),
+        "STRIPE_PK": os.environ.get("STRIPE_PK"),
         "STRIPE_WEBHOOK_SECRET": os.environ.get("STRIPE_WEBHOOK_SECRET"),
         "UISP_BASE_URL": os.environ.get("UISP_BASE_URL"),
         "UISP_API_TOKEN": os.environ.get("UISP_API_TOKEN"),
@@ -3319,7 +3361,11 @@ def apply_stripe_config_from_database(app: Flask) -> StripeConfig:
     if config is None:
         config = StripeConfig(
             secret_key=_clean(app.config.get("STRIPE_SECRET_KEY")),
-            publishable_key=_clean(app.config.get("STRIPE_PUBLISHABLE_KEY")),
+            publishable_key=(
+                _clean(app.config.get("STRIPE_PUBLISHABLE_KEY"))
+                or _clean(app.config.get("STRIPE_PUBLIC_KEY"))
+                or _clean(app.config.get("STRIPE_PK"))
+            ),
             webhook_secret=_clean(app.config.get("STRIPE_WEBHOOK_SECRET")),
         )
         db.session.add(config)
@@ -3327,6 +3373,13 @@ def apply_stripe_config_from_database(app: Flask) -> StripeConfig:
     else:
         cleaned_secret = _clean(config.secret_key)
         cleaned_publishable = _clean(config.publishable_key)
+        fallback_publishable = (
+            _clean(app.config.get("STRIPE_PUBLIC_KEY"))
+            or _clean(app.config.get("STRIPE_PK"))
+        )
+        if not cleaned_publishable and fallback_publishable:
+            cleaned_publishable = fallback_publishable
+
         cleaned_webhook = _clean(config.webhook_secret)
 
         changed = False
@@ -3345,6 +3398,9 @@ def apply_stripe_config_from_database(app: Flask) -> StripeConfig:
 
     app.config["STRIPE_SECRET_KEY"] = config.secret_key
     app.config["STRIPE_PUBLISHABLE_KEY"] = config.publishable_key
+    if config.publishable_key:
+        app.config.setdefault("STRIPE_PUBLIC_KEY", config.publishable_key)
+        app.config.setdefault("STRIPE_PK", config.publishable_key)
     app.config["STRIPE_WEBHOOK_SECRET"] = config.webhook_secret
 
     init_stripe(app)
@@ -4659,6 +4715,8 @@ def register_routes(app: Flask) -> None:
             if redirect_after_stripe:
                 return redirect(url_for("portal_dashboard"))
 
+        publishable_key = get_stripe_publishable_key()
+
         return render_template(
             "portal_dashboard.html",
             client=client,
@@ -4672,7 +4730,7 @@ def register_routes(app: Flask) -> None:
             selected_services=selected_services,
             ticket_priority_options=TICKET_PRIORITY_OPTIONS,
             payment_methods=client.payment_methods,
-            stripe_publishable_key=current_app.config.get("STRIPE_PUBLISHABLE_KEY"),
+            stripe_publishable_key=publishable_key,
             stripe_ready=stripe_active(),
         )
 
@@ -4887,12 +4945,14 @@ def register_routes(app: Flask) -> None:
 
         db.session.commit()
 
+        publishable_key = get_stripe_publishable_key()
+
         return render_template(
             "portal_payment.html",
             client=client,
             invoice=invoice,
             payment_intent_client_secret=payment_intent.client_secret,
-            stripe_publishable_key=current_app.config.get("STRIPE_PUBLISHABLE_KEY"),
+            stripe_publishable_key=publishable_key,
         )
 
     @app.post("/portal/tickets")
@@ -6673,6 +6733,8 @@ def register_routes(app: Flask) -> None:
         )
         current_year = date.today().year
 
+        publishable_key = get_stripe_publishable_key()
+
         return render_template(
             "admin_client_account.html",
             client=client,
@@ -6703,7 +6765,7 @@ def register_routes(app: Flask) -> None:
             latest_acknowledgement=latest_acknowledgement,
             current_year=current_year,
             stripe_ready=stripe_active(),
-            stripe_publishable_key=current_app.config.get("STRIPE_PUBLISHABLE_KEY"),
+            stripe_publishable_key=publishable_key,
             assigned_uisp_devices=assigned_uisp_devices,
             available_uisp_devices=available_uisp_devices,
             network_towers=network_towers,
