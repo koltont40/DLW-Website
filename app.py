@@ -9232,14 +9232,27 @@ def register_routes(app: Flask) -> None:
                 "stable",
             )
 
+            alnum_tokens = set(re.findall(r"[a-z0-9]+", normalized))
             tokens = normalized.split()
             for marker in offline_markers:
                 marker_compact = marker.replace(" ", "")
-                if marker in normalized or marker_compact in compact or marker in tokens:
+                marker_tokens = marker.split()
+                if (
+                    marker in normalized
+                    or marker_compact in compact
+                    or marker in tokens
+                    or all(token in alnum_tokens for token in marker_tokens)
+                ):
                     return "offline"
             for marker in online_markers:
                 marker_compact = marker.replace(" ", "")
-                if marker in normalized or marker_compact in compact or marker in tokens:
+                marker_tokens = marker.split()
+                if (
+                    marker in normalized
+                    or marker_compact in compact
+                    or marker in tokens
+                    or all(token in alnum_tokens for token in marker_tokens)
+                ):
                     return "online"
             return None
 
@@ -9249,18 +9262,28 @@ def register_routes(app: Flask) -> None:
                 "heartbeatAt",
                 "timestamp",
                 "time",
+                "timestampMs",
+                "timestamp_ms",
                 "lastSeen",
                 "last_seen",
+                "lastSeenMs",
+                "last_seen_ms",
                 "seenAt",
                 "seen_at",
                 "lastSeenAt",
                 "last_seen_at",
                 "lastContact",
                 "last_contact",
+                "lastContactMs",
+                "last_contact_ms",
                 "lastContactAt",
                 "last_contact_at",
                 "lastHeartbeat",
                 "last_heartbeat",
+                "lastHeartbeatAt",
+                "last_heartbeat_at",
+                "lastHeartbeatMs",
+                "last_heartbeat_ms",
                 "lastCommunication",
                 "last_communication",
                 "lastCommunicationAt",
@@ -9280,6 +9303,8 @@ def register_routes(app: Flask) -> None:
                 for key in (
                     "timestamp",
                     "time",
+                    "timestampMs",
+                    "timestamp_ms",
                     "lastSeen",
                     "last_seen",
                     "heartbeatAt",
@@ -9287,10 +9312,16 @@ def register_routes(app: Flask) -> None:
                     "last_seen_at",
                     "lastContact",
                     "last_contact",
+                    "lastContactMs",
+                    "last_contact_ms",
                     "lastContactAt",
                     "last_contact_at",
                     "lastHeartbeat",
                     "last_heartbeat",
+                    "lastHeartbeatAt",
+                    "last_heartbeat_at",
+                    "lastHeartbeatMs",
+                    "last_heartbeat_ms",
                     "lastCommunication",
                     "last_communication",
                     "lastCommunicationAt",
@@ -9305,6 +9336,11 @@ def register_routes(app: Flask) -> None:
                     timestamp = parse_uisp_timestamp(status_field.get(key))  # type: ignore[arg-type]
                     if timestamp:
                         return timestamp
+            heartbeat_field = record.get("heartbeat")
+            if isinstance(heartbeat_field, dict):
+                nested_timestamp = _extract_heartbeat_timestamp(heartbeat_field)
+                if nested_timestamp:
+                    return nested_timestamp
             return None
 
         heartbeat_index: dict[str, dict] = {}
@@ -9325,6 +9361,7 @@ def register_routes(app: Flask) -> None:
                 record.get("uid"),
                 record.get("id"),
                 record.get("_id"),
+                record.get("device_uid"),
             ]
             device_info = record.get("device")
             if isinstance(device_info, dict):
@@ -9335,6 +9372,8 @@ def register_routes(app: Flask) -> None:
                         device_info.get("uid"),
                         device_info.get("deviceId"),
                         device_info.get("device_id"),
+                        device_info.get("deviceUid"),
+                        device_info.get("device_uid"),
                     ]
                 )
                 identification_info = device_info.get("identification")
@@ -9346,6 +9385,8 @@ def register_routes(app: Flask) -> None:
                             identification_info.get("uid"),
                             identification_info.get("deviceId"),
                             identification_info.get("device_id"),
+                            identification_info.get("deviceUid"),
+                            identification_info.get("device_uid"),
                         ]
                     )
                     for key in ("mac", "macAddress", "mac_address"):
@@ -9460,7 +9501,15 @@ def register_routes(app: Flask) -> None:
                     if fallback_mac_normalized:
                         heartbeat_entry = heartbeat_mac_index.get(fallback_mac_normalized)
 
-            status_info = entry.get("status") or {}
+            status_source = entry.get("status")
+            status_info: dict[str, object] = (
+                status_source.copy() if isinstance(status_source, dict) else {}
+            )
+            heartbeat_info = entry.get("heartbeat")
+            if isinstance(heartbeat_info, dict):
+                merged = status_info.copy()
+                merged.update({k: v for k, v in heartbeat_info.items() if k not in merged})
+                status_info = merged
             status_value = (
                 _normalize_status_value(status_info.get("value"))
                 or _normalize_status_value(status_info.get("state"))
@@ -9469,6 +9518,7 @@ def register_routes(app: Flask) -> None:
                 or _normalize_status_value(status_info.get("connectionState"))
                 or _normalize_status_value(status_info.get("connection_state"))
                 or _normalize_status_value(status_info.get("connectionStatus"))
+                or _normalize_status_value(status_info.get("connection_status"))
                 or _normalize_status_value(status_info.get("connectionStatusLabel"))
                 or _normalize_status_value(status_info.get("stateLabel"))
                 or _normalize_status_value(status_info.get("statusLabel"))
@@ -9477,14 +9527,30 @@ def register_routes(app: Flask) -> None:
                 or _normalize_status_value(status_info.get("health"))
                 or _normalize_status_value(status_info.get("healthStatus"))
                 or _normalize_status_value(status_info.get("health_status"))
-                or _normalize_status_value(status_info.get("heartbeatStatus"))
-                or _normalize_status_value(status_info.get("heartbeat_status"))
+                or _normalize_status_value(status_info.get("availability"))
                 or _normalize_status_value(status_info.get("online"))
                 or _normalize_status_value(status_info.get("isOnline"))
                 or _normalize_status_value(status_info.get("connected"))
-                or _normalize_status_value(status_info.get("availability"))
-                or _normalize_status_value(status_info)
+                or _normalize_status_value(status_info.get("heartbeatStatus"))
+                or _normalize_status_value(status_info.get("heartbeat_status"))
+                or _normalize_status_value(heartbeat_info.get("status") if isinstance(heartbeat_info, dict) else None)
+                or _normalize_status_value(heartbeat_info.get("state") if isinstance(heartbeat_info, dict) else None)
+                or _normalize_status_value(heartbeat_info.get("value") if isinstance(heartbeat_info, dict) else None)
+                or _normalize_status_value(status_source)
                 or _normalize_status_value(entry.get("status"))
+                or _normalize_status_value(entry.get("state"))
+                or _normalize_status_value(entry.get("value"))
+                or _normalize_status_value(entry.get("connection"))
+                or _normalize_status_value(entry.get("connectionState"))
+                or _normalize_status_value(entry.get("connection_state"))
+                or _normalize_status_value(entry.get("connectionStatus"))
+                or _normalize_status_value(entry.get("connection_status"))
+                or _normalize_status_value(entry.get("availability"))
+                or _normalize_status_value(entry.get("online"))
+                or _normalize_status_value(entry.get("isOnline"))
+                or _normalize_status_value(entry.get("connected"))
+                or _normalize_status_value(entry.get("heartbeatStatus"))
+                or _normalize_status_value(entry.get("heartbeat_status"))
                 or "unknown"
             )
 
@@ -9493,24 +9559,72 @@ def register_routes(app: Flask) -> None:
                 or status_info.get("last_seen")
                 or status_info.get("lastSeenAt")
                 or status_info.get("last_seen_at")
+                or status_info.get("lastSeenMs")
+                or status_info.get("last_seen_ms")
                 or status_info.get("lastContact")
                 or status_info.get("last_contact")
+                or status_info.get("lastContactMs")
+                or status_info.get("last_contact_ms")
                 or status_info.get("lastContactAt")
                 or status_info.get("last_contact_at")
                 or status_info.get("lastHeartbeat")
                 or status_info.get("last_heartbeat")
+                or status_info.get("lastHeartbeatAt")
+                or status_info.get("last_heartbeat_at")
+                or status_info.get("lastHeartbeatMs")
+                or status_info.get("last_heartbeat_ms")
+                or status_info.get("heartbeatAt")
+                or status_info.get("heartbeat_at")
+                or status_info.get("heartbeatAtMs")
+                or status_info.get("heartbeat_at_ms")
                 or status_info.get("lastCommunication")
                 or status_info.get("last_communication")
                 or status_info.get("lastCommunicationAt")
                 or status_info.get("last_communication_at")
+                or status_info.get("lastCommunicationMs")
+                or status_info.get("last_communication_ms")
                 or status_info.get("lastReachable")
                 or status_info.get("last_reachable")
                 or status_info.get("lastReachableAt")
                 or status_info.get("last_reachable_at")
+                or status_info.get("lastReachableMs")
+                or status_info.get("last_reachable_ms")
                 or status_info.get("connectedAt")
                 or status_info.get("connected_at")
+                or status_info.get("connectedAtMs")
+                or status_info.get("connected_at_ms")
                 or status_info.get("updatedAt")
                 or status_info.get("updated_at")
+                or status_info.get("timestamp")
+                or status_info.get("timestampMs")
+                or status_info.get("timestamp_ms")
+                or (heartbeat_info.get("timestamp") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("timestampMs") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("timestamp_ms") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastSeen") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_seen") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastSeenAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_seen_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastContact") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_contact") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastContactAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_contact_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastHeartbeat") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_heartbeat") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastHeartbeatAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_heartbeat_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastCommunication") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_communication") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastCommunicationAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_communication_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastReachable") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_reachable") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("lastReachableAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("last_reachable_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("connectedAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("connected_at") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("updatedAt") if isinstance(heartbeat_info, dict) else None)
+                or (heartbeat_info.get("updated_at") if isinstance(heartbeat_info, dict) else None)
                 or entry.get("lastSeen")
                 or entry.get("last_seen")
                 or entry.get("lastSeenAt")
@@ -9533,6 +9647,9 @@ def register_routes(app: Flask) -> None:
                 or entry.get("connected_at")
                 or entry.get("updatedAt")
                 or entry.get("updated_at")
+                or entry.get("timestamp")
+                or entry.get("timestampMs")
+                or entry.get("timestamp_ms")
             )
 
             heartbeat_status_value: str | None = None
@@ -9544,7 +9661,9 @@ def register_routes(app: Flask) -> None:
                     "value",
                     "connection",
                     "connectionState",
+                    "connection_status",
                     "heartbeatStatus",
+                    "heartbeat_status",
                     "stateLabel",
                     "statusLabel",
                     "statusText",
@@ -9556,12 +9675,22 @@ def register_routes(app: Flask) -> None:
                     "online",
                     "isOnline",
                     "connected",
+                    "heartbeat",
                 ):
                     heartbeat_status_value = _normalize_status_value(
                         heartbeat_entry.get(key)
                     )
                     if heartbeat_status_value:
                         break
+                if not heartbeat_status_value:
+                    heartbeat_field = heartbeat_entry.get("heartbeat")
+                    if isinstance(heartbeat_field, dict):
+                        for key in ("status", "state", "value", "connection"):
+                            heartbeat_status_value = _normalize_status_value(
+                                heartbeat_field.get(key)
+                            )
+                            if heartbeat_status_value:
+                                break
                 heartbeat_seen = _extract_heartbeat_timestamp(heartbeat_entry)
                 if heartbeat_seen and (
                     last_seen is None or heartbeat_seen > last_seen
