@@ -112,7 +112,12 @@
   (() => {
     const publishableKey = "{{ stripe_publishable_key }}";
     const clientSecret = "{{ payment_intent_client_secret }}";
+    const errorField = document.getElementById("portal-payment-errors");
     if (!publishableKey || !clientSecret) {
+      if (errorField) {
+        errorField.textContent =
+          "Online payments are unavailable because Stripe is not configured.";
+      }
       return;
     }
     const stripe = Stripe(publishableKey);
@@ -130,23 +135,29 @@
     paymentElement.mount("#portal-payment-element");
     const form = document.getElementById("portal-payment-form");
     const submitButton = document.getElementById("portal-payment-submit");
-    const errorField = document.getElementById("portal-payment-errors");
+    const toOptionalValue = (value) => {
+      if (typeof value !== "string") {
+        return undefined;
+      }
+      const trimmed = value.trim();
+      return trimmed.length ? trimmed : undefined;
+    };
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       submitButton.disabled = true;
       errorField.textContent = "";
       const formData = new FormData(form);
       const billingDetails = {
-        name: formData.get("billing_name")?.trim() || undefined,
-        email: formData.get("billing_email")?.trim() || undefined,
-        phone: formData.get("billing_phone")?.trim() || undefined,
+        name: toOptionalValue(formData.get("billing_name")),
+        email: toOptionalValue(formData.get("billing_email")),
+        phone: toOptionalValue(formData.get("billing_phone")),
         address: {
-          line1: formData.get("billing_line1")?.trim() || undefined,
-          line2: formData.get("billing_line2")?.trim() || undefined,
-          city: formData.get("billing_city")?.trim() || undefined,
-          state: formData.get("billing_state")?.trim() || undefined,
-          postal_code: formData.get("billing_postal_code")?.trim() || undefined,
-          country: formData.get("billing_country")?.trim() || undefined,
+          line1: toOptionalValue(formData.get("billing_line1")),
+          line2: toOptionalValue(formData.get("billing_line2")),
+          city: toOptionalValue(formData.get("billing_city")),
+          state: toOptionalValue(formData.get("billing_state")),
+          postal_code: toOptionalValue(formData.get("billing_postal_code")),
+          country: toOptionalValue(formData.get("billing_country")),
         },
       };
       const address = billingDetails.address;
