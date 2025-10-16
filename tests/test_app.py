@@ -37,6 +37,8 @@ from app import (
     StripeConfig,
     NotificationConfig,
     UispDevice,
+    UispConfig,
+    NetworkTower,
     create_app,
     db,
     get_install_photo_category_choices,
@@ -1276,9 +1278,6 @@ def test_admin_adds_equipment_from_account_view(app, client):
 def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypatch):
     login_admin(client)
 
-    app.config["UISP_BASE_URL"] = "https://uisp.example.com"
-    app.config["UISP_API_TOKEN"] = "token"
-
     sent_notifications: list[tuple[str, str, str]] = []
 
     def fake_send_email(app_obj, recipient, subject, body):
@@ -1326,8 +1325,11 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
     monkeypatch.setattr(app_module.requests, "get", fake_get)
 
     with app.app_context():
+        config = UispConfig(base_url="https://uisp.example.com", api_token="token")
+        north_tower = NetworkTower(name="North Tower", location="Hilltop bluff")
+        lake_tower = NetworkTower(name="Lake Tower", location="Reservoir access road")
         customer = Client(name="Managed Customer", email="managed@example.com", status="Active")
-        db.session.add(customer)
+        db.session.add_all([config, north_tower, lake_tower, customer])
         technician = Technician(
             name="Network Tech",
             email="tech@example.com",
@@ -1337,14 +1339,21 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
         db.session.add(technician)
         db.session.commit()
         customer_id = customer.id
+        north_tower_id = north_tower.id
+        lake_tower_id = lake_tower.id
 
     response = client.post("/uisp/devices/import", follow_redirects=True)
     assert response.status_code == 200
     assert sent_notifications
 
     with app.app_context():
+        config = UispConfig.query.first()
+        assert config is not None
+        assert config.last_synced_at is not None
         devices = UispDevice.query.order_by(UispDevice.uisp_id.asc()).all()
         assert len(devices) == 2
+        online_device = next(device for device in devices if device.uisp_id == "device-1")
+        assert online_device.tower_id == north_tower_id
         offline_device = next(device for device in devices if device.uisp_id == "device-2")
         assert offline_device.status == "offline"
         assert offline_device.outage_notified_at is not None
@@ -1363,6 +1372,7 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
             "client_id": str(customer_id),
             "nickname": "Backhaul",
             "notes": "Feeds subdivision",
+            "tower_id": str(lake_tower_id),
             "next": account_url,
         },
         follow_redirects=True,
@@ -1374,6 +1384,7 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
         assert device.client_id == customer_id
         assert device.nickname == "Backhaul"
         assert device.notes == "Feeds subdivision"
+        assert device.tower_id == lake_tower_id
 
     payload_holder["data"][1]["status"] = {"value": "online", "lastSeen": "2024-05-01T12:30:00Z"}
     client.post("/uisp/devices/import", follow_redirects=True)
@@ -1391,10 +1402,11 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
     account_view = client.get(account_url)
     assert account_view.status_code == 200
     assert b"Backhaul" in account_view.data
+    assert b"Lake Tower" in account_view.data
 
     unassign_response = client.post(
         f"/uisp/devices/{offline_id}/assign",
-        data={"client_id": "", "next": account_url},
+        data={"client_id": "", "tower_id": "", "next": account_url},
         follow_redirects=True,
     )
     assert unassign_response.status_code == 200
@@ -1402,6 +1414,80 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
     with app.app_context():
         device = UispDevice.query.get(offline_id)
         assert device.client_id is None
+        assert device.tower_id is None
+
+
+def test_admin_manages_uisp_settings_and_towers(app, client):
+    login_admin(client)
+
+    settings_response = client.post(
+        "/uisp/config",
+        data={
+            "base_url": "https://uisp.ops",
+            "api_token": "secret-token",
+            "auto_sync_enabled": "on",
+            "auto_sync_interval": "90",
+        },
+        follow_redirects=True,
+    )
+    assert settings_response.status_code == 200
+
+    create_response = client.post(
+        "/network/towers",
+        data={
+            "name": "River Tower",
+            "location": "Bayou Road",
+            "notes": "Primary uplink",
+        },
+        follow_redirects=True,
+    )
+    assert create_response.status_code == 200
+
+    with app.app_context():
+        config = UispConfig.query.first()
+        assert config is not None
+        assert config.base_url == "https://uisp.ops"
+        assert config.api_token == "secret-token"
+        assert config.auto_sync_enabled is True
+        assert config.auto_sync_interval_minutes == 90
+
+        tower = NetworkTower.query.filter_by(name="River Tower").first()
+        assert tower is not None
+        tower_id = tower.id
+
+        device = UispDevice(uisp_id="tower-test", name="Tower Device", tower=tower)
+        db.session.add(device)
+        db.session.commit()
+        device_id = device.id
+
+    update_response = client.post(
+        f"/network/towers/{tower_id}/update",
+        data={
+            "name": "Riverfront Tower",
+            "location": "Bayou Road",
+            "notes": "Updated notes",
+        },
+        follow_redirects=True,
+    )
+    assert update_response.status_code == 200
+
+    with app.app_context():
+        tower = NetworkTower.query.get(tower_id)
+        assert tower is not None
+        assert tower.name == "Riverfront Tower"
+        assert tower.notes == "Updated notes"
+
+    delete_response = client.post(
+        f"/network/towers/{tower_id}/delete",
+        follow_redirects=True,
+    )
+    assert delete_response.status_code == 200
+
+    with app.app_context():
+        assert NetworkTower.query.get(tower_id) is None
+        device = UispDevice.query.get(device_id)
+        assert device is not None
+        assert device.tower_id is None
 
 
 def test_admin_schedules_appointment_from_account_view(app, client):

@@ -1358,6 +1358,24 @@ class Equipment(db.Model):
         return f"<Equipment {self.name} for client {self.client_id}>"
 
 
+class NetworkTower(db.Model):
+    __tablename__ = "network_towers"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    location = db.Column(db.String(255))
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    devices = db.relationship("UispDevice", back_populates="tower")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<NetworkTower {self.name}>"
+
+
 class UispDevice(db.Model):
     __tablename__ = "uisp_devices"
 
@@ -1373,6 +1391,7 @@ class UispDevice(db.Model):
     last_seen_at = db.Column(db.DateTime(timezone=True))
     firmware_version = db.Column(db.String(64))
     client_id = db.Column(db.Integer, db.ForeignKey("clients.id"))
+    tower_id = db.Column(db.Integer, db.ForeignKey("network_towers.id"))
     notes = db.Column(db.Text)
     outage_notified_at = db.Column(db.DateTime(timezone=True))
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
@@ -1381,6 +1400,7 @@ class UispDevice(db.Model):
     )
 
     client = db.relationship("Client", back_populates="uisp_devices")
+    tower = db.relationship("NetworkTower", back_populates="devices")
 
     def display_name(self) -> str:
         return self.nickname or self.name
@@ -1744,6 +1764,23 @@ class NotificationConfig(db.Model):
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return "<NotificationConfig>"
+
+
+class UispConfig(db.Model):
+    __tablename__ = "uisp_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    base_url = db.Column(db.String(255))
+    api_token = db.Column(db.String(255))
+    auto_sync_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    auto_sync_interval_minutes = db.Column(db.Integer, nullable=False, default=30)
+    last_synced_at = db.Column(db.DateTime(timezone=True))
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return "<UispConfig>"
 
 
 class TLSConfig(db.Model):
@@ -3407,17 +3444,27 @@ def register_routes(app: Flask) -> None:
 
         return document, upload_folder, file_path
 
+    def _get_uisp_config() -> UispConfig | None:
+        return UispConfig.query.order_by(UispConfig.id.asc()).first()
+
+    def _resolve_uisp_credentials() -> tuple[str | None, str | None, UispConfig | None]:
+        config = _get_uisp_config()
+        base_url = (config.base_url or "").strip() if config else ""
+        api_token = (config.api_token or "").strip() if config else ""
+        if not base_url:
+            base_url = (app.config.get("UISP_BASE_URL") or "").strip()
+        if not api_token:
+            api_token = (app.config.get("UISP_API_TOKEN") or "").strip()
+        return base_url or None, api_token or None, config
+
     def _build_uisp_client() -> UispApiClient:
         timeout_value = app.config.get("UISP_API_TIMEOUT", 10.0)
         try:
             timeout = float(timeout_value)
         except (TypeError, ValueError):
             timeout = 10.0
-        return UispApiClient(
-            app.config.get("UISP_BASE_URL"),
-            app.config.get("UISP_API_TOKEN"),
-            timeout=timeout,
-        )
+        base_url, api_token, _ = _resolve_uisp_credentials()
+        return UispApiClient(base_url or "", api_token or "", timeout=timeout)
 
     def _collect_outage_recipients(device: UispDevice) -> list[str]:
         recipients: set[str] = set()
@@ -5170,6 +5217,8 @@ def register_routes(app: Flask) -> None:
         office365_ready = False
         uisp_devices: list[UispDevice] = []
         unassigned_uisp_devices: list[UispDevice] = []
+        network_towers: list[NetworkTower] = []
+        uisp_config: UispConfig | None = None
         if active_section in {
             "customers",
             "billing",
@@ -5198,6 +5247,10 @@ def register_routes(app: Flask) -> None:
             unassigned_uisp_devices = [
                 device for device in uisp_devices if device.client_id is None
             ]
+            network_towers = (
+                NetworkTower.query.order_by(NetworkTower.name.asc()).all()
+            )
+            uisp_config = _get_uisp_config()
 
         if active_section == "story":
             team_members = (
@@ -5588,6 +5641,8 @@ def register_routes(app: Flask) -> None:
             tls_challenge_folder=tls_challenge_folder,
             uisp_devices=uisp_devices,
             unassigned_uisp_devices=unassigned_uisp_devices,
+            network_towers=network_towers,
+            uisp_config=uisp_config,
             admin_users=admin_users,
             current_admin_id=session.get("admin_user_id"),
             site_theme=site_theme,
@@ -5636,6 +5691,9 @@ def register_routes(app: Flask) -> None:
             Appointment.query.filter_by(client_id=client.id)
             .order_by(Appointment.scheduled_for.desc())
             .all()
+        )
+        network_towers = (
+            NetworkTower.query.order_by(NetworkTower.name.asc()).all()
         )
 
         current_time = utcnow()
@@ -5779,6 +5837,7 @@ def register_routes(app: Flask) -> None:
             stripe_publishable_key=current_app.config.get("STRIPE_PUBLISHABLE_KEY"),
             assigned_uisp_devices=assigned_uisp_devices,
             available_uisp_devices=available_uisp_devices,
+            network_towers=network_towers,
         )
 
     @app.post("/documents/upload")
@@ -6741,13 +6800,107 @@ def register_routes(app: Flask) -> None:
         flash("Refund initiated with Stripe.", "success")
         return _redirect_back_to_dashboard("billing", focus=invoice.client_id)
 
+    @app.post("/uisp/config")
+    @login_required
+    def update_uisp_config():
+        base_url = (request.form.get("base_url") or "").strip()
+        api_token = (request.form.get("api_token") or "").strip()
+        auto_sync_enabled = is_truthy(request.form.get("auto_sync_enabled"))
+        interval_raw = (request.form.get("auto_sync_interval") or "").strip()
+
+        if interval_raw:
+            try:
+                interval = int(interval_raw)
+            except ValueError:
+                flash("Sync interval must be a valid number of minutes.", "danger")
+                return _redirect_back_to_dashboard("network")
+        else:
+            interval = 30
+
+        interval = max(5, min(interval, 1440))
+
+        config = _get_uisp_config()
+        if not config:
+            config = UispConfig()
+            db.session.add(config)
+
+        config.base_url = base_url or None
+        config.api_token = api_token or None
+        config.auto_sync_enabled = auto_sync_enabled
+        config.auto_sync_interval_minutes = interval
+        config.updated_at = utcnow()
+        db.session.commit()
+
+        if base_url:
+            app.config["UISP_BASE_URL"] = base_url
+        if api_token:
+            app.config["UISP_API_TOKEN"] = api_token
+
+        flash("UISP settings updated.", "success")
+        return _redirect_back_to_dashboard("network")
+
+    @app.post("/network/towers")
+    @login_required
+    def create_network_tower():
+        name = (request.form.get("name") or "").strip()
+        location = (request.form.get("location") or "").strip() or None
+        notes = (request.form.get("notes") or "").strip() or None
+
+        if not name:
+            flash("Tower name is required.", "danger")
+            return _redirect_back_to_dashboard("network")
+
+        tower = NetworkTower(name=name, location=location, notes=notes)
+        db.session.add(tower)
+        db.session.commit()
+
+        flash(f"Tower {tower.name} added.", "success")
+        return _redirect_back_to_dashboard("network")
+
+    @app.post("/network/towers/<int:tower_id>/update")
+    @login_required
+    def update_network_tower(tower_id: int):
+        tower = NetworkTower.query.get_or_404(tower_id)
+        name = (request.form.get("name") or "").strip()
+        location = (request.form.get("location") or "").strip() or None
+        notes = (request.form.get("notes") or "").strip() or None
+
+        if not name:
+            flash("Tower name is required.", "danger")
+            return _redirect_back_to_dashboard("network")
+
+        tower.name = name
+        tower.location = location
+        tower.notes = notes
+        tower.updated_at = utcnow()
+        db.session.commit()
+
+        flash("Tower details updated.", "success")
+        return _redirect_back_to_dashboard("network")
+
+    @app.post("/network/towers/<int:tower_id>/delete")
+    @login_required
+    def delete_network_tower(tower_id: int):
+        tower = NetworkTower.query.get_or_404(tower_id)
+        for device in tower.devices:
+            device.tower = None
+            device.updated_at = utcnow()
+        db.session.delete(tower)
+        db.session.commit()
+
+        flash("Tower removed.", "info")
+        return _redirect_back_to_dashboard("network")
+
     @app.post("/uisp/devices/import")
     @login_required
     def import_uisp_devices():
         try:
             api_client = _build_uisp_client()
-        except UispApiError as exc:
-            flash(str(exc), "danger")
+        except UispApiError:
+            flash(
+                "Add your UISP base URL and API token before syncing devices.",
+                "danger",
+            )
             return _redirect_back_to_dashboard("network")
 
         try:
@@ -6773,6 +6926,11 @@ def register_routes(app: Flask) -> None:
         updated = 0
         outages = 0
         now = utcnow()
+        _, _, config = _resolve_uisp_credentials()
+        towers_by_name = {
+            tower.name.lower(): tower
+            for tower in NetworkTower.query.order_by(NetworkTower.name.asc()).all()
+        }
 
         for entry in payload:
             uisp_id = _clean_string(entry.get("id") or entry.get("_id"))
@@ -6853,6 +7011,11 @@ def register_routes(app: Flask) -> None:
             device.last_seen_at = last_seen
             device.updated_at = now
 
+            if site_name and not device.tower_id:
+                matched = towers_by_name.get(site_name.lower())
+                if matched:
+                    device.tower = matched
+
             status_changed = previous_status != status_value
             device.status = status_value
 
@@ -6885,6 +7048,7 @@ def register_routes(app: Flask) -> None:
                         "Hello,\n\n"
                         f"UISP has reported that {device.display_name()} is offline.\n"
                         f"Site: {device.site_name or 'Unknown'}\n"
+                        f"Tower: {device.tower.name if device.tower else 'Unassigned'}\n"
                         f"IP address: {device.ip_address or 'N/A'}\n"
                         f"MAC address: {device.mac_address or 'N/A'}\n"
                         f"Last seen: {_format_last_seen(device.last_seen_at)}\n"
@@ -6904,6 +7068,11 @@ def register_routes(app: Flask) -> None:
                 device.outage_notified_at = None
 
         db.session.commit()
+
+        if config:
+            config.last_synced_at = now
+            config.updated_at = now
+            db.session.commit()
 
         flash(
             (
@@ -6927,6 +7096,7 @@ def register_routes(app: Flask) -> None:
         nickname = (request.form.get("nickname") or "").strip() or None
         notes = (request.form.get("notes") or "").strip() or None
         client_id_raw = (request.form.get("client_id") or "").strip()
+        tower_id_raw = (request.form.get("tower_id") or "").strip()
 
         target_client: Client | None = None
         if client_id_raw:
@@ -6941,10 +7111,24 @@ def register_routes(app: Flask) -> None:
                 flash("The selected customer could not be found.", "danger")
                 return _redirect_back_to_dashboard("network")
 
+        target_tower: NetworkTower | None = None
+        if tower_id_raw:
+            try:
+                tower_id = int(tower_id_raw)
+            except (TypeError, ValueError):
+                flash("Select a valid tower for this device.", "danger")
+                return _redirect_back_to_dashboard("network")
+            target_tower = NetworkTower.query.get(tower_id)
+            if not target_tower:
+                flash("The selected tower could not be found.", "danger")
+                return _redirect_back_to_dashboard("network")
+
         previous_client_id = device.client_id
+        previous_tower_id = device.tower_id
         device.nickname = nickname
         device.notes = notes
         device.client_id = target_client.id if target_client else None
+        device.tower = target_tower
         device.updated_at = utcnow()
 
         if device.status == "online" and target_client is None:
@@ -6952,18 +7136,21 @@ def register_routes(app: Flask) -> None:
 
         db.session.commit()
 
+        messages: list[str] = []
         if target_client and target_client.id != previous_client_id:
-            flash(
-                f"{device.display_name()} assigned to {target_client.name}.",
-                "success",
-            )
+            messages.append(f"{device.display_name()} assigned to {target_client.name}.")
         elif target_client is None and previous_client_id is not None:
-            flash(
-                f"{device.display_name()} is now unassigned.",
-                "info",
-            )
-        else:
-            flash("UISP device details updated.", "success")
+            messages.append(f"{device.display_name()} is now unassigned.")
+
+        if target_tower and target_tower.id != previous_tower_id:
+            messages.append(f"Linked to tower {target_tower.name}.")
+        elif target_tower is None and previous_tower_id is not None:
+            messages.append("Removed from its tower assignment.")
+
+        if not messages:
+            messages.append("UISP device details updated.")
+
+        flash(" ".join(messages), "success")
 
         return _redirect_back_to_dashboard("network")
 
