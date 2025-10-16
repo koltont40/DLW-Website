@@ -2358,6 +2358,7 @@ a.trusted-logo:hover {
   margin-top: 1rem;
 }
 
+
 .record-list {
   display: flex;
   flex-direction: column;
@@ -5222,6 +5223,296 @@ a.trusted-logo:hover {
 
 .inline-link:hover {
   color: var(--secondary);
+}
+
+/* Compact layout adjustments across the public site and portals */
+:root {
+  --compact-gap: clamp(0.65rem, 1.9vw, 1.1rem);
+  --compact-card-padding: clamp(1rem, 1.6vw, 1.35rem);
+  --compact-section-padding: clamp(1.4rem, 3.4vw, 2.1rem);
+  --compact-radius: 16px;
+}
+
+body {
+  font-size: clamp(0.95rem, 0.93rem + 0.12vw, 1rem);
+  line-height: 1.55;
+}
+
+.container {
+  width: min(960px, 90vw);
+}
+
+.main-content {
+  padding: calc(var(--compact-section-padding) * 1.1) 0
+    calc(var(--compact-section-padding) * 1.4);
+}
+
+.page-surface {
+  gap: clamp(1.2rem, 2.4vw, 2rem);
+  padding: 0 0 clamp(1rem, 1.6vw, 1.5rem);
+}
+
+.page-surface > * {
+  padding: clamp(1.2rem, 2.1vw, 2rem);
+  border-radius: clamp(14px, 1.6vw, 22px);
+}
+
+section {
+  padding: var(--compact-section-padding) 0;
+}
+
+.hero {
+  padding: calc(var(--compact-section-padding) * 0.85) 0
+    calc(var(--compact-section-padding) * 1.05);
+}
+
+.features,
+.trusted,
+.allies {
+  padding: calc(var(--compact-section-padding) * 0.85) 0;
+}
+
+.features-grid {
+  margin-top: clamp(1rem, 2.4vw, 1.6rem);
+}
+
+.features article {
+  padding: clamp(1.1rem, 2.2vw, 1.6rem);
+  border-radius: 14px;
+}
+
+.trusted-card {
+  gap: clamp(0.8rem, 1.8vw, 1.2rem);
+}
+
+.cta {
+  padding: calc(var(--compact-section-padding) * 0.85) 0;
+}
+
+.hero-grid,
+.hero-actions,
+.features-grid,
+.trusted-grid,
+.partner-grid,
+.cta-actions,
+.dashboard-layout,
+.dashboard-main,
+.dashboard-secondary,
+.card-grid,
+.form-section,
+.form-card,
+.form-grid,
+.field-grid,
+.field-checklist-manager,
+.field-checklist-manager .form-row,
+.metrics,
+.record-list,
+.record-row,
+.inline-field,
+.section-header,
+.section-actions,
+.client-portal-management .client-portal-list,
+.client-portal-summary,
+.client-portal-body,
+.client-portal-metrics,
+.tech-portal,
+.tech-header,
+.tech-quick-links,
+.tech-summary,
+.tech-section,
+.tech-section-header,
+.requirement-list,
+.requirement-item,
+.navigation-list,
+.support-grid,
+.summary-tile,
+.dashboard-header {
+  gap: var(--compact-gap);
+}
+
+.hero-message,
+.hero-card,
+.cta-card,
+.trusted-card,
+.allies-card,
+.card,
+.table-card,
+.plan-choice-card,
+.summary-card,
+.overview-card,
+.portal-card,
+.tech-section,
+.tech-auth,
+.requirement-item,
+.record-row,
+.client-portal-item,
+.client-portal-body {
+  padding: var(--compact-card-padding);
+  border-radius: var(--compact-radius);
+}
+
+.hero-message {
+  box-shadow: 0 32px 70px -48px rgba(15, 6, 40, 0.8);
+}
+
+.hero h1 {
+  font-size: clamp(2.15rem, 4.6vw, 3.05rem);
+  margin-bottom: 0.75rem;
+}
+
+.lead {
+  font-size: 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.button {
+  padding: 0.6rem 1.2rem;
+}
+
+.button.small {
+  padding: 0.3rem 0.7rem;
+}
+
+.cta-card h2,
+.trusted-header h2,
+.allies-header h2,
+.dashboard-header h1,
+.tech-header h1,
+.tech-section-header h2 {
+  margin-bottom: 0.35rem;
+}
+
+.trusted-card,
+.allies-card {
+  padding: calc(var(--compact-card-padding) * 1.05);
+}
+
+.partner-tile,
+.trusted-item,
+.summary-tile {
+  padding: calc(var(--compact-card-padding) * 0.8);
+}
+
+.partner-content p,
+.trusted-card p,
+.cta-card p,
+.client-portal-column p,
+.tech-section p,
+.dashboard-main p {
+  margin-bottom: 0.65rem;
+}
+
+.partner-grid,
+.trusted-grid {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.client-portal-item > summary {
+  padding: 1rem 1.25rem;
+}
+
+.client-portal-body {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.client-portal-metrics span {
+  padding: 0.3rem 0.6rem;
+}
+
+.record-row {
+  padding: 0.85rem;
+}
+
+.field-checklist-manager {
+  margin-top: 1.1rem;
+  padding-top: 1.1rem;
+}
+
+.metrics {
+  margin-bottom: 1.15rem;
+}
+
+.table-card table th,
+.table-card table td {
+  padding: 0.55rem 0.75rem;
+}
+
+.form-card label {
+  gap: 0.3rem;
+}
+
+.form-card input,
+.form-card select,
+.form-card textarea,
+.table-card select,
+.table-card textarea,
+.record-row input,
+.record-row select,
+.record-row textarea,
+.inline-field input,
+.inline-field select,
+.inline-field textarea {
+  padding: 0.6rem 0.7rem;
+}
+
+.tech-auth {
+  max-width: 380px;
+  gap: var(--compact-gap);
+}
+
+.tech-auth-header h1 {
+  font-size: 1.75rem;
+}
+
+.tech-header h1 {
+  font-size: 2rem;
+}
+
+.summary-value {
+  font-size: 1.6rem;
+}
+
+.tech-section {
+  gap: var(--compact-gap);
+}
+
+.tech-quick-links a {
+  padding: 0.35rem 0.75rem;
+}
+
+.dashboard-header {
+  margin-bottom: 1.05rem;
+}
+
+.navigation-list {
+  margin-top: 1.1rem;
+}
+
+.navigation-item input,
+.nav-add-form input {
+  padding: 0.55rem 0.7rem;
+}
+
+.hero-card ul {
+  padding-left: 1rem;
+}
+
+.trusted-header,
+.allies-header {
+  margin-bottom: 0.9rem;
+}
+
+.phone-hero,
+.phone-benefits,
+.phone-plans,
+.phone-cta {
+  margin: clamp(1.2rem, 3vw, 2rem) 0;
+}
+
+.phone-highlight,
+.benefit-card {
+  padding: clamp(1.1rem, 2.2vw, 1.6rem);
+  border-radius: 14px;
 }
 
 @media (max-width: 720px) {

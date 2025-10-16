@@ -409,6 +409,7 @@
 <script>
   (() => {
     const publishableKey = "{{ stripe_publishable_key }}";
+    const loginRedirect = "{{ url_for('portal_login', next=url_for('portal_dashboard')) }}";
     if (!publishableKey) {
       return;
     }
@@ -451,9 +452,16 @@
       updateSaveState();
       try {
         const response = await fetch("{{ url_for('portal_setup_intent') }}", {
-          credentials: "same-origin",
-          headers: { Accept: "application/json" },
+          credentials: "include",
+          headers: {
+            Accept: "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+          },
         });
+        if (response.status === 401) {
+          window.location.href = loginRedirect;
+          return;
+        }
         const data = await response.json().catch(() => ({}));
         if (!response.ok || data.error || !data.client_secret) {
           throw new Error(data.error || "Unable to prepare card entry. Please try again.");
@@ -502,12 +510,24 @@
       if (cardholderDetails.email) {
         billingDetails.email = cardholderDetails.email;
       }
-      const confirmation = await stripe.confirmCardSetup(setupSecret, {
-        payment_method: {
-          card: cardElement,
-          billing_details: billingDetails,
-        },
-      });
+      let confirmation;
+      try {
+        confirmation = await stripe.confirmCardSetup(
+          setupSecret,
+          {
+            payment_method: {
+              card: cardElement,
+              billing_details: billingDetails,
+            },
+            redirect: "if_required",
+          }
+        );
+      } catch (err) {
+        errorField.textContent = err.message || "Unable to save card.";
+        processing = false;
+        updateSaveState();
+        return;
+      }
       if (confirmation.error) {
         errorField.textContent = confirmation.error.message || "Unable to save card.";
         processing = false;
@@ -515,8 +535,14 @@
         return;
       }
       const setupIntent = confirmation.setupIntent;
-      if (!setupIntent || !setupIntent.payment_method) {
-        errorField.textContent = "Stripe did not return a payment method id.";
+      const setupStatus = setupIntent ? setupIntent.status : null;
+      if (
+        !setupIntent ||
+        !setupIntent.payment_method ||
+        (setupStatus !== "succeeded" && setupStatus !== "processing")
+      ) {
+        errorField.textContent =
+          "Stripe did not confirm the card. Please try again.";
         processing = false;
         updateSaveState();
         return;
@@ -524,16 +550,21 @@
       try {
         const response = await fetch("{{ url_for('portal_add_payment_method') }}", {
           method: "POST",
-          credentials: "same-origin",
+          credentials: "include",
           headers: {
             "Content-Type": "application/json",
             Accept: "application/json",
+            "X-Requested-With": "XMLHttpRequest",
           },
           body: JSON.stringify({
             payment_method_id: setupIntent.payment_method,
             set_default: true,
           }),
         });
+        if (response.status === 401) {
+          window.location.href = loginRedirect;
+          return;
+        }
         const result = await response.json().catch(() => ({}));
         if (!response.ok || result.error) {
           throw new Error(result.error || "Unable to save card. Please try again.");
