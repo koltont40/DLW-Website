@@ -9148,12 +9148,73 @@ def register_routes(app: Flask) -> None:
             if not cleaned:
                 return None
             lowered = cleaned.lower()
-            if lowered in {"online", "offline"}:
-                return lowered
-            if "off" in lowered:
-                return "offline"
-            if "on" in lowered:
-                return "online"
+            normalized = re.sub(r"[\s_-]+", " ", lowered).strip()
+            if not normalized:
+                return None
+            if normalized in {"online", "offline"}:
+                return normalized
+            if normalized in {"unknown", "not available", "n/a", "na"}:
+                return None
+
+            compact = normalized.replace(" ", "")
+            offline_markers = (
+                "offline",
+                "off line",
+                "off-line",
+                "disconnected",
+                "disconnect",
+                "not connected",
+                "notconnected",
+                "unconnected",
+                "not reachable",
+                "notreachable",
+                "unreachable",
+                "not responding",
+                "notresponding",
+                "no link",
+                "nolink",
+                "link down",
+                "linkdown",
+                "down",
+                "inactive",
+                "disabled",
+                "degraded",
+                "lost",
+                "never connected",
+                "neverconnected",
+                "never seen",
+                "neverseen",
+                "not operational",
+                "notoperational",
+                "no signal",
+                "nosignal",
+            )
+            online_markers = (
+                "online",
+                "on line",
+                "on-line",
+                "connected",
+                "link up",
+                "linkup",
+                "up",
+                "reachable",
+                "responding",
+                "active",
+                "enabled",
+                "available",
+                "operational",
+                "running",
+            )
+
+            tokens = normalized.split()
+            for marker in offline_markers:
+                marker_compact = marker.replace(" ", "")
+                if marker in normalized or marker_compact in compact or marker in tokens:
+                    return "offline"
+            for marker in online_markers:
+                marker_compact = marker.replace(" ", "")
+                if marker in normalized or marker_compact in compact or marker in tokens:
+                    return "online"
             return None
 
         def _extract_heartbeat_timestamp(record: dict[str, object]) -> datetime | None:
@@ -9326,6 +9387,14 @@ def register_routes(app: Flask) -> None:
             status_value = (
                 _normalize_status_value(status_info.get("value"))
                 or _normalize_status_value(status_info.get("state"))
+                or _normalize_status_value(status_info.get("status"))
+                or _normalize_status_value(status_info.get("connection"))
+                or _normalize_status_value(status_info.get("connectionState"))
+                or _normalize_status_value(status_info.get("connection_state"))
+                or _normalize_status_value(status_info.get("connectionStatus"))
+                or _normalize_status_value(status_info.get("online"))
+                or _normalize_status_value(status_info.get("isOnline"))
+                or _normalize_status_value(status_info.get("connected"))
                 or _normalize_status_value(status_info)
                 or _normalize_status_value(entry.get("status"))
                 or "unknown"
