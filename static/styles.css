@@ -3026,6 +3026,17 @@ a.trusted-logo:hover {
   scroll-margin-top: 110px;
 }
 
+.portal-section.collapsible-card .collapsible-trigger {
+  padding: 1.25rem 1.75rem;
+}
+
+.portal-section.collapsible-card .collapsible-content {
+  padding: 0 1.75rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
 .hidden {
   display: none !important;
 }
@@ -5235,6 +5246,17 @@ a.trusted-logo:hover {
   padding: 2rem;
   border: 1px solid var(--border);
   box-shadow: var(--card-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.tech-section.collapsible-card .collapsible-trigger {
+  padding: 1.75rem 2rem;
+}
+
+.tech-section.collapsible-card .collapsible-content {
+  padding: 0 2rem 2rem;
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
