@@ -1327,6 +1327,21 @@ a.trusted-logo:hover {
   font: inherit;
 }
 
+.collapsible-header {
+  margin-bottom: 0;
+  padding: 0 1.5rem;
+  gap: 1rem;
+}
+
+.collapsible-header .collapsible-trigger {
+  padding: 1.25rem 0;
+  flex: 1;
+}
+
+.collapsible-header .button {
+  white-space: nowrap;
+}
+
 .collapsible-card .collapsible-trigger:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: -4px;
@@ -2063,6 +2078,15 @@ a.trusted-logo:hover {
   padding-top: 1.5rem;
   border-top: 1px solid var(--border);
   display: grid;
+  gap: 1.5rem;
+}
+
+.field-checklist-card.field-checklist-manager {
+  padding-top: 0;
+  border-top: none;
+}
+
+.field-checklist-card .collapsible-content {
   gap: 1.5rem;
 }
 
@@ -4376,6 +4400,10 @@ a.trusted-logo:hover {
   margin-top: 1.5rem;
   display: flex;
   flex-direction: column;
+  gap: 1.5rem;
+}
+
+.operations-allies-card .collapsible-content {
   gap: 1.5rem;
 }
 

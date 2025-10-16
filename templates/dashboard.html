@@ -277,116 +277,152 @@
           </div>
         </article>
       </div>
-      <div class="field-checklist-manager">
-        <div>
-          <h3>Install photo checklist</h3>
-          <p class="subtle">
-            Choose the categories technicians must capture before signing off on an install. Adjust the order to match your
-            workflow.
-          </p>
-        </div>
-        <form class="stacked-form compact" method="post" action="{{ url_for('create_install_photo_requirement') }}">
-          <div class="form-row">
-            <label>
-              Category name
-              <input type="text" name="label" placeholder="Grounding rod" required />
-            </label>
-            <label>
-              Position
-              <input
-                type="number"
-                name="position"
-                min="0"
-                placeholder="{{ install_photo_requirements|length }}"
-              />
-            </label>
-          </div>
-          <div class="record-actions">
-            <button class="button small primary" type="submit">Add requirement</button>
-          </div>
-        </form>
-        {% if install_photo_requirements %}
-        <div class="requirement-list">
-          {% for requirement in install_photo_requirements %}
-          <div class="requirement-item">
-            <form
-              id="update-requirement-{{ requirement.id }}"
-              class="stacked-form compact"
-              method="post"
-              action="{{ url_for('update_install_photo_requirement', requirement_id=requirement.id) }}"
-            >
-              <div class="form-row">
-                <label>
-                  Category name
-                  <input type="text" name="label" value="{{ requirement.label }}" required />
-                </label>
-                <label>
-                  Position
-                  <input type="number" name="position" min="0" value="{{ loop.index0 }}" />
-                </label>
-              </div>
-            </form>
-            <form
-              id="delete-requirement-{{ requirement.id }}"
-              method="post"
-              action="{{ url_for('delete_install_photo_requirement', requirement_id=requirement.id) }}"
-            ></form>
-            <div class="record-actions">
-              <button class="button small primary" type="submit" form="update-requirement-{{ requirement.id }}">
-                Save
-              </button>
-              <button class="button small secondary" type="submit" form="delete-requirement-{{ requirement.id }}">
-                Remove
-              </button>
+      <section
+        class="card field-checklist-card field-checklist-manager collapsible-card"
+        data-collapsible
+        data-default-open="false"
+        id="field-checklist"
+      >
+        <header class="section-header collapsible-header">
+          <button
+            class="collapsible-trigger"
+            type="button"
+            data-collapsible-toggle
+            aria-expanded="false"
+            aria-controls="field-checklist-content"
+          >
+            <span class="collapsible-heading">
+              <span class="collapsible-title" role="heading" aria-level="3">Install photo checklist</span>
+              <span class="collapsible-description subtle">
+                Choose the categories technicians must capture before signing off on an install. Adjust the order to match your
+                workflow.
+              </span>
+            </span>
+            <span class="collapsible-icon" aria-hidden="true"></span>
+          </button>
+        </header>
+        <div class="collapsible-content" id="field-checklist-content" data-collapsible-content hidden>
+          <form class="stacked-form compact" method="post" action="{{ url_for('create_install_photo_requirement') }}">
+            <div class="form-row">
+              <label>
+                Category name
+                <input type="text" name="label" placeholder="Grounding rod" required />
+              </label>
+              <label>
+                Position
+                <input
+                  type="number"
+                  name="position"
+                  min="0"
+                  placeholder="{{ install_photo_requirements|length }}"
+                />
+              </label>
             </div>
+            <div class="record-actions">
+              <button class="button small primary" type="submit">Add requirement</button>
+            </div>
+          </form>
+          {% if install_photo_requirements %}
+          <div class="requirement-list">
+            {% for requirement in install_photo_requirements %}
+            <div class="requirement-item">
+              <form
+                id="update-requirement-{{ requirement.id }}"
+                class="stacked-form compact"
+                method="post"
+                action="{{ url_for('update_install_photo_requirement', requirement_id=requirement.id) }}"
+              >
+                <div class="form-row">
+                  <label>
+                    Category name
+                    <input type="text" name="label" value="{{ requirement.label }}" required />
+                  </label>
+                  <label>
+                    Position
+                    <input type="number" name="position" min="0" value="{{ loop.index0 }}" />
+                  </label>
+                </div>
+              </form>
+              <form
+                id="delete-requirement-{{ requirement.id }}"
+                method="post"
+                action="{{ url_for('delete_install_photo_requirement', requirement_id=requirement.id) }}"
+              ></form>
+              <div class="record-actions">
+                <button class="button small primary" type="submit" form="update-requirement-{{ requirement.id }}">
+                  Save
+                </button>
+                <button class="button small secondary" type="submit" form="delete-requirement-{{ requirement.id }}">
+                  Remove
+                </button>
+              </div>
+            </div>
+            {% endfor %}
           </div>
+          {% else %}
+          <p class="subtle">No required photos configured yet. Add categories above to build your checklist.</p>
+          {% endif %}
+        </div>
+      </section>
+    </section>
+    <section
+      class="card operations-allies-card collapsible-card"
+      data-collapsible
+      data-default-open="false"
+      id="operations-allies"
+    >
+      <header class="section-header compact collapsible-header">
+        <button
+          class="collapsible-trigger"
+          type="button"
+          data-collapsible-toggle
+          aria-expanded="false"
+          aria-controls="operations-allies-content"
+        >
+          <span class="collapsible-heading">
+            <span class="collapsible-title" role="heading" aria-level="3">Operations Allies</span>
+            <span class="collapsible-description subtle">
+              Celebrate the companies that help keep DIXIELAND WIRELESS running smoothly.
+            </span>
+          </span>
+          <span class="collapsible-icon" aria-hidden="true"></span>
+        </button>
+        <a class="button small ghost" href="{{ url_for('dashboard', section='story') }}#support-partners">Manage partners</a>
+      </header>
+      <div class="collapsible-content" id="operations-allies-content" data-collapsible-content hidden>
+        {% if support_partners %}
+        <div class="partner-grid">
+          {% for partner in support_partners %}
+          <article class="partner-tile">
+            <div class="partner-media">
+              {% if partner.logo_filename %}
+              <img src="{{ url_for('support_partner_logo', partner_id=partner.id) }}" alt="{{ partner.name }} logo" />
+              {% else %}
+              <div class="partner-placeholder" aria-hidden="true">{{ partner.name[:1] }}</div>
+              {% endif %}
+            </div>
+            <div class="partner-content">
+              <div class="partner-heading">
+                <h3>{{ partner.name }}</h3>
+                {% if partner.website_url %}
+                <a class="inline-link" href="{{ partner.website_url }}" target="_blank" rel="noopener">Visit website</a>
+                {% endif %}
+              </div>
+              {% if partner.description %}
+              <p class="subtle">{{ partner.description }}</p>
+              {% else %}
+              <p class="subtle">Keep a short description on file so teammates know how they support operations.</p>
+              {% endif %}
+            </div>
+          </article>
           {% endfor %}
         </div>
         {% else %}
-        <p class="subtle">No required photos configured yet. Add categories above to build your checklist.</p>
+        <p class="subtle empty-state">
+          Add your supporting companies to highlight the partners who keep the network humming.
+        </p>
         {% endif %}
       </div>
-    </section>
-    <section class="card operations-allies-card" id="operations-allies">
-      <header class="section-header compact">
-        <div>
-          <h2>Operations Allies</h2>
-          <p class="subtle">Celebrate the companies that help keep DIXIELAND WIRELESS running smoothly.</p>
-        </div>
-        <a class="button small ghost" href="{{ url_for('dashboard', section='story') }}#support-partners">Manage partners</a>
-      </header>
-      {% if support_partners %}
-      <div class="partner-grid">
-        {% for partner in support_partners %}
-        <article class="partner-tile">
-          <div class="partner-media">
-            {% if partner.logo_filename %}
-            <img src="{{ url_for('support_partner_logo', partner_id=partner.id) }}" alt="{{ partner.name }} logo" />
-            {% else %}
-            <div class="partner-placeholder" aria-hidden="true">{{ partner.name[:1] }}</div>
-            {% endif %}
-          </div>
-          <div class="partner-content">
-            <div class="partner-heading">
-              <h3>{{ partner.name }}</h3>
-              {% if partner.website_url %}
-              <a class="inline-link" href="{{ partner.website_url }}" target="_blank" rel="noopener">Visit website</a>
-              {% endif %}
-            </div>
-            {% if partner.description %}
-            <p class="subtle">{{ partner.description }}</p>
-            {% else %}
-            <p class="subtle">Keep a short description on file so teammates know how they support operations.</p>
-            {% endif %}
-          </div>
-        </article>
-        {% endfor %}
-      </div>
-      {% else %}
-      <p class="subtle empty-state">
-        Add your supporting companies to highlight the partners who keep the network humming.
-      </p>
-      {% endif %}
     </section>
     {% elif active_section == 'customers' %}
     {% if selected_client %}
@@ -1084,6 +1120,10 @@
                 {% if device.site_name %}<span>{{ device.site_name }}</span>{% endif %}
                 {% if device.tower %}<span>Tower · {{ device.tower.name }}</span>{% endif %}
                 {% if device.ip_address %}<span>IP {{ device.ip_address }}</span>{% endif %}
+                <span>
+                  Heartbeat {{ device.heartbeat_status|capitalize }} ·
+                  {{ device.last_heartbeat_at.strftime('%b %d, %Y %I:%M %p') if device.last_heartbeat_at else 'Unknown' }}
+                </span>
                 <span>Last seen {{ device.last_seen_at.strftime('%b %d, %Y %I:%M %p') if device.last_seen_at else 'Unknown' }}</span>
               </div>
             </div>
