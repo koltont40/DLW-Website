@@ -28,16 +28,23 @@ from app import (
     NavigationItem,
     BlogPost,
     SupportTicket,
+    SupportTicketMessage,
     SupportTicketAttachment,
     PaymentMethod,
     AutopayEvent,
     SiteTheme,
     TeamMember,
     TrustedBusiness,
+    SupportPartner,
     StripeConfig,
     NotificationConfig,
+    UispDevice,
+    UispConfig,
+    NetworkTower,
     create_app,
     db,
+    get_stripe_publishable_key,
+    apply_stripe_config_from_database,
     get_install_photo_category_choices,
     get_required_install_photo_categories,
     utcnow,
@@ -79,20 +86,34 @@ class StripeStub:
 
     class PaymentIntent:
         created: list[dict] = []
+        retrieve_map: dict[str, SimpleNamespace] = {}
 
         @classmethod
         def create(cls, **kwargs):
             cls.created.append(kwargs)
-            return SimpleNamespace(
-                id=f"pi_{len(cls.created)}",
-                client_secret="pi_secret",
+            intent_id = f"pi_{len(cls.created)}"
+            intent = SimpleNamespace(
+                id=intent_id,
+                client_secret=f"{intent_id}_secret",
+                status=kwargs.get("status", "requires_payment_method"),
                 charges=SimpleNamespace(data=[]),
                 metadata=kwargs.get("metadata", {}),
+                payment_method=kwargs.get("payment_method"),
             )
+            cls.retrieve_map[intent_id] = intent
+            return intent
 
         @staticmethod
         def retrieve(intent_id):
-            return SimpleNamespace(id=intent_id, status="requires_payment_method")
+            return StripeStub.PaymentIntent.retrieve_map.get(
+                intent_id,
+                SimpleNamespace(
+                    id=intent_id,
+                    status="requires_payment_method",
+                    metadata={},
+                    charges=SimpleNamespace(data=[]),
+                ),
+            )
 
         @staticmethod
         def confirm(intent_id, payment_method=None):
@@ -104,9 +125,33 @@ class StripeStub:
             )
 
     class SetupIntent:
+        retrieve_map: dict[str, SimpleNamespace] = {}
+
+        @classmethod
+        def create(cls, **kwargs):
+            intent_id = f"seti_{len(cls.retrieve_map) + 1}"
+            intent = SimpleNamespace(
+                id=intent_id,
+                client_secret="seti_secret",
+                payment_method="pm_new",
+                status=kwargs.get("status", "requires_confirmation"),
+                metadata=kwargs.get("metadata", {}),
+                customer=kwargs.get("customer"),
+            )
+            cls.retrieve_map[intent_id] = intent
+            return intent
+
         @staticmethod
-        def create(**kwargs):
-            return SimpleNamespace(client_secret="seti_secret", payment_method="pm_new")
+        def retrieve(intent_id):
+            return StripeStub.SetupIntent.retrieve_map.get(
+                intent_id,
+                SimpleNamespace(
+                    id=intent_id,
+                    status="requires_payment_method",
+                    payment_method=None,
+                    metadata={},
+                ),
+            )
 
     class Refund:
         @staticmethod
@@ -129,9 +174,16 @@ class StripeStub:
     api_key = None
     default_http_client = None
 
+    @staticmethod
+    def reset():
+        StripeStub.PaymentIntent.created = []
+        StripeStub.PaymentIntent.retrieve_map = {}
+        StripeStub.SetupIntent.retrieve_map = {}
+
 
 def install_stripe_stub(flask_app, monkeypatch, stub=None):
     stub = stub or StripeStub()
+    stub.reset()
     monkeypatch.setattr(app_module, "stripe", stub, raising=False)
     monkeypatch.setattr(app_module, "StripeError", Exception, raising=False)
     monkeypatch.setattr(app_module, "SignatureVerificationError", Exception, raising=False)
@@ -152,6 +204,7 @@ def app(tmp_path):
     theme_folder = tmp_path / "theme"
     team_folder = tmp_path / "team"
     trusted_folder = tmp_path / "trusted_businesses"
+    support_partner_folder = tmp_path / "support_partners"
     install_folder = tmp_path / "install_photos"
     signature_folder = tmp_path / "install_signatures"
     verification_folder = tmp_path / "verification"
@@ -174,6 +227,7 @@ def app(tmp_path):
             "THEME_UPLOAD_FOLDER": str(theme_folder),
             "TEAM_UPLOAD_FOLDER": str(team_folder),
             "TRUSTED_BUSINESS_UPLOAD_FOLDER": str(trusted_folder),
+            "SUPPORT_PARTNER_UPLOAD_FOLDER": str(support_partner_folder),
             "INSTALL_PHOTOS_FOLDER": str(install_folder),
             "INSTALL_SIGNATURE_FOLDER": str(signature_folder),
             "CLIENT_VERIFICATION_FOLDER": str(verification_folder),
@@ -563,6 +617,81 @@ def test_admin_can_create_trusted_business_with_logo(app, client):
     assert b"<svg" in logo_response.data
 
 
+def test_admin_can_create_support_partner_with_logo(app, client):
+    login_admin(client)
+
+    response = client.post(
+        "/support-partners",
+        data={
+            "name": "River Region Fiber Crew",
+            "website_url": "https://fibercrew.example.com",
+            "description": "Handles aerial fiber runs for our backhaul.",
+            "logo": (BytesIO(b"binary-image"), "logo.png"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Added River Region Fiber Crew to your operations allies." in response.data
+
+    with app.app_context():
+        partner = SupportPartner.query.filter_by(name="River Region Fiber Crew").first()
+        assert partner is not None
+        assert partner.website_url == "https://fibercrew.example.com"
+        assert partner.description == "Handles aerial fiber runs for our backhaul."
+        assert partner.logo_filename is not None
+        partner_id = partner.id
+        logo_path = Path(app.config["SUPPORT_PARTNER_UPLOAD_FOLDER"]) / partner.logo_filename
+        assert logo_path.exists()
+
+    logo_response = client.get(f"/support-partners/{partner_id}/logo")
+    assert logo_response.status_code == 200
+    assert b"binary-image" in logo_response.data
+
+
+def test_dashboard_overview_lists_support_partners(app, client):
+    with app.app_context():
+        partner = SupportPartner(
+            name="Tower Guard LLC",
+            description="24/7 monitoring, tower climbs, and emergency repairs.",
+            website_url="https://towerguard.example.com",
+            position=1,
+        )
+        db.session.add(partner)
+        db.session.commit()
+
+    login_admin(client)
+
+    response = client.get("/dashboard", follow_redirects=True)
+
+    assert response.status_code == 200
+    assert b"Operations Allies" in response.data
+    assert b"Tower Guard LLC" in response.data
+    assert b"24/7 monitoring, tower climbs, and emergency repairs." in response.data
+    assert b"Manage partners" in response.data
+
+
+def test_homepage_lists_support_partners(app, client):
+    with app.app_context():
+        partner = SupportPartner(
+            name="Backhaul Brothers",
+            description="Fiber construction crew keeping our backbone online.",
+            website_url="https://backhaul.example.com",
+            position=1,
+        )
+        db.session.add(partner)
+        db.session.commit()
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert b"Operations allies" in response.data
+    assert b"Backhaul Brothers" in response.data
+    assert b"Fiber construction crew keeping our backbone online." in response.data
+    assert b"Visit site" in response.data
+
+
 def test_admin_can_view_security_settings(client):
     login_admin(client)
 
@@ -777,6 +906,59 @@ def test_admin_can_disable_stripe_configuration(app, client):
         assert app.config["STRIPE_PUBLISHABLE_KEY"] is None
         assert app.config["STRIPE_WEBHOOK_SECRET"] is None
 
+
+def test_get_stripe_publishable_key_uses_env_alias(app):
+    with app.app_context():
+        StripeConfig.query.delete()
+        db.session.commit()
+
+        app.config["STRIPE_PUBLISHABLE_KEY"] = None
+        app.config["STRIPE_PUBLIC_KEY"] = "pk_alias_env"
+        app.config["STRIPE_PK"] = None
+
+        value = get_stripe_publishable_key(app)
+
+        assert value == "pk_alias_env"
+        assert app.config["STRIPE_PUBLISHABLE_KEY"] == "pk_alias_env"
+
+
+def test_get_stripe_publishable_key_reads_database_when_missing(app):
+    with app.app_context():
+        StripeConfig.query.delete()
+        db.session.commit()
+
+        config = StripeConfig(
+            secret_key="sk_saved",
+            publishable_key="pk_saved",
+            webhook_secret=None,
+        )
+        db.session.add(config)
+        db.session.commit()
+
+        app.config["STRIPE_PUBLISHABLE_KEY"] = None
+        app.config["STRIPE_PUBLIC_KEY"] = None
+        app.config["STRIPE_PK"] = None
+
+        value = get_stripe_publishable_key(app)
+
+        assert value == "pk_saved"
+        assert app.config["STRIPE_PUBLISHABLE_KEY"] == "pk_saved"
+
+
+def test_apply_stripe_config_uses_publishable_fallback(app):
+    with app.app_context():
+        StripeConfig.query.delete()
+        db.session.commit()
+
+        app.config["STRIPE_SECRET_KEY"] = "sk_env"
+        app.config["STRIPE_PUBLISHABLE_KEY"] = None
+        app.config["STRIPE_PUBLIC_KEY"] = "pk_env_public"
+        app.config["STRIPE_PK"] = None
+
+        config = apply_stripe_config_from_database(app)
+
+        assert config.publishable_key == "pk_env_public"
+        assert app.config["STRIPE_PUBLISHABLE_KEY"] == "pk_env_public"
 
 def test_admin_can_add_customer_via_dashboard(app, client):
     login_admin(client)
@@ -1032,6 +1214,7 @@ def test_autopay_run_submits_payment_intents(app, client, monkeypatch):
     login_admin(client)
 
     with app.app_context():
+        today = app_module.local_today(app)
         customer = Client(
             name="Autopay Success",
             email="auto-success@example.com",
@@ -1047,7 +1230,7 @@ def test_autopay_run_submits_payment_intents(app, client, monkeypatch):
             brand="Visa",
             last4="1111",
             exp_month=12,
-            exp_year=date.today().year + 1,
+            exp_year=today.year + 1,
             token="pm_success",
             is_default=True,
         )
@@ -1056,7 +1239,7 @@ def test_autopay_run_submits_payment_intents(app, client, monkeypatch):
             description="Internet service",
             amount_cents=5000,
             status="Pending",
-            due_date=date.today(),
+            due_date=today,
         )
         db.session.add_all([method, invoice])
         db.session.commit()
@@ -1079,11 +1262,64 @@ def test_autopay_run_submits_payment_intents(app, client, monkeypatch):
         assert events[0].status == "pending"
 
 
+def test_autopay_run_defers_until_scheduled_day(app, client, monkeypatch):
+    install_stripe_stub(app, monkeypatch)
+    login_admin(client)
+
+    with app.app_context():
+        today = app_module.local_today(app)
+        today_day = today.day
+        scheduled_day = today_day + 1 if today_day < 28 else 1
+        customer = Client(
+            name="Autopay Scheduled",
+            email="scheduled@example.com",
+            status="Active",
+            autopay_enabled=True,
+            autopay_day=scheduled_day,
+        )
+        db.session.add(customer)
+        db.session.commit()
+
+        method = PaymentMethod(
+            client_id=customer.id,
+            nickname="Primary",
+            brand="Visa",
+            last4="1111",
+            exp_month=12,
+            exp_year=today.year + 1,
+            token="pm_success",
+            is_default=True,
+        )
+        invoice = Invoice(
+            client_id=customer.id,
+            description="Internet service",
+            amount_cents=5000,
+            status="Pending",
+            due_date=today,
+        )
+        db.session.add_all([method, invoice])
+        db.session.commit()
+        customer_id = customer.id
+        invoice_id = invoice.id
+
+    response = client.post("/autopay/run", follow_redirects=True)
+    assert response.status_code == 200
+
+    with app.app_context():
+        invoice = Invoice.query.get(invoice_id)
+        assert invoice.autopay_status is None
+        events = AutopayEvent.query.filter_by(client_id=customer_id).all()
+        assert events
+        assert events[0].status == "scheduled"
+        assert str(scheduled_day) in (events[0].message or "")
+
+
 def test_autopay_run_suspends_when_no_method(app, client, monkeypatch):
     install_stripe_stub(app, monkeypatch)
     login_admin(client)
 
     with app.app_context():
+        today = app_module.local_today(app)
         customer = Client(
             name="Autopay Failure",
             email="auto-fail@example.com",
@@ -1098,7 +1334,7 @@ def test_autopay_run_suspends_when_no_method(app, client, monkeypatch):
             description="Managed service",
             amount_cents=4200,
             status="Pending",
-            due_date=date.today(),
+            due_date=today,
         )
         db.session.add(invoice)
         db.session.commit()
@@ -1118,10 +1354,88 @@ def test_autopay_run_suspends_when_no_method(app, client, monkeypatch):
         assert any(event.status == "failed" for event in events)
 
 
+def test_process_autopay_run_disabled_without_stripe(app):
+    with app.app_context():
+        app.config["STRIPE_SECRET_KEY"] = None
+        result = app_module.process_autopay_run(app=app)
+
+    assert result["status"] == "disabled"
+    assert "Stripe is not configured" in result["summary"]
+
+
+def test_autopay_schedule_request_and_approval(app, client, monkeypatch):
+    sent_notifications: list[tuple[str, str, str]] = []
+
+    def fake_send_email(app_obj, recipient, subject, body):
+        sent_notifications.append((recipient, subject, body))
+        return True
+
+    monkeypatch.setattr(app_module, "send_email_via_office365", fake_send_email)
+
+    password = "PortalPass123!"
+    app.config["ADMIN_EMAIL"] = "billing@example.com"
+
+    with app.app_context():
+        customer = Client(
+            name="Schedule Customer",
+            email="schedule@example.com",
+            status="Active",
+            autopay_enabled=True,
+        )
+        customer.portal_password_hash = generate_password_hash(password)
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    login_response = client.post(
+        "/portal/login",
+        data={"email": "schedule@example.com", "password": password},
+        follow_redirects=True,
+    )
+    assert login_response.status_code == 200
+
+    request_response = client.post(
+        "/portal/autopay/schedule",
+        data={"requested_day": "15"},
+        follow_redirects=True,
+    )
+    assert request_response.status_code == 200
+
+    with app.app_context():
+        customer = Client.query.get(customer_id)
+        assert customer.autopay_day_pending == 15
+        assert customer.autopay_day is None
+
+    assert any(
+        recipient == "billing@example.com" and "Autopay schedule request" in subject
+        for recipient, subject, _ in sent_notifications
+    )
+
+    login_admin(client)
+
+    approve_response = client.post(
+        f"/clients/{customer_id}/autopay/schedule",
+        data={"action": "approve"},
+        follow_redirects=True,
+    )
+    assert approve_response.status_code == 200
+
+    with app.app_context():
+        customer = Client.query.get(customer_id)
+        assert customer.autopay_day == 15
+        assert customer.autopay_day_pending is None
+
+    assert any(
+        recipient == "schedule@example.com" and "Autopay schedule approved" in subject
+        for recipient, subject, _ in sent_notifications
+    )
+
+
 def test_stripe_webhook_marks_invoice_paid(app, client, monkeypatch):
     stub = install_stripe_stub(app, monkeypatch)
 
     with app.app_context():
+        today = app_module.local_today(app)
         customer = Client(
             name="Webhook Client",
             email="webhook@example.com",
@@ -1137,7 +1451,7 @@ def test_stripe_webhook_marks_invoice_paid(app, client, monkeypatch):
             brand="Visa",
             last4="4242",
             exp_month=1,
-            exp_year=date.today().year + 2,
+            exp_year=today.year + 2,
             token="pm_webhook",
             is_default=True,
         )
@@ -1146,7 +1460,7 @@ def test_stripe_webhook_marks_invoice_paid(app, client, monkeypatch):
             description="Monthly service",
             amount_cents=7500,
             status="Pending",
-            due_date=date.today(),
+            due_date=today,
             autopay_status="Processing",
             stripe_payment_intent_id="pi_webhook",
         )
@@ -1270,6 +1584,264 @@ def test_admin_adds_equipment_from_account_view(app, client):
         assert len(devices) == 1
         assert devices[0].name == "Subscriber Router"
         assert str(devices[0].installed_on) == "2024-08-01"
+
+
+def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypatch):
+    login_admin(client)
+
+    sent_notifications: list[tuple[str, str, str]] = []
+
+    def fake_send_email(app_obj, recipient, subject, body):
+        sent_notifications.append((recipient, subject, body))
+        return True
+
+    monkeypatch.setattr(app_module, "send_email_via_office365", fake_send_email)
+
+    payload_pages = [
+        {
+            "items": [
+                {
+                    "id": "device-1",
+                    "identification": {"name": "North Sector", "model": "UISP Wave"},
+                    "site": {"name": "North Tower"},
+                    "status": {"value": "online", "lastSeen": "2024-05-01T12:00:00Z"},
+                    "ipAddress": "10.0.0.10",
+                    "macAddress": "AA:BB:CC:DD:EE:01",
+                    "firmware": {"version": "1.2.3"},
+                },
+                {
+                    "identification": {
+                        "uid": "device-3",
+                        "name": "Lake Sector",
+                        "model": "UISP Prism",
+                    },
+                    "site": {"name": "Lake Tower"},
+                    "status": {"value": "online", "lastSeen": "2024-05-01T12:05:00Z"},
+                    "ipAddress": "10.0.0.12",
+                    "macAddress": "AA:BB:CC:DD:EE:03",
+                    "firmware": {"version": "2.0.0"},
+                },
+            ],
+            "_links": {"next": "/nms/api/v2.1/devices?page=2"},
+            "pagination": {"page": 1, "perPage": 200, "totalPages": 2},
+        },
+        {
+            "data": [
+                {
+                    "id": "device-2",
+                    "identification": {"name": "Backhaul Link", "model": "UISP Wave"},
+                    "site": {"name": "Backhaul Ridge"},
+                    "status": {"value": "offline", "lastSeen": "2024-05-01T11:45:00Z"},
+                    "ipAddress": "10.0.0.11",
+                    "macAddress": "AA:BB:CC:DD:EE:02",
+                    "firmware": {"version": "1.2.3"},
+                }
+            ],
+            "pagination": {"page": 2, "perPage": 200, "totalPages": 2},
+        },
+    ]
+
+    class DummyResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        @property
+        def text(self):
+            return "ok"
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        request_page = 1
+        if params and "page" in params:
+            try:
+                request_page = int(params["page"])
+            except (TypeError, ValueError):
+                request_page = 1
+        elif "page=2" in url:
+            request_page = 2
+
+        index = max(1, request_page) - 1
+        index = min(index, len(payload_pages) - 1)
+        return DummyResponse(payload_pages[index])
+
+    monkeypatch.setattr(app_module.requests, "get", fake_get)
+
+    with app.app_context():
+        config = UispConfig(base_url="https://uisp.example.com", api_token="token")
+        north_tower = NetworkTower(name="North Tower", location="Hilltop bluff")
+        lake_tower = NetworkTower(name="Lake Tower", location="Reservoir access road")
+        customer = Client(name="Managed Customer", email="managed@example.com", status="Active")
+        db.session.add_all([config, north_tower, lake_tower, customer])
+        technician = Technician(
+            name="Network Tech",
+            email="tech@example.com",
+            password_hash=generate_password_hash("TechPass123!"),
+            is_active=True,
+        )
+        db.session.add(technician)
+        db.session.commit()
+        customer_id = customer.id
+        north_tower_id = north_tower.id
+        lake_tower_id = lake_tower.id
+
+    response = client.post("/uisp/devices/import", follow_redirects=True)
+    assert response.status_code == 200
+    assert sent_notifications
+
+    with app.app_context():
+        config = UispConfig.query.first()
+        assert config is not None
+        assert config.last_synced_at is not None
+        devices = UispDevice.query.order_by(UispDevice.uisp_id.asc()).all()
+        assert len(devices) == 3
+        online_device = next(device for device in devices if device.uisp_id == "device-1")
+        assert online_device.tower_id == north_tower_id
+        offline_device = next(device for device in devices if device.uisp_id == "device-2")
+        assert offline_device.status == "offline"
+        assert offline_device.outage_notified_at is not None
+        offline_id = offline_device.id
+        lake_device = next(device for device in devices if device.uisp_id == "device-3")
+        assert lake_device.tower_id == lake_tower_id
+
+    recipients = {entry[0] for entry in sent_notifications}
+    assert "ops@example.com" in recipients
+    assert "tech@example.com" in recipients
+
+    sent_notifications.clear()
+
+    account_url = f"/dashboard/customers/{customer_id}"
+    assign_response = client.post(
+        f"/uisp/devices/{offline_id}/assign",
+        data={
+            "client_id": str(customer_id),
+            "nickname": "Backhaul",
+            "notes": "Feeds subdivision",
+            "tower_id": str(lake_tower_id),
+            "next": account_url,
+        },
+        follow_redirects=True,
+    )
+    assert assign_response.status_code == 200
+
+    with app.app_context():
+        device = UispDevice.query.get(offline_id)
+        assert device.client_id == customer_id
+        assert device.nickname == "Backhaul"
+        assert device.notes == "Feeds subdivision"
+        assert device.tower_id == lake_tower_id
+
+    payload_pages[1]["data"][0]["status"] = {
+        "value": "online",
+        "lastSeen": "2024-05-01T12:30:00Z",
+    }
+    client.post("/uisp/devices/import", follow_redirects=True)
+    assert not sent_notifications
+
+    payload_pages[1]["data"][0]["status"] = {
+        "value": "offline",
+        "lastSeen": "2024-05-01T12:45:00Z",
+    }
+    sent_notifications.clear()
+    client.post("/uisp/devices/import", follow_redirects=True)
+
+    recipients = {entry[0] for entry in sent_notifications}
+    assert "managed@example.com" in recipients
+    assert "ops@example.com" in recipients
+    assert "tech@example.com" in recipients
+
+    account_view = client.get(account_url)
+    assert account_view.status_code == 200
+    assert b"Backhaul" in account_view.data
+    assert b"Lake Tower" in account_view.data
+
+    unassign_response = client.post(
+        f"/uisp/devices/{offline_id}/assign",
+        data={"client_id": "", "tower_id": "", "next": account_url},
+        follow_redirects=True,
+    )
+    assert unassign_response.status_code == 200
+
+    with app.app_context():
+        device = UispDevice.query.get(offline_id)
+        assert device.client_id is None
+        assert device.tower_id is None
+
+
+def test_admin_manages_uisp_settings_and_towers(app, client):
+    login_admin(client)
+
+    settings_response = client.post(
+        "/uisp/config",
+        data={
+            "base_url": "https://uisp.ops",
+            "api_token": "secret-token",
+            "auto_sync_enabled": "on",
+            "auto_sync_interval": "90",
+        },
+        follow_redirects=True,
+    )
+    assert settings_response.status_code == 200
+
+    create_response = client.post(
+        "/network/towers",
+        data={
+            "name": "River Tower",
+            "location": "Bayou Road",
+            "notes": "Primary uplink",
+        },
+        follow_redirects=True,
+    )
+    assert create_response.status_code == 200
+
+    with app.app_context():
+        config = UispConfig.query.first()
+        assert config is not None
+        assert config.base_url == "https://uisp.ops"
+        assert config.api_token == "secret-token"
+        assert config.auto_sync_enabled is True
+        assert config.auto_sync_interval_minutes == 90
+
+        tower = NetworkTower.query.filter_by(name="River Tower").first()
+        assert tower is not None
+        tower_id = tower.id
+
+        device = UispDevice(uisp_id="tower-test", name="Tower Device", tower=tower)
+        db.session.add(device)
+        db.session.commit()
+        device_id = device.id
+
+    update_response = client.post(
+        f"/network/towers/{tower_id}/update",
+        data={
+            "name": "Riverfront Tower",
+            "location": "Bayou Road",
+            "notes": "Updated notes",
+        },
+        follow_redirects=True,
+    )
+    assert update_response.status_code == 200
+
+    with app.app_context():
+        tower = NetworkTower.query.get(tower_id)
+        assert tower is not None
+        assert tower.name == "Riverfront Tower"
+        assert tower.notes == "Updated notes"
+
+    delete_response = client.post(
+        f"/network/towers/{tower_id}/delete",
+        follow_redirects=True,
+    )
+    assert delete_response.status_code == 200
+
+    with app.app_context():
+        assert NetworkTower.query.get(tower_id) is None
+        device = UispDevice.query.get(device_id)
+        assert device is not None
+        assert device.tower_id is None
 
 
 def test_admin_schedules_appointment_from_account_view(app, client):
@@ -2103,6 +2675,292 @@ def test_portal_highlights_missing_service_plan(app, client):
     assert b"mailto:activate@example.com" in login_response.data
 
 
+def test_portal_customer_adds_card_via_stripe(app, client, monkeypatch):
+    password = "PortalPass123!"
+    install_stripe_stub(app, monkeypatch)
+
+    with app.app_context():
+        portal_client = Client(
+            name="Portal Cardholder",
+            email="cardholder@example.com",
+            status="Active",
+        )
+        portal_client.portal_password_hash = generate_password_hash(password)
+        portal_client.portal_password_updated_at = utcnow()
+        db.session.add(portal_client)
+        db.session.commit()
+        portal_client_id = portal_client.id
+
+    login_response = client.post(
+        "/portal/login",
+        data={"email": "cardholder@example.com", "password": password},
+        follow_redirects=True,
+    )
+    assert login_response.status_code == 200
+    assert b"Saved cards" in login_response.data
+
+    setup_response = client.get("/portal/payment-methods/setup-intent")
+    assert setup_response.status_code == 200
+    setup_payload = setup_response.get_json()
+    assert setup_payload["client_secret"] == "seti_secret"
+
+    save_response = client.post(
+        "/portal/payment-methods",
+        json={"payment_method_id": "pm_new", "set_default": True},
+    )
+    assert save_response.status_code == 200
+    result = save_response.get_json()
+    assert result["status"] == "ok"
+
+    with app.app_context():
+        stored_method = PaymentMethod.query.filter_by(
+            client_id=portal_client_id
+        ).one()
+        assert stored_method.brand == "Visa"
+        assert stored_method.last4 == "4242"
+        assert stored_method.cardholder_name == "Test User"
+        assert stored_method.is_default is True
+        assert stored_method.token == "pm_new"
+        refreshed_client = Client.query.get(portal_client_id)
+        assert refreshed_client.stripe_customer_id == "cus_test"
+
+
+def test_ticket_messaging_allows_replies_with_attachments(app, client, monkeypatch):
+    sent_notifications: list[tuple[str, str, str]] = []
+
+    def fake_send_email(app_obj, recipient, subject, body):
+        sent_notifications.append((recipient, subject, body))
+        return True
+
+    monkeypatch.setattr(app_module, "send_email_via_office365", fake_send_email)
+
+    app.config["ADMIN_EMAIL"] = "support@example.com"
+    password = "PortalPass123!"
+
+    with app.app_context():
+        portal_client = Client(
+            name="Messaging Customer",
+            email="messaging@example.com",
+            status="Active",
+        )
+        portal_client.portal_password_hash = generate_password_hash(password)
+        db.session.add(portal_client)
+        db.session.commit()
+        client_id = portal_client.id
+
+    client.post(
+        "/portal/login",
+        data={"email": "messaging@example.com", "password": password},
+        follow_redirects=True,
+    )
+
+    client.post(
+        "/portal/tickets",
+        data={
+            "subject": "Connectivity issue",
+            "message": "Our radios reboot each night.",
+            "priority": "High",
+            "attachments": (BytesIO(b"initial"), "signal.pdf"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        ticket = SupportTicket.query.filter_by(client_id=client_id).one()
+        assert ticket.messages
+        assert ticket.messages[0].body == "Our radios reboot each night."
+        attachments = SupportTicketAttachment.query.filter_by(ticket_id=ticket.id).all()
+        assert attachments[0].message_id == ticket.messages[0].id
+        ticket_id = ticket.id
+
+    client.post(
+        f"/portal/tickets/{ticket_id}/messages",
+        data={
+            "message": "Here are additional logs.",
+            "attachments": (BytesIO(b"log-data"), "logs.txt"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    login_admin(client)
+
+    client.post(
+        f"/tickets/{ticket_id}/messages",
+        data={
+            "message": "We pushed a firmware update.",
+            "attachments": (BytesIO(b"patch-notes"), "notes.pdf"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    with app.app_context():
+        ticket = SupportTicket.query.get(ticket_id)
+        assert len(ticket.messages) == 3
+        assert ticket.messages[1].sender == "client"
+        assert ticket.messages[2].sender == "admin"
+        admin_attachment = next(
+            attachment
+            for attachment in ticket.attachments
+            if attachment.original_filename == "notes.pdf"
+        )
+        assert admin_attachment.message_id == ticket.messages[2].id
+
+    assert any(
+        recipient == "support@example.com" and "ticket" in subject.lower()
+        for recipient, subject, _ in sent_notifications
+    )
+    assert any(
+        recipient == "messaging@example.com" and "Support ticket update" in subject
+        for recipient, subject, _ in sent_notifications
+    )
+
+
+def test_portal_dashboard_processes_setup_intent_query(app, client, monkeypatch):
+    password = "PortalPass123!"
+    stub = install_stripe_stub(app, monkeypatch)
+
+    with app.app_context():
+        portal_client = Client(
+            name="Setup Intent Customer",
+            email="setup@example.com",
+            status="Active",
+        )
+        portal_client.portal_password_hash = generate_password_hash(password)
+        portal_client.portal_password_updated_at = utcnow()
+        db.session.add(portal_client)
+        db.session.commit()
+        portal_client_id = portal_client.id
+
+    login_response = client.post(
+        "/portal/login",
+        data={"email": "setup@example.com", "password": password},
+        follow_redirects=True,
+    )
+    assert login_response.status_code == 200
+
+    stub.SetupIntent.retrieve_map["seti_success"] = SimpleNamespace(
+        id="seti_success",
+        status="succeeded",
+        payment_method="pm_new",
+        metadata={"client_id": str(portal_client_id)},
+        customer="cus_test",
+    )
+
+    response = client.get(
+        "/portal?setup_intent=seti_success",
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"Card saved" in response.data
+
+    with app.app_context():
+        stored_method = PaymentMethod.query.filter_by(
+            client_id=portal_client_id
+        ).one()
+        assert stored_method.token == "pm_new"
+        assert stored_method.is_default is True
+
+
+def test_portal_dashboard_processes_payment_intent_query(app, client, monkeypatch):
+    password = "PortalPass123!"
+    stub = install_stripe_stub(app, monkeypatch)
+
+    with app.app_context():
+        portal_client = Client(
+            name="Invoice Payer",
+            email="payer@example.com",
+            status="Active",
+        )
+        portal_client.portal_password_hash = generate_password_hash(password)
+        portal_client.portal_password_updated_at = utcnow()
+        db.session.add(portal_client)
+        db.session.commit()
+        portal_client_id = portal_client.id
+
+        invoice = Invoice(
+            client_id=portal_client_id,
+            description="Monthly service",
+            amount_cents=6500,
+            status="Pending",
+        )
+        db.session.add(invoice)
+        db.session.commit()
+        invoice_id = invoice.id
+
+    login_response = client.post(
+        "/portal/login",
+        data={"email": "payer@example.com", "password": password},
+        follow_redirects=True,
+    )
+    assert login_response.status_code == 200
+
+    stub.PaymentIntent.retrieve_map["pi_success"] = SimpleNamespace(
+        id="pi_success",
+        status="succeeded",
+        metadata={
+            "invoice_id": str(invoice_id),
+            "client_id": str(portal_client_id),
+            app_module.STRIPE_AUTOPAY_METADATA_FLAG: "false",
+        },
+        payment_method="pm_card_visa",
+        charges=SimpleNamespace(data=[SimpleNamespace(id="ch_123")]),
+    )
+
+    response = client.get(
+        "/portal?payment_intent=pi_success",
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"Payment received. Thank you!" in response.data
+
+    with app.app_context():
+        refreshed_invoice = Invoice.query.get(invoice_id)
+        assert refreshed_invoice.status == "Paid"
+        assert refreshed_invoice.stripe_payment_intent_id == "pi_success"
+
+
+def test_admin_adds_card_via_stripe(app, client, monkeypatch):
+    install_stripe_stub(app, monkeypatch)
+    login_admin(client)
+
+    with app.app_context():
+        account = Client(
+            name="Admin Managed Account",
+            email="managed@example.com",
+            status="Active",
+        )
+        db.session.add(account)
+        db.session.commit()
+        account_id = account.id
+
+    setup_response = client.get(
+        f"/clients/{account_id}/payment-methods/setup-intent"
+    )
+    assert setup_response.status_code == 200
+    setup_payload = setup_response.get_json()
+    assert setup_payload["client_secret"] == "seti_secret"
+
+    save_response = client.post(
+        f"/clients/{account_id}/payment-methods",
+        json={"payment_method_id": "pm_new", "set_default": True},
+    )
+    assert save_response.status_code == 200
+    result = save_response.get_json()
+    assert result["status"] == "ok"
+
+    with app.app_context():
+        stored_method = PaymentMethod.query.filter_by(client_id=account_id).one()
+        assert stored_method.is_default is True
+        assert stored_method.brand == "Visa"
+        assert stored_method.last4 == "4242"
+        assert stored_method.cardholder_name == "Test User"
+        refreshed = Client.query.get(account_id)
+        assert refreshed.stripe_customer_id == "cus_test"
+
+
 def test_client_can_request_reschedule_and_notify_admin(app, client):
     notifications: list[tuple[str, str, str]] = []
     app.config["SNMP_ADMIN_EMAIL"] = "ops@example.com"
@@ -2258,6 +3116,183 @@ def test_admin_can_send_manual_snmp_email(app, client):
     assert notifications == [
         ("alert@example.com", "Maintenance window", "Expect brief downtime at midnight."),
     ]
+
+
+def test_invoice_notifications_sent_on_create_and_update(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    login_admin(client)
+
+    with app.app_context():
+        customer = Client(
+            name="Billing Notice",
+            email="billing@example.com",
+            status="Active",
+        )
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    response = client.post(
+        f"/clients/{customer_id}/invoices",
+        data={
+            "description": "Installation deposit",
+            "amount": "150.00",
+            "due_date": "2024-02-01",
+            "status": "Pending",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "billing@example.com"
+    assert subject.startswith("Invoice posted: Installation deposit")
+    assert "new invoice" in body.lower()
+    assert "$150.00" in body
+    assert "Due date: 2024-02-01" in body
+
+    with app.app_context():
+        invoice = Invoice.query.filter_by(client_id=customer_id).one()
+        invoice_id = invoice.id
+
+    notifications.clear()
+
+    response = client.post(
+        f"/invoices/{invoice_id}/update",
+        data={
+            "description": "Installation deposit",
+            "amount": "175.00",
+            "due_date": "2024-02-15",
+            "status": "Pending",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "billing@example.com"
+    assert subject.startswith("Invoice updated: Installation deposit")
+    assert "updated your invoice" in body
+    assert "$175.00" in body
+    assert "Due date: 2024-02-15" in body
+
+
+def test_equipment_notifications_sent_on_create_and_update(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    login_admin(client)
+
+    with app.app_context():
+        customer = Client(
+            name="Equipment Notice",
+            email="gear@example.com",
+            status="Active",
+        )
+        db.session.add(customer)
+        db.session.commit()
+        customer_id = customer.id
+
+    response = client.post(
+        f"/clients/{customer_id}/equipment",
+        data={
+            "name": "Customer Router",
+            "model": "XR500",
+            "serial_number": "SN-100",
+            "notes": "Initial install",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "gear@example.com"
+    assert subject.startswith("Equipment added: Customer Router")
+    assert "new equipment" in body.lower()
+    assert "Customer Router" in body
+
+    with app.app_context():
+        equipment = Equipment.query.filter_by(client_id=customer_id).one()
+        equipment_id = equipment.id
+
+    notifications.clear()
+
+    response = client.post(
+        f"/equipment/{equipment_id}/update",
+        data={
+            "name": "Customer Router",
+            "model": "XR500",
+            "serial_number": "SN-100",
+            "installed_on": date(2024, 1, 15).strftime("%Y-%m-%d"),
+            "notes": "Mounted in hallway",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert notifications
+    recipient, subject, body = notifications[-1]
+    assert recipient == "gear@example.com"
+    assert subject.startswith("Equipment updated: Customer Router")
+    assert "mounted in hallway" in body.lower()
+    assert "Installed on: 2024-01-15" in body
+
+
+def test_appointment_update_uses_all_activity_flag(app, client):
+    notifications: list[tuple[str, str, str]] = []
+    app.config["SNMP_EMAIL_SENDER"] = lambda recipient, subject, body: notifications.append(
+        (recipient, subject, body)
+    ) or True
+
+    login_admin(client)
+
+    with app.app_context():
+        config = app_module.ensure_notification_configuration()
+        config.notify_customer_activity = False
+        config.notify_all_account_activity = True
+        db.session.commit()
+
+        customer = Client(
+            name="All Activity Customer",
+            email="notify-all@example.com",
+            status="Active",
+        )
+        appointment = Appointment(
+            client=customer,
+            title="Follow-up visit",
+            scheduled_for=utcnow() + timedelta(days=1),
+            status="Pending",
+        )
+        db.session.add_all([customer, appointment])
+        db.session.commit()
+        appointment_id = appointment.id
+
+    response = client.post(
+        f"/appointments/{appointment_id}/update",
+        data={"status": "Completed"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        updated = Appointment.query.get(appointment_id)
+        assert updated.status == "Completed"
+
+    assert notifications, "Expected an appointment notification when all-activity flag is enabled"
+    recipient, subject, body = notifications[-1]
+    assert recipient == "notify-all@example.com"
+    assert subject.startswith("Appointment update: Follow-up visit")
+    assert "completed" in body.lower()
 
 
 def test_admin_can_update_snmp_settings(app, client):
@@ -2447,6 +3482,25 @@ def test_admin_can_update_notification_preferences(app, client):
         config = NotificationConfig.query.first()
         assert config.notify_install_activity is True
         assert config.notify_customer_activity is False
+        assert config.notify_all_account_activity is False
+
+    response = client.post(
+        "/dashboard/notifications/preferences",
+        data={
+            "notify_installs": "on",
+            "notify_customers": "on",
+            "notify_all_activity": "on",
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+
+    with app.app_context():
+        config = NotificationConfig.query.first()
+        assert config.notify_install_activity is True
+        assert config.notify_customer_activity is True
+        assert config.notify_all_account_activity is True
 
 
 def test_technician_portal_login_and_dashboard(app, client):

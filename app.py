@@ -20,7 +20,10 @@ from email.message import EmailMessage
 from email.utils import formataddr, format_datetime, make_msgid
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import requests
 
 try:  # pragma: no cover - import guard for optional dependency
     import stripe
@@ -53,7 +56,7 @@ from werkzeug.serving import BaseWSGIServer, make_server
 from werkzeug.utils import secure_filename
 
 from sqlalchemy import event, inspect, or_, text
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.exc import IntegrityError, NoSuchTableError
 
 load_dotenv()
@@ -61,10 +64,15 @@ load_dotenv()
 db = SQLAlchemy()
 
 _billing_schema_checked = False
+_performance_indexes_checked = False
 _stripe_schema_checked = False
 
 STRIPE_DEFAULT_CURRENCY = "usd"
 STRIPE_AUTOPAY_METADATA_FLAG = "autopay"
+
+DEFAULT_APP_TIMEZONE = "America/Chicago"
+
+_TIMEZONE_CACHE: dict[str, ZoneInfo] = {}
 
 SITE_SHELL_CACHE_KEY = "_site_shell_cache"
 SITE_SHELL_CACHE_SECONDS_DEFAULT = 15.0
@@ -83,6 +91,7 @@ FILE_TRANSFER_SURFACES: dict[str, str] = {
     "theme-background": "Site background images",
     "team-member-photo": "Team member profile photos",
     "trusted-business-logo": "Trusted business logos",
+    "support-partner-logo": "Operations partner logos",
 }
 
 
@@ -115,8 +124,78 @@ def send_site_file(
     return send_from_directory(str(directory), filename, **send_kwargs)
 
 
+def parse_env_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if not normalized:
+        return default
+    return normalized in {"1", "true", "yes", "on", "y"}
+
+
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _load_timezone(name: str | None) -> ZoneInfo:
+    key = (name or "").strip() or DEFAULT_APP_TIMEZONE
+    cached = _TIMEZONE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    try:
+        timezone = ZoneInfo(key)
+    except ZoneInfoNotFoundError:
+        if key != DEFAULT_APP_TIMEZONE:
+            return _load_timezone(DEFAULT_APP_TIMEZONE)
+        timezone = ZoneInfo("UTC")
+
+    _TIMEZONE_CACHE[key] = timezone
+    return timezone
+
+
+def get_local_timezone(app: Flask | None = None) -> ZoneInfo:
+    if app is None:
+        try:
+            app = current_app._get_current_object()
+        except RuntimeError:
+            app = None
+
+    if app is not None:
+        tz_name = app.config.get("APP_TIMEZONE") or DEFAULT_APP_TIMEZONE
+    else:
+        tz_name = os.environ.get("APP_TIMEZONE", DEFAULT_APP_TIMEZONE)
+
+    return _load_timezone(tz_name)
+
+
+def local_now(app: Flask | None = None) -> datetime:
+    timezone = get_local_timezone(app)
+    return datetime.now(timezone)
+
+
+def local_today(app: Flask | None = None) -> date:
+    return local_now(app).date()
+
+
+def parse_daily_time(value: str | None, fallback: tuple[int, int] = (3, 0)) -> tuple[int, int]:
+    if not value:
+        return fallback
+
+    cleaned = value.strip()
+    if not cleaned:
+        return fallback
+
+    hour_str, _, minute_str = cleaned.partition(":")
+    try:
+        hour = int(hour_str)
+        minute = int(minute_str or "0")
+    except ValueError:
+        return fallback
+
+    hour = max(0, min(23, hour))
+    minute = max(0, min(59, minute))
+    return hour, minute
 
 
 def slugify_segment(value: str) -> str:
@@ -159,6 +238,283 @@ def stripe_active(app: Flask | None = None) -> bool:
     if app is None or stripe is None:
         return False
     return bool(app.config.get("STRIPE_SECRET_KEY"))
+
+
+def get_stripe_publishable_key(app: Flask | None = None) -> str | None:
+    app = app or current_app
+    if app is None:
+        return None
+
+    def _normalized(value: object) -> str | None:
+        if not value:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    existing = _normalized(app.config.get("STRIPE_PUBLISHABLE_KEY"))
+    if existing:
+        return existing
+
+    for fallback_key in ("STRIPE_PUBLIC_KEY", "STRIPE_PK"):
+        fallback = _normalized(app.config.get(fallback_key))
+        if fallback:
+            app.config["STRIPE_PUBLISHABLE_KEY"] = fallback
+            return fallback
+
+    try:
+        config = StripeConfig.query.first()  # type: ignore[name-defined]
+    except Exception:  # pragma: no cover - safeguard when DB unavailable
+        return None
+
+    normalized = _normalized(config.publishable_key) if config else None
+    if normalized:
+        app.config["STRIPE_PUBLISHABLE_KEY"] = normalized
+        return normalized
+
+    return None
+
+
+class UispApiError(RuntimeError):
+    """Raised when the UISP API responds with an error."""
+
+
+class UispApiClient:
+    def __init__(self, base_url: str, token: str, *, timeout: float = 10.0):
+        self.base_url = (base_url or "").rstrip("/")
+        self.token = (token or "").strip()
+        self.timeout = timeout
+
+        if not self.base_url or not self.token:
+            raise UispApiError("UISP API base URL and token are required.")
+
+    def fetch_devices(self) -> list[dict]:
+        endpoint = f"{self.base_url}/nms/api/v2.1/devices"
+        headers = {
+            "accept": "application/json",
+            "x-auth-token": self.token,
+        }
+
+        devices: list[dict] = []
+        per_page = 200
+        next_url: str | None = endpoint
+        params: dict[str, object] | None = None
+        page_param_name: str | None = None
+        per_page_param_name: str | None = None
+        offset_param_name: str | None = None
+        limit_param_name: str | None = None
+        last_offset: int | None = None
+
+        while next_url:
+            response = requests.get(
+                next_url,
+                headers=headers,
+                params=params if params else None,
+                timeout=self.timeout,
+            )
+            if response.status_code != 200:
+                raise UispApiError(
+                    f"UISP API responded with HTTP {response.status_code}: {response.text}"
+                )
+
+            try:
+                payload = response.json()
+            except ValueError as exc:  # pragma: no cover - defensive guard
+                raise UispApiError("UISP API returned an invalid JSON payload.") from exc
+
+            chunk: list[dict]
+            pagination: dict[str, object] | None = None
+            next_link: str | None = None
+
+            if isinstance(payload, list):
+                chunk = payload
+                pagination = None
+                next_link = None
+            elif isinstance(payload, dict):
+                data_field: list[dict] | None = None
+                for key in ("items", "data", "devices"):
+                    value = payload.get(key)
+                    if isinstance(value, list):
+                        data_field = value
+                        break
+                if data_field is None:
+                    raise UispApiError("Unexpected UISP API response structure.")
+                chunk = data_field
+
+                links = payload.get("_links") or payload.get("links") or {}
+                if isinstance(links, dict):
+                    next_candidate = links.get("next")
+                    if isinstance(next_candidate, dict):
+                        next_link = next_candidate.get("href") or next_candidate.get("url")
+                    elif isinstance(next_candidate, list):
+                        next_link = None
+                        for entry in next_candidate:
+                            if isinstance(entry, dict):
+                                next_link = entry.get("href") or entry.get("url")
+                                if next_link:
+                                    break
+                            elif isinstance(entry, str) and entry:
+                                next_link = entry
+                                break
+                    elif isinstance(next_candidate, str) and next_candidate:
+                        next_link = next_candidate
+
+                pagination = payload.get("pagination")
+                if not isinstance(pagination, dict):
+                    meta = payload.get("meta")
+                    if isinstance(meta, dict):
+                        pagination_meta = meta.get("pagination")
+                        if isinstance(pagination_meta, dict):
+                            pagination = pagination_meta
+            else:
+                raise UispApiError("Unexpected UISP API response structure.")
+
+            devices.extend(chunk)
+
+            next_url = None
+            params = None
+
+            if next_link:
+                next_url = urljoin(self.base_url + "/", next_link)
+            elif pagination:
+                current_page = _coerce_int(
+                    pagination.get("page")
+                    or pagination.get("current")
+                    or pagination.get("currentPage")
+                    or pagination.get("pageIndex")
+                )
+                if page_param_name is None:
+                    for candidate in ("page", "current", "currentPage", "pageIndex"):
+                        if candidate in pagination:
+                            page_param_name = candidate
+                            break
+
+                total_pages = _coerce_int(
+                    pagination.get("totalPages")
+                    or pagination.get("total_pages")
+                    or pagination.get("pages")
+                )
+
+                per_page_value = _coerce_int(
+                    pagination.get("perPage")
+                    or pagination.get("per_page")
+                    or pagination.get("limit")
+                    or pagination.get("size")
+                )
+                if per_page_value:
+                    per_page = per_page_value
+                    if per_page_param_name is None:
+                        for candidate in ("perPage", "per_page", "limit", "size"):
+                            if candidate in pagination:
+                                per_page_param_name = candidate
+                                if candidate in ("limit", "size"):
+                                    limit_param_name = candidate
+                                break
+
+                offset_value = _coerce_int(
+                    pagination.get("offset")
+                    or pagination.get("skip")
+                    or pagination.get("start")
+                )
+                if offset_value is not None:
+                    last_offset = offset_value
+                    if offset_param_name is None:
+                        for candidate in ("offset", "skip", "start"):
+                            if candidate in pagination:
+                                offset_param_name = candidate
+                                break
+
+                limit_value = _coerce_int(
+                    pagination.get("limit")
+                    or pagination.get("perPage")
+                    or pagination.get("per_page")
+                    or pagination.get("size")
+                )
+                if limit_value:
+                    per_page = limit_value
+                    if limit_param_name is None:
+                        for candidate in ("limit", "perPage", "per_page", "size"):
+                            if candidate in pagination:
+                                limit_param_name = candidate
+                                if per_page_param_name is None and candidate in (
+                                    "perPage",
+                                    "per_page",
+                                ):
+                                    per_page_param_name = candidate
+                                break
+
+                total_items = _coerce_int(
+                    pagination.get("totalItems")
+                    or pagination.get("total_items")
+                    or pagination.get("total")
+                )
+
+                if (
+                    page_param_name
+                    and total_pages
+                    and current_page
+                    and current_page < total_pages
+                ):
+                    next_url = endpoint
+                    params = {page_param_name: current_page + 1}
+                    if per_page_param_name and per_page:
+                        params[per_page_param_name] = per_page
+                elif (
+                    offset_param_name
+                    and (last_offset is not None or offset_value is not None)
+                    and (limit_value or per_page)
+                    and (total_items is None
+                        or (last_offset or 0) + (limit_value or per_page) < total_items)
+                ):
+                    next_url = endpoint
+                    next_offset = (last_offset or 0) + (limit_value or per_page)
+                    params = {offset_param_name: next_offset}
+                    if limit_param_name:
+                        params[limit_param_name] = limit_value or per_page
+                    elif per_page_param_name and (limit_value or per_page):
+                        params[per_page_param_name] = limit_value or per_page
+
+        return devices
+
+def _coerce_int(value: object | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value != value:  # NaN check
+            return None
+        return int(value)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return int(cleaned)
+        except ValueError:
+            try:
+                return int(float(cleaned))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def parse_uisp_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if cleaned.endswith("Z"):
+        cleaned = cleaned[:-1] + "+00:00"
+    try:
+        timestamp = datetime.fromisoformat(cleaned)
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(UTC)
 
 
 def init_stripe(app: Flask) -> None:
@@ -292,7 +648,12 @@ def store_client_verification_photo(app: Flask, client: "Client", file) -> None:
     client.verification_photo_uploaded_at = utcnow()
 
 
-def store_ticket_attachment(app: Flask, ticket: "SupportTicket", file) -> "SupportTicketAttachment":
+def store_ticket_attachment(
+    app: Flask,
+    ticket: "SupportTicket",
+    file,
+    message: "SupportTicketMessage | None" = None,
+) -> "SupportTicketAttachment":
     attachments_folder = (
         Path(app.config["SUPPORT_TICKET_ATTACHMENT_FOLDER"]) / f"ticket_{ticket.id}"
     )
@@ -308,6 +669,7 @@ def store_ticket_attachment(app: Flask, ticket: "SupportTicket", file) -> "Suppo
         ticket_id=ticket.id,
         original_filename=file.filename or stored_filename,
         stored_filename=str(relative_path),
+        message_id=message.id if message else None,
     )
     db.session.add(attachment)
     return attachment
@@ -469,6 +831,55 @@ def delete_trusted_business_logo(app: Flask, business: "TrustedBusiness") -> Non
     business.updated_at = utcnow()
 
 
+def store_support_partner_logo(app: Flask, partner: "SupportPartner", file) -> None:
+    if not file or not file.filename:
+        return
+
+    extension = Path(file.filename).suffix.lower()
+    if extension not in ALLOWED_SUPPORT_PARTNER_LOGO_EXTENSIONS:
+        allowed = ", ".join(
+            sorted(ext.lstrip(".") for ext in ALLOWED_SUPPORT_PARTNER_LOGO_EXTENSIONS)
+        )
+        raise ValueError(f"Support partner logos must be one of: {allowed}.")
+
+    upload_folder = Path(app.config["SUPPORT_PARTNER_UPLOAD_FOLDER"])
+    upload_folder.mkdir(parents=True, exist_ok=True)
+
+    timestamp = utcnow().strftime("%Y%m%d%H%M%S")
+    stored_filename = f"partner_{partner.id}_{timestamp}{extension}"
+    file_path = upload_folder / stored_filename
+    file.save(file_path)
+
+    if partner.logo_filename:
+        previous_path = upload_folder / partner.logo_filename
+        try:
+            if previous_path.exists():
+                previous_path.unlink()
+        except OSError:
+            pass
+
+    partner.logo_filename = stored_filename
+    partner.logo_original = file.filename or stored_filename
+    partner.updated_at = utcnow()
+
+
+def delete_support_partner_logo(app: Flask, partner: "SupportPartner") -> None:
+    if not partner.logo_filename:
+        return
+
+    upload_folder = Path(app.config["SUPPORT_PARTNER_UPLOAD_FOLDER"])
+    file_path = upload_folder / partner.logo_filename
+    try:
+        if file_path.exists():
+            file_path.unlink()
+    except OSError:
+        pass
+
+    partner.logo_filename = None
+    partner.logo_original = None
+    partner.updated_at = utcnow()
+
+
 def recalculate_client_billing_state(client: "Client") -> None:
     ensure_billing_schema_once()
 
@@ -477,7 +888,7 @@ def recalculate_client_billing_state(client: "Client") -> None:
         for invoice in client.invoices
         if invoice.status not in {"Paid", "Cancelled", "Refunded"}
     ]
-    today = date.today()
+    today = local_today()
     has_overdue = any(
         invoice.status == "Overdue"
         or (invoice.due_date is not None and invoice.due_date < today)
@@ -531,6 +942,185 @@ def record_autopay_event(
     )
     db.session.add(event)
     return event
+
+
+def process_autopay_run(
+    *, app: Flask | None = None, today: date | None = None
+) -> dict[str, object]:
+    if app is None:
+        try:
+            app = current_app._get_current_object()
+        except RuntimeError as exc:  # pragma: no cover - defensive guard
+            raise RuntimeError("process_autopay_run requires an application context") from exc
+
+    if not stripe_active(app):
+        message = "Stripe is not configured, so autopay cannot process charges"
+        return {
+            "status": "disabled",
+            "summary": message,
+            "processed_accounts": 0,
+            "submitted_charges": 0,
+            "failed_charges": 0,
+            "skipped_accounts": 0,
+        }
+
+    if today is None:
+        today = local_today(app)
+
+    autopay_clients = Client.query.filter_by(autopay_enabled=True).all()
+
+    processed_accounts = 0
+    submitted_charges = 0
+    failed_charges = 0
+    skipped_accounts = 0
+
+    for client in autopay_clients:
+        default_method = client.default_payment_method()
+        due_invoices = [
+            invoice
+            for invoice in client.invoices
+            if invoice.status in {"Pending", "Overdue"}
+            and (invoice.due_date is None or invoice.due_date <= today)
+        ]
+
+        scheduled_day = client.autopay_day
+        if scheduled_day:
+            if today.day != scheduled_day:
+                if due_invoices:
+                    record_autopay_event(
+                        client=client,
+                        invoice=None,
+                        payment_method=default_method,
+                        status="scheduled",
+                        message=(
+                            "Waiting for scheduled autopay day "
+                            f"{scheduled_day} to process invoices"
+                        ),
+                        amount_cents=0,
+                    )
+                skipped_accounts += 1
+                continue
+
+        if not due_invoices:
+            if default_method:
+                record_autopay_event(
+                    client=client,
+                    invoice=None,
+                    payment_method=default_method,
+                    status="skipped",
+                    message="No invoices due",
+                    amount_cents=0,
+                )
+            skipped_accounts += 1
+            continue
+
+        processed_accounts += 1
+
+        if (
+            default_method is None
+            or not default_method.token
+            or not default_method.token.startswith("pm_")
+        ):
+            for invoice in due_invoices:
+                invoice.autopay_attempted_at = utcnow()
+                invoice.autopay_status = "Missing Method"
+                record_autopay_event(
+                    client=client,
+                    invoice=invoice,
+                    payment_method=None,
+                    status="failed",
+                    message="Autopay failed: no default method",
+                    amount_cents=invoice.amount_cents,
+                )
+                failed_charges += 1
+            recalculate_client_billing_state(client)
+            continue
+
+        try:
+            sync_stripe_payment_method(
+                client, default_method.token, set_default=True
+            )
+        except StripeError as error:
+            for invoice in due_invoices:
+                invoice.autopay_attempted_at = utcnow()
+                invoice.autopay_status = "Failed"
+                record_autopay_event(
+                    client=client,
+                    invoice=invoice,
+                    payment_method=default_method,
+                    status="failed",
+                    message=f"Autopay failed to sync card: {describe_stripe_error(error)}",
+                    amount_cents=invoice.amount_cents,
+                )
+                failed_charges += 1
+            recalculate_client_billing_state(client)
+            continue
+
+        for invoice in due_invoices:
+            try:
+                payment_intent = ensure_invoice_payment_intent(
+                    invoice,
+                    autopay=True,
+                    client=client,
+                    payment_method_id=default_method.token,
+                )
+            except StripeError as error:
+                invoice.autopay_attempted_at = utcnow()
+                invoice.autopay_status = "Failed"
+                record_autopay_event(
+                    client=client,
+                    invoice=invoice,
+                    payment_method=default_method,
+                    status="failed",
+                    message=describe_stripe_error(error),
+                    amount_cents=invoice.amount_cents,
+                )
+                failed_charges += 1
+                continue
+
+            invoice.autopay_attempted_at = utcnow()
+            if payment_intent is None:
+                invoice.autopay_status = "Manual"
+                continue
+
+            invoice.autopay_status = "Processing"
+            record_autopay_event(
+                client=client,
+                invoice=invoice,
+                payment_method=default_method,
+                status="pending",
+                message="Submitted to Stripe for processing",
+                amount_cents=invoice.amount_cents,
+                stripe_payment_intent_id=payment_intent.id,
+            )
+            submitted_charges += 1
+
+        recalculate_client_billing_state(client)
+
+    for client in Client.query.filter_by(autopay_enabled=False).all():
+        recalculate_client_billing_state(client)
+
+    db.session.commit()
+
+    summary = (
+        f"Autopay processed {processed_accounts} accounts and submitted "
+        f"{submitted_charges} payments to Stripe"
+    )
+    if failed_charges:
+        summary += f" and {failed_charges} failures"
+    if skipped_accounts:
+        summary += f"; {skipped_accounts} accounts had nothing due"
+
+    status = "success" if failed_charges == 0 else "warning"
+
+    return {
+        "status": status,
+        "summary": summary,
+        "processed_accounts": processed_accounts,
+        "submitted_charges": submitted_charges,
+        "failed_charges": failed_charges,
+        "skipped_accounts": skipped_accounts,
+    }
 
 
 def ensure_stripe_customer(client: "Client") -> str | None:
@@ -926,6 +1516,8 @@ class Client(db.Model):
     verification_photo_filename = db.Column(db.String(255))
     verification_photo_uploaded_at = db.Column(db.DateTime(timezone=True))
     autopay_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    autopay_day = db.Column(db.Integer)
+    autopay_day_pending = db.Column(db.Integer)
     stripe_customer_id = db.Column(db.String(64), unique=True)
     billing_status = db.Column(db.String(40), nullable=False, default="Good Standing")
     billing_status_updated_at = db.Column(
@@ -960,6 +1552,7 @@ class Client(db.Model):
         back_populates="client",
         cascade="all, delete-orphan",
     )
+    uisp_devices = db.relationship("UispDevice", back_populates="client")
 
     def __repr__(self) -> str:
         return f"<Client {self.email}>"
@@ -1119,10 +1712,37 @@ DOCUMENT_MIME_TYPES = {
 TRUTHY_VALUES = {"1", "true", "yes", "on", "y"}
 
 
-def is_truthy(value: str | None) -> bool:
+def is_truthy(value: str | bool | None) -> bool:
+    if isinstance(value, bool):
+        return value
     if value is None:
         return False
-    return value.strip().lower() in TRUTHY_VALUES
+    return str(value).strip().lower() in TRUTHY_VALUES
+
+
+def wants_json_response() -> bool:
+    """Determine whether the current request expects a JSON response."""
+
+    if request.is_json:
+        return True
+
+    requested_with = request.headers.get("X-Requested-With", "").lower()
+    if requested_with == "xmlhttprequest":
+        return True
+
+    accept_mimetypes = request.accept_mimetypes
+    if accept_mimetypes:
+        best = accept_mimetypes.best
+        if best == "application/json":
+            return True
+        if (
+            accept_mimetypes["application/json"]
+            and accept_mimetypes["application/json"]
+            >= accept_mimetypes["text/html"]
+        ):
+            return True
+
+    return False
 
 PORTAL_SESSION_KEY = "client_portal_id"
 TECH_SESSION_KEY = "technician_portal_id"
@@ -1146,9 +1766,24 @@ ALLOWED_TICKET_ATTACHMENT_EXTENSIONS = {
     ".gif",
     ".heic",
     ".heif",
+    ".pdf",
+    ".txt",
+    ".csv",
+    ".zip",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
 }
 ALLOWED_TEAM_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 ALLOWED_TRUSTED_LOGO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".svg"}
+ALLOWED_SUPPORT_PARTNER_LOGO_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".svg",
+}
 
 
 def get_default_navigation_items() -> list[tuple[str, str, bool]]:
@@ -1302,6 +1937,57 @@ class Equipment(db.Model):
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Equipment {self.name} for client {self.client_id}>"
+
+
+class NetworkTower(db.Model):
+    __tablename__ = "network_towers"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    location = db.Column(db.String(255))
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    devices = db.relationship("UispDevice", back_populates="tower")
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<NetworkTower {self.name}>"
+
+
+class UispDevice(db.Model):
+    __tablename__ = "uisp_devices"
+
+    id = db.Column(db.Integer, primary_key=True)
+    uisp_id = db.Column(db.String(64), unique=True, nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    nickname = db.Column(db.String(120))
+    model = db.Column(db.String(120))
+    mac_address = db.Column(db.String(32))
+    site_name = db.Column(db.String(120))
+    ip_address = db.Column(db.String(64))
+    status = db.Column(db.String(20), nullable=False, default="unknown")
+    last_seen_at = db.Column(db.DateTime(timezone=True))
+    firmware_version = db.Column(db.String(64))
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"))
+    tower_id = db.Column(db.Integer, db.ForeignKey("network_towers.id"))
+    notes = db.Column(db.Text)
+    outage_notified_at = db.Column(db.DateTime(timezone=True))
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    client = db.relationship("Client", back_populates="uisp_devices")
+    tower = db.relationship("NetworkTower", back_populates="devices")
+
+    def display_name(self) -> str:
+        return self.nickname or self.name
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<UispDevice {self.display_name()} ({self.uisp_id})>"
 
 
 class Technician(db.Model):
@@ -1505,9 +2191,39 @@ class SupportTicket(db.Model):
         back_populates="ticket",
         cascade="all, delete-orphan",
     )
+    messages = db.relationship(
+        "SupportTicketMessage",
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+        order_by="SupportTicketMessage.created_at.asc()",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<SupportTicket {self.id} for client {self.client_id}>"
+
+
+class SupportTicketMessage(db.Model):
+    __tablename__ = "support_ticket_messages"
+
+    id = db.Column(db.Integer, primary_key=True)
+    ticket_id = db.Column(
+        db.Integer, db.ForeignKey("support_tickets.id"), nullable=False, index=True
+    )
+    sender = db.Column(db.String(20), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    admin_id = db.Column(db.Integer, db.ForeignKey("admin_users.id"))
+    client_id = db.Column(db.Integer, db.ForeignKey("clients.id"))
+
+    ticket = db.relationship("SupportTicket", back_populates="messages")
+    attachments = db.relationship(
+        "SupportTicketAttachment",
+        back_populates="message",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<SupportTicketMessage {self.id} ticket={self.ticket_id}>"
 
 
 class SupportTicketAttachment(db.Model):
@@ -1517,11 +2233,13 @@ class SupportTicketAttachment(db.Model):
     ticket_id = db.Column(
         db.Integer, db.ForeignKey("support_tickets.id"), nullable=False, index=True
     )
+    message_id = db.Column(db.Integer, db.ForeignKey("support_ticket_messages.id"))
     original_filename = db.Column(db.String(255), nullable=False)
     stored_filename = db.Column(db.String(255), nullable=False)
     uploaded_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
 
     ticket = db.relationship("SupportTicket", back_populates="attachments")
+    message = db.relationship("SupportTicketMessage", back_populates="attachments")
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<SupportTicketAttachment {self.id} ticket={self.ticket_id}>"
@@ -1645,6 +2363,7 @@ class NotificationConfig(db.Model):
     list_unsubscribe_mailto = db.Column(db.String(500))
     notify_install_activity = db.Column(db.Boolean, nullable=False, default=True)
     notify_customer_activity = db.Column(db.Boolean, nullable=False, default=True)
+    notify_all_account_activity = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = db.Column(
         db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
@@ -1658,6 +2377,23 @@ class NotificationConfig(db.Model):
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return "<NotificationConfig>"
+
+
+class UispConfig(db.Model):
+    __tablename__ = "uisp_config"
+
+    id = db.Column(db.Integer, primary_key=True)
+    base_url = db.Column(db.String(255))
+    api_token = db.Column(db.String(255))
+    auto_sync_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    auto_sync_interval_minutes = db.Column(db.Integer, nullable=False, default=30)
+    last_synced_at = db.Column(db.DateTime(timezone=True))
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return "<UispConfig>"
 
 
 class TLSConfig(db.Model):
@@ -1744,6 +2480,98 @@ class TrustedBusiness(db.Model):
         return f"<TrustedBusiness {self.name}>"
 
 
+class SupportPartner(db.Model):
+    __tablename__ = "support_partners"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(160), nullable=False)
+    website_url = db.Column(db.String(500))
+    description = db.Column(db.Text())
+    logo_filename = db.Column(db.String(255))
+    logo_original = db.Column(db.String(255))
+    position = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return f"<SupportPartner {self.name}>"
+
+
+class AutopayScheduler:
+    def __init__(self, app: Flask):
+        self.app = app
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._last_run_date: date | None = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            daemon=True,
+            name="autopay-scheduler",
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        thread = self._thread
+        if thread and thread.is_alive():
+            thread.join(timeout=1.0)
+
+    def _scheduled_time(self) -> tuple[int, int]:
+        return parse_daily_time(
+            self.app.config.get("AUTOPAY_SCHEDULER_TIME"), (3, 0)
+        )
+
+    def _run_loop(self) -> None:
+        while not self._stop_event.is_set():
+            now = local_now(self.app)
+            hour, minute = self._scheduled_time()
+            run_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+            if now >= run_at:
+                if self._last_run_date != now.date():
+                    self._execute_run(now)
+                    self._last_run_date = now.date()
+                    continue
+                next_run = run_at + timedelta(days=1)
+                wait_seconds = max(1.0, (next_run - now).total_seconds())
+            else:
+                wait_seconds = max(1.0, (run_at - now).total_seconds())
+
+            if self._stop_event.wait(wait_seconds):
+                break
+
+    def _execute_run(self, current_time: datetime) -> None:
+        try:
+            with self.app.app_context():
+                result = process_autopay_run(
+                    app=self.app, today=current_time.date()
+                )
+        except Exception:  # pragma: no cover - defensive guard
+            self.app.logger.exception("Autopay scheduler run failed")
+            return
+
+        summary = result.get("summary") or "Autopay scheduler completed"
+        status = result.get("status")
+        if status == "disabled":
+            self.app.logger.info("Autopay scheduler skipped: %s", summary)
+            return
+
+        self.app.logger.info(
+            "Autopay scheduler run: %s (processed=%s, submitted=%s, failed=%s, skipped=%s)",
+            summary,
+            result.get("processed_accounts"),
+            result.get("submitted_charges"),
+            result.get("failed_charges"),
+            result.get("skipped_accounts"),
+        )
+
+
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, instance_relative_config=True)
 
@@ -1761,6 +2589,12 @@ def create_app(test_config: dict | None = None) -> Flask:
     except ValueError:
         snmp_port = 162
 
+    publishable_env = (
+        os.environ.get("STRIPE_PUBLISHABLE_KEY")
+        or os.environ.get("STRIPE_PUBLIC_KEY")
+        or os.environ.get("STRIPE_PK")
+    )
+
     default_config = {
         "SECRET_KEY": secret_key,
         "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
@@ -1773,6 +2607,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         "THEME_UPLOAD_FOLDER": str(instance_path / "theme"),
         "TEAM_UPLOAD_FOLDER": str(instance_path / "team"),
         "TRUSTED_BUSINESS_UPLOAD_FOLDER": str(instance_path / "trusted_businesses"),
+        "SUPPORT_PARTNER_UPLOAD_FOLDER": str(instance_path / "support_partners"),
         "INSTALL_PHOTOS_FOLDER": str(instance_path / "install_photos"),
         "INSTALL_SIGNATURE_FOLDER": str(instance_path / "install_signatures"),
         "CLIENT_VERIFICATION_FOLDER": str(instance_path / "verification"),
@@ -1781,13 +2616,25 @@ def create_app(test_config: dict | None = None) -> Flask:
         "TLS_CONFIG_FOLDER": str(instance_path / "letsencrypt"),
         "TLS_WORK_FOLDER": str(instance_path / "letsencrypt-work"),
         "TLS_LOG_FOLDER": str(instance_path / "letsencrypt-logs"),
+        "TLS_CERTIFICATE_PATH": os.environ.get("TLS_CERTIFICATE_PATH"),
+        "TLS_PRIVATE_KEY_PATH": os.environ.get("TLS_PRIVATE_KEY_PATH"),
         "CONTACT_EMAIL": os.environ.get(
             "CONTACT_EMAIL", "info@dixielandwireless.com"
         ),
         "CONTACT_PHONE": os.environ.get("CONTACT_PHONE", "2053343969"),
         "STRIPE_SECRET_KEY": os.environ.get("STRIPE_SECRET_KEY"),
-        "STRIPE_PUBLISHABLE_KEY": os.environ.get("STRIPE_PUBLISHABLE_KEY"),
+        "STRIPE_PUBLISHABLE_KEY": publishable_env,
+        "STRIPE_PUBLIC_KEY": os.environ.get("STRIPE_PUBLIC_KEY"),
+        "STRIPE_PK": os.environ.get("STRIPE_PK"),
         "STRIPE_WEBHOOK_SECRET": os.environ.get("STRIPE_WEBHOOK_SECRET"),
+        "UISP_BASE_URL": os.environ.get("UISP_BASE_URL"),
+        "UISP_API_TOKEN": os.environ.get("UISP_API_TOKEN"),
+        "UISP_API_TIMEOUT": float(os.environ.get("UISP_API_TIMEOUT", "10")),
+        "APP_TIMEZONE": os.environ.get("APP_TIMEZONE", DEFAULT_APP_TIMEZONE),
+        "AUTOPAY_SCHEDULER_ENABLED": parse_env_bool(
+            os.environ.get("AUTOPAY_SCHEDULER_ENABLED"), True
+        ),
+        "AUTOPAY_SCHEDULER_TIME": os.environ.get("AUTOPAY_SCHEDULER_TIME", "03:00"),
         "SITE_SHELL_CACHE_SECONDS": float(
             os.environ.get(
                 "SITE_SHELL_CACHE_SECONDS", SITE_SHELL_CACHE_SECONDS_DEFAULT
@@ -1818,6 +2665,9 @@ def create_app(test_config: dict | None = None) -> Flask:
     if test_config:
         app.config.update(test_config)
 
+    if app.config.get("TESTING"):
+        app.config["AUTOPAY_SCHEDULER_ENABLED"] = False
+
     db.init_app(app)
     init_stripe(app)
 
@@ -1830,6 +2680,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "THEME_UPLOAD_FOLDER",
             "TEAM_UPLOAD_FOLDER",
             "TRUSTED_BUSINESS_UPLOAD_FOLDER",
+            "SUPPORT_PARTNER_UPLOAD_FOLDER",
             "INSTALL_PHOTOS_FOLDER",
             "INSTALL_SIGNATURE_FOLDER",
             "CLIENT_VERIFICATION_FOLDER",
@@ -1852,6 +2703,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_notification_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_support_ticket_message_schema()
         ensure_install_photo_requirements_seeded()
         ensure_technician_schedule_review_fields()
         ensure_team_member_bio_field()
@@ -1859,6 +2711,13 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_down_detector_configuration()
         ensure_tls_configuration()
         ensure_site_theme()
+        ensure_uisp_schema()
+
+    scheduler: AutopayScheduler | None = None
+    if app.config.get("AUTOPAY_SCHEDULER_ENABLED", True):
+        scheduler = AutopayScheduler(app)
+        scheduler.start()
+    app.autopay_scheduler = scheduler
 
     return app
 
@@ -1879,6 +2738,7 @@ def init_db() -> None:
         ensure_notification_configuration()
         ensure_appointment_technician_field()
         ensure_support_ticket_priority_field()
+        ensure_support_ticket_message_schema()
         ensure_install_photo_requirements_seeded()
         ensure_technician_schedule_review_fields()
         ensure_team_member_bio_field()
@@ -1886,6 +2746,7 @@ def init_db() -> None:
         ensure_down_detector_configuration()
         ensure_tls_configuration()
         ensure_site_theme()
+        ensure_uisp_schema()
 
 
 def issue_lets_encrypt_certificate(
@@ -1944,6 +2805,60 @@ def issue_lets_encrypt_certificate(
         return False, "Certificate files were not found after provisioning.", None, None
 
     return True, None, cert_path, key_path
+
+
+def resolve_tls_certificate_files(
+    app: Flask, tls_config: TLSConfig | None = None
+) -> tuple[Path, Path] | None:
+    candidates: list[tuple[str | Path | None, str | Path | None]] = []
+
+    if tls_config:
+        candidates.append((tls_config.certificate_path, tls_config.private_key_path))
+
+    config_cert = app.config.get("TLS_CERTIFICATE_PATH")
+    config_key = app.config.get("TLS_PRIVATE_KEY_PATH")
+    candidates.append((config_cert, config_key))
+
+    env_cert = os.environ.get("TLS_CERTIFICATE_PATH")
+    env_key = os.environ.get("TLS_PRIVATE_KEY_PATH")
+    candidates.append((env_cert, env_key))
+
+    domain = None
+    if tls_config and tls_config.domain:
+        domain = tls_config.domain.strip()
+
+    if domain:
+        candidates.append(
+            (
+                Path(f"/etc/letsencrypt/live/{domain}/fullchain.pem"),
+                Path(f"/etc/letsencrypt/live/{domain}/privkey.pem"),
+            )
+        )
+
+    candidates.append(
+        (
+            Path("/etc/letsencrypt/live/new1.dixielandwireless.com/fullchain.pem"),
+            Path("/etc/letsencrypt/live/new1.dixielandwireless.com/privkey.pem"),
+        )
+    )
+
+    seen: set[tuple[str, str]] = set()
+    for cert_candidate, key_candidate in candidates:
+        if not cert_candidate or not key_candidate:
+            continue
+
+        cert_path = Path(cert_candidate).expanduser()
+        key_path = Path(key_candidate).expanduser()
+
+        signature = (str(cert_path), str(key_path))
+        if signature in seen:
+            continue
+        seen.add(signature)
+
+        if cert_path.exists() and key_path.exists():
+            return cert_path, key_path
+
+    return None
 
 
 def send_email_via_office365(
@@ -2389,6 +3304,78 @@ def ensure_support_ticket_priority_field() -> None:
         )
 
 
+def ensure_support_ticket_message_schema() -> None:
+    inspector = inspect(db.engine)
+    tables = set(inspector.get_table_names())
+
+    if "support_ticket_messages" not in tables:
+        with db.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE support_ticket_messages (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        ticket_id INTEGER NOT NULL REFERENCES support_tickets (id),
+                        sender VARCHAR(20) NOT NULL,
+                        body TEXT NOT NULL,
+                        created_at TIMESTAMP,
+                        admin_id INTEGER,
+                        client_id INTEGER
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX ix_support_ticket_messages_ticket_id"
+                    " ON support_ticket_messages (ticket_id)"
+                )
+            )
+
+    try:
+        attachment_columns = {
+            column["name"]
+            for column in inspector.get_columns("support_ticket_attachments")
+        }
+    except NoSuchTableError:
+        attachment_columns = set()
+
+    if "message_id" not in attachment_columns:
+        with db.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE support_ticket_attachments ADD COLUMN message_id INTEGER"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS"
+                    " ix_support_ticket_attachments_message_id"
+                    " ON support_ticket_attachments (message_id)"
+                )
+            )
+
+    created = False
+    for ticket in SupportTicket.query.all():
+        if ticket.messages:
+            continue
+        body = (ticket.message or "").strip()
+        if not body:
+            continue
+        message = SupportTicketMessage(
+            ticket_id=ticket.id,
+            sender="client",
+            body=body,
+            client_id=ticket.client_id,
+            created_at=ticket.created_at,
+        )
+        db.session.add(message)
+        created = True
+
+    if created:
+        db.session.commit()
+
+
 def ensure_install_photo_requirements_seeded() -> None:
     inspector = inspect(db.engine)
     try:
@@ -2470,6 +3457,10 @@ def ensure_client_billing_fields() -> None:
         statements.append(
             "ALTER TABLE clients ADD COLUMN autopay_enabled BOOLEAN DEFAULT 0 NOT NULL"
         )
+    if "autopay_day" not in columns:
+        statements.append("ALTER TABLE clients ADD COLUMN autopay_day INTEGER")
+    if "autopay_day_pending" not in columns:
+        statements.append("ALTER TABLE clients ADD COLUMN autopay_day_pending INTEGER")
     if "billing_status" not in columns:
         statements.append(
             "ALTER TABLE clients ADD COLUMN billing_status VARCHAR(40)"
@@ -2603,6 +3594,90 @@ def ensure_billing_schema_once() -> None:
         _billing_schema_checked = True
 
     ensure_stripe_schema_once()
+    ensure_performance_indexes_once()
+
+
+def ensure_performance_indexes_once() -> None:
+    """Create frequently used indexes to keep dashboard queries fast."""
+
+    global _performance_indexes_checked
+
+    if _performance_indexes_checked:
+        return
+
+    inspector = inspect(db.engine)
+    try:
+        table_names = set(inspector.get_table_names())
+    except Exception:  # pragma: no cover - inspector guard
+        table_names = set()
+
+    index_plan: dict[str, dict[str, tuple[str, ...]]] = {
+        "clients": {
+            "ix_clients_status": ("status",),
+            "ix_clients_created_at": ("created_at",),
+        },
+        "invoices": {
+            "ix_invoices_client_id": ("client_id",),
+            "ix_invoices_status": ("status",),
+            "ix_invoices_due_date": ("due_date",),
+            "ix_invoices_created_at": ("created_at",),
+        },
+        "support_tickets": {
+            "ix_support_tickets_client_id": ("client_id",),
+            "ix_support_tickets_status": ("status",),
+            "ix_support_tickets_updated_at": ("updated_at",),
+        },
+        "support_ticket_messages": {
+            "ix_support_ticket_messages_created_at": ("created_at",),
+        },
+        "appointments": {
+            "ix_appointments_client_id": ("client_id",),
+            "ix_appointments_status": ("status",),
+            "ix_appointments_scheduled_for": ("scheduled_for",),
+        },
+        "equipment": {
+            "ix_equipment_client_id": ("client_id",),
+            "ix_equipment_created_at": ("created_at",),
+        },
+        "payment_methods": {
+            "ix_payment_methods_client_id": ("client_id",),
+            "ix_payment_methods_status": ("status",),
+        },
+        "autopay_events": {
+            "ix_autopay_events_client_id": ("client_id",),
+            "ix_autopay_events_attempted_at": ("attempted_at",),
+        },
+    }
+
+    statements: list[str] = []
+    missing_tables: set[str] = set()
+
+    for table_name, indexes in index_plan.items():
+        if table_name not in table_names:
+            missing_tables.add(table_name)
+            continue
+
+        try:
+            existing = {index["name"] for index in inspector.get_indexes(table_name)}
+        except NoSuchTableError:
+            missing_tables.add(table_name)
+            continue
+
+        for index_name, columns in indexes.items():
+            if index_name in existing:
+                continue
+            column_list = ", ".join(columns)
+            statements.append(
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_list})"
+            )
+
+    if statements:
+        with db.engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+    if not missing_tables:
+        _performance_indexes_checked = True
 
 
 def ensure_site_theme_background_fields() -> None:
@@ -2621,6 +3696,61 @@ def ensure_site_theme_background_fields() -> None:
         alterations.append(
             "ALTER TABLE site_theme ADD COLUMN background_image_original VARCHAR(255)"
         )
+
+    if not alterations:
+        return
+
+    with db.engine.begin() as connection:
+        for statement in alterations:
+            connection.execute(text(statement))
+
+
+def ensure_uisp_schema() -> None:
+    inspector = inspect(db.engine)
+
+    try:
+        table_names = set(inspector.get_table_names())
+    except Exception:  # pragma: no cover - safety guard
+        table_names = set()
+
+    if {"network_towers", "uisp_config"} - table_names:
+        # Let SQLAlchemy create any newly introduced UISP-related tables.
+        db.create_all()
+        inspector = inspect(db.engine)
+
+    try:
+        device_columns = {
+            column["name"] for column in inspector.get_columns("uisp_devices")
+        }
+    except NoSuchTableError:
+        # The UISP device table does not exist yet; create_all will take care of it.
+        db.create_all()
+        return
+
+    alterations: list[str] = []
+    column_statements = {
+        "nickname": "ALTER TABLE uisp_devices ADD COLUMN nickname VARCHAR(120)",
+        "site_name": "ALTER TABLE uisp_devices ADD COLUMN site_name VARCHAR(120)",
+        "ip_address": "ALTER TABLE uisp_devices ADD COLUMN ip_address VARCHAR(64)",
+        "status": (
+            "ALTER TABLE uisp_devices ADD COLUMN status VARCHAR(20) "
+            "NOT NULL DEFAULT 'unknown'"
+        ),
+        "last_seen_at": "ALTER TABLE uisp_devices ADD COLUMN last_seen_at TIMESTAMP",
+        "firmware_version": (
+            "ALTER TABLE uisp_devices ADD COLUMN firmware_version VARCHAR(64)"
+        ),
+        "tower_id": "ALTER TABLE uisp_devices ADD COLUMN tower_id INTEGER",
+        "notes": "ALTER TABLE uisp_devices ADD COLUMN notes TEXT",
+        "outage_notified_at": (
+            "ALTER TABLE uisp_devices ADD COLUMN outage_notified_at TIMESTAMP"
+        ),
+        "updated_at": "ALTER TABLE uisp_devices ADD COLUMN updated_at TIMESTAMP",
+    }
+
+    for column_name, statement in column_statements.items():
+        if column_name not in device_columns:
+            alterations.append(statement)
 
     if not alterations:
         return
@@ -2678,6 +3808,10 @@ def ensure_notification_configuration() -> NotificationConfig:
         statements.append(
             "ALTER TABLE notification_config ADD COLUMN list_unsubscribe_mailto VARCHAR(500)"
         )
+    if "notify_all_account_activity" not in columns:
+        statements.append(
+            "ALTER TABLE notification_config ADD COLUMN notify_all_account_activity BOOLEAN NOT NULL DEFAULT 1"
+        )
 
     if statements and not table_missing:
         with db.engine.begin() as connection:
@@ -2709,7 +3843,11 @@ def apply_stripe_config_from_database(app: Flask) -> StripeConfig:
     if config is None:
         config = StripeConfig(
             secret_key=_clean(app.config.get("STRIPE_SECRET_KEY")),
-            publishable_key=_clean(app.config.get("STRIPE_PUBLISHABLE_KEY")),
+            publishable_key=(
+                _clean(app.config.get("STRIPE_PUBLISHABLE_KEY"))
+                or _clean(app.config.get("STRIPE_PUBLIC_KEY"))
+                or _clean(app.config.get("STRIPE_PK"))
+            ),
             webhook_secret=_clean(app.config.get("STRIPE_WEBHOOK_SECRET")),
         )
         db.session.add(config)
@@ -2717,6 +3855,13 @@ def apply_stripe_config_from_database(app: Flask) -> StripeConfig:
     else:
         cleaned_secret = _clean(config.secret_key)
         cleaned_publishable = _clean(config.publishable_key)
+        fallback_publishable = (
+            _clean(app.config.get("STRIPE_PUBLIC_KEY"))
+            or _clean(app.config.get("STRIPE_PK"))
+        )
+        if not cleaned_publishable and fallback_publishable:
+            cleaned_publishable = fallback_publishable
+
         cleaned_webhook = _clean(config.webhook_secret)
 
         changed = False
@@ -2735,6 +3880,9 @@ def apply_stripe_config_from_database(app: Flask) -> StripeConfig:
 
     app.config["STRIPE_SECRET_KEY"] = config.secret_key
     app.config["STRIPE_PUBLISHABLE_KEY"] = config.publishable_key
+    if config.publishable_key:
+        app.config.setdefault("STRIPE_PUBLIC_KEY", config.publishable_key)
+        app.config.setdefault("STRIPE_PK", config.publishable_key)
     app.config["STRIPE_WEBHOOK_SECRET"] = config.webhook_secret
 
     init_stripe(app)
@@ -2834,8 +3982,8 @@ def should_send_notification(category: str) -> bool:
     if normalized == "install":
         return config.notify_install_activity
     if normalized == "customer":
-        return config.notify_customer_activity
-    return True
+        return config.notify_customer_activity or config.notify_all_account_activity
+    return config.notify_all_account_activity
 
 
 def login_required(func):
@@ -2844,6 +3992,8 @@ def login_required(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         if not session.get("admin_authenticated"):
+            if wants_json_response():
+                return jsonify({"error": "Administrator login required."}), 401
             flash("Please log in to access the dashboard.", "warning")
             return redirect(url_for("login", next=request.path))
         return func(*args, **kwargs)
@@ -2858,12 +4008,16 @@ def client_login_required(func):
     def wrapper(*args, **kwargs):
         client_id = session.get(PORTAL_SESSION_KEY)
         if not client_id:
+            if wants_json_response():
+                return jsonify({"error": "Customer login required."}), 401
             flash("Please log in to access your account.", "warning")
             return redirect(url_for("portal_login", next=request.path))
 
         client = Client.query.get(client_id)
         if not client:
             session.pop(PORTAL_SESSION_KEY, None)
+            if wants_json_response():
+                return jsonify({"error": "Customer session expired."}), 401
             flash("We couldn't find that account. Please log in again.", "danger")
             return redirect(url_for("portal_login"))
 
@@ -2880,12 +4034,16 @@ def technician_login_required(func):
     def wrapper(*args, **kwargs):
         technician_id = session.get(TECH_SESSION_KEY)
         if not technician_id:
+            if wants_json_response():
+                return jsonify({"error": "Technician login required."}), 401
             flash("Log in to access the technician portal.", "warning")
             return redirect(url_for("tech_login", next=request.path))
 
         technician = Technician.query.get(technician_id)
         if not technician or not technician.is_active:
             session.pop(TECH_SESSION_KEY, None)
+            if wants_json_response():
+                return jsonify({"error": "Technician session expired."}), 401
             flash("Your technician account is unavailable. Please contact dispatch.", "danger")
             return redirect(url_for("tech_login"))
 
@@ -3314,6 +4472,48 @@ def register_routes(app: Flask) -> None:
 
         return document, upload_folder, file_path
 
+    def _get_uisp_config() -> UispConfig | None:
+        return UispConfig.query.order_by(UispConfig.id.asc()).first()
+
+    def _resolve_uisp_credentials() -> tuple[str | None, str | None, UispConfig | None]:
+        config = _get_uisp_config()
+        base_url = (config.base_url or "").strip() if config else ""
+        api_token = (config.api_token or "").strip() if config else ""
+        if not base_url:
+            base_url = (app.config.get("UISP_BASE_URL") or "").strip()
+        if not api_token:
+            api_token = (app.config.get("UISP_API_TOKEN") or "").strip()
+        return base_url or None, api_token or None, config
+
+    def _build_uisp_client() -> UispApiClient:
+        timeout_value = app.config.get("UISP_API_TIMEOUT", 10.0)
+        try:
+            timeout = float(timeout_value)
+        except (TypeError, ValueError):
+            timeout = 10.0
+        base_url, api_token, _ = _resolve_uisp_credentials()
+        return UispApiClient(base_url or "", api_token or "", timeout=timeout)
+
+    def _collect_outage_recipients(device: UispDevice) -> list[str]:
+        recipients: set[str] = set()
+        if device.client and device.client.email:
+            recipients.add(device.client.email)
+        admin_email = (app.config.get("ADMIN_EMAIL") or "").strip()
+        if admin_email:
+            recipients.add(admin_email)
+        snmp_admin = (app.config.get("SNMP_ADMIN_EMAIL") or "").strip()
+        if snmp_admin:
+            recipients.add(snmp_admin)
+        for technician in Technician.query.filter_by(is_active=True).all():
+            if technician.email:
+                recipients.add(technician.email)
+        return sorted(recipients)
+
+    def _format_last_seen(timestamp: datetime | None) -> str:
+        if not timestamp:
+            return "Unknown"
+        return timestamp.astimezone(UTC).strftime("%Y-%m-%d %H:%M %Z")
+
     def dispatch_notification(
         recipient: str, subject: str, body: str, category: str = "general"
     ) -> bool:
@@ -3335,6 +4535,111 @@ def register_routes(app: Flask) -> None:
                 return False
 
         return send_email_via_snmp(app, recipient, subject, body)
+
+    def _admin_notification_recipient() -> str | None:
+        admin_email = (app.config.get("ADMIN_EMAIL") or "").strip()
+        if not admin_email:
+            admin_email = (app.config.get("CONTACT_EMAIL") or "").strip()
+        return admin_email or None
+
+    def notify_autopay_schedule_request(client: Client, requested_day: int) -> None:
+        recipient = _admin_notification_recipient()
+        if not recipient:
+            return
+
+        subject = f"Autopay schedule request from {client.name}"
+        dashboard_link = url_for(
+            "admin_client_account", client_id=client.id, _external=True
+        )
+        body = (
+            f"{client.name} asked to run autopay on day {requested_day} of each month.\n\n"
+            f"Review the account: {dashboard_link}"
+        )
+        dispatch_notification(recipient, subject, body, category="billing")
+
+    def notify_autopay_schedule_update(
+        client: Client, new_day: int | None, status: str
+    ) -> None:
+        recipient = (client.email or "").strip()
+        if not recipient:
+            return
+
+        if new_day:
+            schedule_line = f"on day {new_day} of each month."
+        else:
+            schedule_line = "on each invoice due date."
+
+        status_key = status.lower()
+        if status_key == "approved":
+            subject = "Autopay schedule approved"
+            intro = "We've approved your autopay schedule request."
+        elif status_key == "cleared":
+            subject = "Autopay schedule cleared"
+            intro = "We've cleared your autopay schedule preference."
+        elif status_key == "rejected":
+            subject = "Autopay schedule request needs attention"
+            intro = (
+                "We were unable to approve your recent autopay schedule request."
+            )
+        else:
+            subject = "Autopay schedule updated"
+            intro = "We've updated your autopay schedule."
+
+        portal_link = url_for("portal_dashboard", _external=True)
+        if status_key == "rejected":
+            follow_up = (
+                "Please reply to this email or submit a new request with the day you'd "
+                "prefer."
+            )
+        else:
+            follow_up = ""
+
+        body_lines = [intro, "", f"Your payments will run {schedule_line}"]
+        if follow_up:
+            body_lines.extend(["", follow_up])
+        body_lines.extend(["", f"Manage billing: {portal_link}"])
+
+        body = "\n".join(body_lines)
+        dispatch_notification(recipient, subject, body, category="billing")
+
+    def notify_ticket_message(ticket: SupportTicket, message: SupportTicketMessage) -> None:
+        attachment_note = ""
+        if message.attachments:
+            attachment_note = (
+                f"\n\nAttachments: {len(message.attachments)} file(s) uploaded. Log in to "
+                "review them."
+            )
+
+        if message.sender == "client":
+            recipient = _admin_notification_recipient()
+            if not recipient:
+                return
+
+            subject = f"Ticket #{ticket.id} update from {ticket.client.name}"
+            dashboard_link = url_for(
+                "admin_client_account", client_id=ticket.client_id, _external=True
+            )
+            body = (
+                f"{ticket.client.name} added a message to support ticket "
+                f"'{ticket.subject}'.\n\n{message.body}\n\nReview the ticket: "
+                f"{dashboard_link}"
+                f"{attachment_note}"
+            )
+            dispatch_notification(recipient, subject, body, category="customer")
+        else:
+            recipient = (ticket.client.email or "").strip()
+            if not recipient:
+                return
+
+            subject = f"Support ticket update: {ticket.subject}"
+            portal_link = url_for("portal_dashboard", _external=True)
+            portal_link = f"{portal_link}#ticket-{ticket.id}"
+            body = (
+                "We just added an update to your support ticket.\n\n"
+                f"{message.body}\n\nView your ticket: {portal_link}"
+                f"{attachment_note}"
+            )
+            dispatch_notification(recipient, subject, body, category="customer")
 
     @app.template_filter("currency")
     def format_currency(value: int | float | Decimal | None):
@@ -3466,8 +4771,17 @@ def register_routes(app: Flask) -> None:
             .limit(12)
             .all()
         )
+        support_partners = (
+            SupportPartner.query.order_by(
+                SupportPartner.position.asc(), SupportPartner.id.asc()
+            )
+            .limit(9)
+            .all()
+        )
         return render_template(
-            "index.html", trusted_businesses=trusted_businesses
+            "index.html",
+            trusted_businesses=trusted_businesses,
+            support_partners=support_partners,
         )
 
     @app.route("/services")
@@ -3751,6 +5065,12 @@ def register_routes(app: Flask) -> None:
         )
         tickets = (
             SupportTicket.query.filter_by(client_id=client.id)
+            .options(
+                selectinload(SupportTicket.attachments),
+                selectinload(SupportTicket.messages).selectinload(
+                    SupportTicketMessage.attachments
+                ),
+            )
             .order_by(SupportTicket.created_at.desc())
             .all()
         )
@@ -3787,6 +5107,104 @@ def register_routes(app: Flask) -> None:
             if plan
         ]
 
+        if stripe_active():
+            redirect_after_stripe = False
+
+            setup_intent_id = request.args.get("setup_intent")
+            if setup_intent_id:
+                redirect_after_stripe = True
+                try:
+                    setup_intent = stripe.SetupIntent.retrieve(setup_intent_id)
+                except StripeError as error:
+                    db.session.rollback()
+                    flash(
+                        (
+                            "Stripe could not finish saving your card: "
+                            f"{describe_stripe_error(error)}"
+                        ),
+                        "danger",
+                    )
+                else:
+                    metadata = _metadata_dict(setup_intent)
+                    intended_client_id = metadata.get("client_id")
+                    payment_method_id = getattr(setup_intent, "payment_method", None)
+                    status = getattr(setup_intent, "status", "")
+                    if intended_client_id and str(intended_client_id) != str(client.id):
+                        flash(
+                            "We couldn't verify that card belongs to your account.",
+                            "danger",
+                        )
+                    elif status in {"succeeded", "processing"} and payment_method_id:
+                        try:
+                            sync_stripe_payment_method(
+                                client,
+                                payment_method_id,
+                                set_default=not client.payment_methods,
+                            )
+                        except StripeError as error:
+                            db.session.rollback()
+                            flash(
+                                (
+                                    "Stripe could not save your card: "
+                                    f"{describe_stripe_error(error)}"
+                                ),
+                                "danger",
+                            )
+                        else:
+                            db.session.commit()
+                            flash(
+                                "Card saved. You're ready for autopay and online payments.",
+                                "success",
+                            )
+                    else:
+                        flash(
+                            "Stripe still needs you to finish verifying that card.",
+                            "warning",
+                        )
+
+            payment_intent_id = request.args.get("payment_intent")
+            if payment_intent_id:
+                redirect_after_stripe = True
+                try:
+                    payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+                except StripeError as error:
+                    db.session.rollback()
+                    flash(
+                        (
+                            "Stripe could not confirm the payment: "
+                            f"{describe_stripe_error(error)}"
+                        ),
+                        "danger",
+                    )
+                else:
+                    status = getattr(payment_intent, "status", "")
+                    if status in {"succeeded", "processing"}:
+                        if _handle_payment_intent_succeeded(
+                            SimpleNamespace(id=None), payment_intent
+                        ):
+                            db.session.commit()
+                            flash("Payment received. Thank you!", "success")
+                        else:
+                            flash(
+                                "We couldn't match that payment to your invoices.",
+                                "warning",
+                            )
+                    elif status == "requires_payment_method":
+                        flash(
+                            "Stripe needs another card before the payment can complete.",
+                            "danger",
+                        )
+                    else:
+                        flash(
+                            "Stripe is still processing your payment. Refresh in a moment.",
+                            "info",
+                        )
+
+            if redirect_after_stripe:
+                return redirect(url_for("portal_dashboard"))
+
+        publishable_key = get_stripe_publishable_key()
+
         return render_template(
             "portal_dashboard.html",
             client=client,
@@ -3800,7 +5218,7 @@ def register_routes(app: Flask) -> None:
             selected_services=selected_services,
             ticket_priority_options=TICKET_PRIORITY_OPTIONS,
             payment_methods=client.payment_methods,
-            stripe_publishable_key=current_app.config.get("STRIPE_PUBLISHABLE_KEY"),
+            stripe_publishable_key=publishable_key,
             stripe_ready=stripe_active(),
         )
 
@@ -3813,13 +5231,18 @@ def register_routes(app: Flask) -> None:
                 400,
             )
 
-        payload = request.get_json(silent=True) or {}
-        payment_method_id = (
-            payload.get("payment_method_id")
-            or request.form.get("payment_method_id", "").strip()
-        )
-        set_default_flag = payload.get("set_default") or request.form.get("set_default")
-        set_default = bool(set_default_flag) or not client.payment_methods
+        payload = request.get_json(silent=True)
+        if payload is None:
+            payload = {}
+        payment_method_id_raw = payload.get("payment_method_id")
+        if payment_method_id_raw is None:
+            payment_method_id_raw = request.form.get("payment_method_id", "")
+        payment_method_id = (payment_method_id_raw or "").strip()
+        if "set_default" in payload:
+            set_default_flag = payload.get("set_default")
+        else:
+            set_default_flag = request.form.get("set_default")
+        set_default = is_truthy(set_default_flag) or not client.payment_methods
 
         if not payment_method_id:
             return jsonify({"error": "Missing Stripe payment method id."}), 400
@@ -3833,6 +5256,39 @@ def register_routes(app: Flask) -> None:
         except StripeError as error:
             db.session.rollback()
             return jsonify({"error": describe_stripe_error(error)}), 400
+        except IntegrityError as error:
+            db.session.rollback()
+            current_app.logger.exception(
+                "Failed to save Stripe payment method for client %s", client.id
+            )
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "We couldn't save that card. Please try again "
+                            "or contact support."
+                        )
+                    }
+                ),
+                400,
+            )
+        except Exception as error:  # pragma: no cover - defensive catch-all
+            db.session.rollback()
+            current_app.logger.exception(
+                "Unexpected error while saving payment method for client %s",
+                client.id,
+            )
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "Something went wrong while saving your card. "
+                            "Please try again."
+                        )
+                    }
+                ),
+                500,
+            )
 
         db.session.commit()
 
@@ -3977,12 +5433,14 @@ def register_routes(app: Flask) -> None:
 
         db.session.commit()
 
+        publishable_key = get_stripe_publishable_key()
+
         return render_template(
             "portal_payment.html",
             client=client,
             invoice=invoice,
             payment_intent_client_secret=payment_intent.client_secret,
-            stripe_publishable_key=current_app.config.get("STRIPE_PUBLISHABLE_KEY"),
+            stripe_publishable_key=publishable_key,
         )
 
     @app.post("/portal/tickets")
@@ -4006,7 +5464,7 @@ def register_routes(app: Flask) -> None:
         for file in uploaded_files:
             if not allowed_ticket_attachment(file.filename):
                 flash(
-                    "Upload JPG, PNG, GIF, or HEIC images for ticket attachments.",
+                    "Upload JPG, PNG, GIF, HEIC, PDF, text, spreadsheet, archive, or document files.",
                     "danger",
                 )
                 return redirect(url_for("portal_dashboard"))
@@ -4024,14 +5482,132 @@ def register_routes(app: Flask) -> None:
         db.session.add(ticket)
         db.session.flush()
 
+        message_record = SupportTicketMessage(
+            ticket_id=ticket.id,
+            sender="client",
+            body=message,
+            client_id=client.id,
+        )
+        db.session.add(message_record)
+        db.session.flush()
+
         if uploaded_files:
             for file in uploaded_files:
-                store_ticket_attachment(current_app, ticket, file)
-            ticket.updated_at = utcnow()
+                store_ticket_attachment(
+                    current_app, ticket, file, message=message_record
+                )
+
+        ticket.updated_at = utcnow()
         db.session.commit()
+
+        notify_ticket_message(ticket, message_record)
 
         flash("Your support request has been submitted. We'll reach out shortly.", "success")
         return redirect(url_for("portal_dashboard"))
+
+    @app.post("/portal/autopay/schedule")
+    @client_login_required
+    def portal_autopay_schedule(client: Client):
+        requested_value = (request.form.get("requested_day") or "").strip()
+
+        if not requested_value:
+            if client.autopay_day_pending:
+                client.autopay_day_pending = None
+                db.session.commit()
+                flash("Autopay schedule request cleared.", "info")
+            else:
+                flash("No schedule changes submitted.", "info")
+            return redirect(url_for("portal_dashboard"))
+
+        try:
+            requested_day = int(requested_value)
+        except ValueError:
+            flash("Choose a valid autopay day between 1 and 28.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        if requested_day < 1 or requested_day > 28:
+            flash("Choose a valid autopay day between 1 and 28.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        if client.autopay_day == requested_day:
+            client.autopay_day_pending = None
+            db.session.commit()
+            flash("Autopay already runs on that day.", "info")
+            return redirect(url_for("portal_dashboard"))
+
+        client.autopay_day_pending = requested_day
+        db.session.commit()
+
+        notify_autopay_schedule_request(client, requested_day)
+
+        if client.autopay_enabled:
+            flash(
+                "Thanks! We'll review the new autopay day and send a confirmation soon.",
+                "success",
+            )
+        else:
+            flash(
+                "Schedule request received. Enable autopay once you're ready to activate monthly payments.",
+                "info",
+            )
+        return redirect(url_for("portal_dashboard"))
+
+    @app.post("/portal/tickets/<int:ticket_id>/messages")
+    @client_login_required
+    def portal_ticket_message(client: Client, ticket_id: int):
+        ticket = (
+            SupportTicket.query.filter_by(id=ticket_id, client_id=client.id)
+            .options(joinedload(SupportTicket.attachments))
+            .first()
+        )
+        if not ticket:
+            flash("We couldn't find that ticket.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        body = (request.form.get("message") or "").strip()
+        uploaded_files = [
+            file
+            for file in request.files.getlist("attachments")
+            if file and getattr(file, "filename", "")
+        ]
+
+        if not body and not uploaded_files:
+            flash("Add a message or attachment before sending.", "danger")
+            return redirect(url_for("portal_dashboard"))
+
+        if uploaded_files:
+            ensure_file_surface_enabled("support-ticket-attachments")
+            for file in uploaded_files:
+                if not allowed_ticket_attachment(file.filename):
+                    flash(
+                        "Upload JPG, PNG, GIF, HEIC, PDF, text, spreadsheet, or document files.",
+                        "danger",
+                    )
+                    return redirect(url_for("portal_dashboard"))
+
+        message_text = body or "Attachments uploaded"
+
+        message_record = SupportTicketMessage(
+            ticket_id=ticket.id,
+            sender="client",
+            body=message_text,
+            client_id=client.id,
+        )
+        db.session.add(message_record)
+        db.session.flush()
+
+        for file in uploaded_files:
+            store_ticket_attachment(
+                current_app, ticket, file, message=message_record
+            )
+
+        ticket.updated_at = utcnow()
+        db.session.commit()
+
+        notify_ticket_message(ticket, message_record)
+
+        flash("Message sent to our support team.", "success")
+        return redirect(url_for("portal_dashboard") + f"#ticket-{ticket.id}")
 
     @app.post("/portal/appointments/<int:appointment_id>/action")
     @client_login_required
@@ -5038,11 +6614,16 @@ def register_routes(app: Flask) -> None:
         suspended_clients: list[Client] = []
         team_members: list[TeamMember] = []
         trusted_businesses: list[TrustedBusiness] = []
+        support_partners: list[SupportPartner] = []
         stripe_config: StripeConfig | None = None
         pending_schedule_requests: list[TechnicianSchedule] = []
         recent_schedule_decisions: list[TechnicianSchedule] = []
         notification_config: NotificationConfig | None = None
         office365_ready = False
+        uisp_devices: list[UispDevice] = []
+        unassigned_uisp_devices: list[UispDevice] = []
+        network_towers: list[NetworkTower] = []
+        uisp_config: UispConfig | None = None
         if active_section in {
             "customers",
             "billing",
@@ -5066,6 +6647,16 @@ def register_routes(app: Flask) -> None:
         if active_section in {"network", "field"} and clients:
             suspended_clients = [client for client in clients if client.service_suspended]
 
+        if active_section == "network":
+            uisp_devices = UispDevice.query.order_by(UispDevice.name.asc()).all()
+            unassigned_uisp_devices = [
+                device for device in uisp_devices if device.client_id is None
+            ]
+            network_towers = (
+                NetworkTower.query.order_by(NetworkTower.name.asc()).all()
+            )
+            uisp_config = _get_uisp_config()
+
         if active_section == "story":
             team_members = (
                 TeamMember.query.order_by(TeamMember.position.asc(), TeamMember.id.asc())
@@ -5076,6 +6667,17 @@ def register_routes(app: Flask) -> None:
                     TrustedBusiness.position.asc(), TrustedBusiness.id.asc()
                 )
                 .all()
+            )
+            support_partners = (
+                SupportPartner.query.order_by(
+                    SupportPartner.position.asc(), SupportPartner.id.asc()
+                ).all()
+            )
+        elif active_section == "overview":
+            support_partners = (
+                SupportPartner.query.order_by(
+                    SupportPartner.position.asc(), SupportPartner.id.asc()
+                ).all()
             )
 
         if active_section == "customers" and focus_client_id:
@@ -5096,6 +6698,12 @@ def register_routes(app: Flask) -> None:
                 )
                 selected_client_tickets = (
                     SupportTicket.query.filter_by(client_id=selected_client.id)
+                    .options(
+                        selectinload(SupportTicket.attachments),
+                        selectinload(SupportTicket.messages).selectinload(
+                            SupportTicketMessage.attachments
+                        ),
+                    )
                     .order_by(SupportTicket.created_at.desc())
                     .limit(6)
                     .all()
@@ -5453,11 +7061,16 @@ def register_routes(app: Flask) -> None:
             tls_config=tls_config,
             tls_certificate_ready=tls_certificate_ready,
             tls_challenge_folder=tls_challenge_folder,
+            uisp_devices=uisp_devices,
+            unassigned_uisp_devices=unassigned_uisp_devices,
+            network_towers=network_towers,
+            uisp_config=uisp_config,
             admin_users=admin_users,
             current_admin_id=session.get("admin_user_id"),
             site_theme=site_theme,
             team_members=team_members,
             trusted_businesses=trusted_businesses,
+            support_partners=support_partners,
             recent_autopay_events=recent_autopay_events,
             suspended_clients=suspended_clients,
             stripe_config=stripe_config,
@@ -5482,8 +7095,24 @@ def register_routes(app: Flask) -> None:
             .order_by(Equipment.created_at.desc())
             .all()
         )
+        assigned_uisp_devices = (
+            UispDevice.query.filter_by(client_id=client.id)
+            .order_by(UispDevice.name.asc())
+            .all()
+        )
+        available_uisp_devices = (
+            UispDevice.query.filter(UispDevice.client_id.is_(None))
+            .order_by(UispDevice.name.asc())
+            .all()
+        )
         tickets = (
             SupportTicket.query.filter_by(client_id=client.id)
+            .options(
+                selectinload(SupportTicket.attachments),
+                selectinload(SupportTicket.messages).selectinload(
+                    SupportTicketMessage.attachments
+                ),
+            )
             .order_by(SupportTicket.updated_at.desc())
             .all()
         )
@@ -5491,6 +7120,9 @@ def register_routes(app: Flask) -> None:
             Appointment.query.filter_by(client_id=client.id)
             .order_by(Appointment.scheduled_for.desc())
             .all()
+        )
+        network_towers = (
+            NetworkTower.query.order_by(NetworkTower.name.asc()).all()
         )
 
         current_time = utcnow()
@@ -5601,6 +7233,8 @@ def register_routes(app: Flask) -> None:
         )
         current_year = date.today().year
 
+        publishable_key = get_stripe_publishable_key()
+
         return render_template(
             "admin_client_account.html",
             client=client,
@@ -5631,7 +7265,10 @@ def register_routes(app: Flask) -> None:
             latest_acknowledgement=latest_acknowledgement,
             current_year=current_year,
             stripe_ready=stripe_active(),
-            stripe_publishable_key=current_app.config.get("STRIPE_PUBLISHABLE_KEY"),
+            stripe_publishable_key=publishable_key,
+            assigned_uisp_devices=assigned_uisp_devices,
+            available_uisp_devices=available_uisp_devices,
+            network_towers=network_towers,
         )
 
     @app.post("/documents/upload")
@@ -6038,24 +7675,76 @@ def register_routes(app: Flask) -> None:
         flash("Verification photo updated.", "success")
         return _redirect_back_to_dashboard("customers")
 
+    @app.get("/clients/<int:client_id>/payment-methods/setup-intent")
+    @login_required
+    def admin_payment_method_setup_intent(client_id: int):
+        client = Client.query.get_or_404(client_id)
+
+        if not stripe_active():
+            return jsonify({"error": "Stripe is not configured."}), 400
+
+        customer_id = ensure_stripe_customer(client)
+        if customer_id is None:
+            return jsonify({"error": "Unable to prepare Stripe customer."}), 400
+
+        setup_intent = stripe.SetupIntent.create(
+            customer=customer_id,
+            usage="off_session",
+            payment_method_types=["card"],
+            metadata={
+                "client_id": str(client.id),
+                "created_by": "admin",
+            },
+        )
+
+        return jsonify({"client_secret": setup_intent.client_secret})
+
     @app.post("/clients/<int:client_id>/payment-methods")
     @login_required
     def add_payment_method(client_id: int):
         client = Client.query.get_or_404(client_id)
+
+        payload = request.get_json(silent=True)
+        wants_json = payload is not None
+
         if not stripe_active():
+            if wants_json:
+                return (
+                    jsonify({"error": "Stripe is not configured."}),
+                    400,
+                )
             flash(
                 "Configure Stripe API keys before adding payment methods.",
                 "danger",
             )
             return _redirect_back_to_dashboard("billing", focus=client.id)
 
-        stripe_payment_method_id = (
-            request.form.get("stripe_payment_method_id", "").strip()
-        )
-        nickname = request.form.get("nickname", "").strip() or None
-        set_default = bool(request.form.get("set_default")) or not client.payment_methods
+        if payload is None:
+            payload = {}
+
+        payment_method_raw = payload.get("payment_method_id")
+        if payment_method_raw is None:
+            payment_method_raw = request.form.get("stripe_payment_method_id", "")
+        stripe_payment_method_id = (payment_method_raw or "").strip()
+
+        if "set_default" in payload:
+            set_default_flag = payload.get("set_default")
+        else:
+            set_default_flag = request.form.get("set_default")
+        set_default = is_truthy(set_default_flag) or not client.payment_methods
+
+        if "nickname" in payload:
+            nickname_raw = payload.get("nickname")
+            nickname = (nickname_raw or "").strip() or None
+        else:
+            nickname = request.form.get("nickname", "").strip() or None
 
         if not stripe_payment_method_id:
+            if wants_json:
+                return (
+                    jsonify({"error": "Provide a Stripe payment method identifier."}),
+                    400,
+                )
             flash("Provide a Stripe payment method identifier.", "danger")
             return _redirect_back_to_dashboard("billing", focus=client.id)
 
@@ -6066,17 +7755,85 @@ def register_routes(app: Flask) -> None:
                 set_default=set_default,
             )
         except StripeError as error:
+            db.session.rollback()
+            error_message = describe_stripe_error(error)
+            if wants_json:
+                return (
+                    jsonify({"error": f"Unable to save the payment method: {error_message}"}),
+                    400,
+                )
             flash(
-                f"Unable to save the payment method: {describe_stripe_error(error)}",
+                f"Unable to save the payment method: {error_message}",
                 "danger",
             )
+            return _redirect_back_to_dashboard("billing", focus=client.id)
+        except IntegrityError:
             db.session.rollback()
+            current_app.logger.exception(
+                "Failed to save Stripe payment method for client %s", client.id
+            )
+            if wants_json:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "We couldn't save that card. Please try again or contact support."
+                            )
+                        }
+                    ),
+                    400,
+                )
+            flash(
+                "We couldn't save that card. Please try again or contact support.",
+                "danger",
+            )
+            return _redirect_back_to_dashboard("billing", focus=client.id)
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception(
+                "Unexpected error while saving payment method for client %s",
+                client.id,
+            )
+            if wants_json:
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "Something went wrong while saving the card. Please try again."
+                            )
+                        }
+                    ),
+                    500,
+                )
+            flash(
+                "Something went wrong while saving the card. Please try again.",
+                "danger",
+            )
             return _redirect_back_to_dashboard("billing", focus=client.id)
 
         if nickname:
             payment_method.nickname = nickname
 
         db.session.commit()
+
+        if wants_json:
+            return (
+                jsonify(
+                    {
+                        "status": "ok",
+                        "method": {
+                            "id": payment_method.id,
+                            "brand": payment_method.brand,
+                            "last4": payment_method.last4,
+                            "exp_month": payment_method.exp_month,
+                            "exp_year": payment_method.exp_year,
+                            "cardholder_name": payment_method.cardholder_name,
+                            "is_default": payment_method.is_default,
+                        },
+                    }
+                ),
+                200,
+            )
 
         flash(f"Saved {payment_method.describe()} for {client.name}.", "success")
 
@@ -6225,141 +7982,106 @@ def register_routes(app: Flask) -> None:
             return redirect(next_url)
         return redirect(url_for("admin_client_account", client_id=client.id))
 
+    @app.post("/clients/<int:client_id>/autopay/schedule")
+    @login_required
+    def configure_autopay_schedule(client_id: int):
+        client = Client.query.get_or_404(client_id)
+        action = (request.form.get("action") or "set").strip().lower()
+        next_url = request.form.get("next") or request.args.get("next")
+
+        if action == "approve":
+            pending_day = client.autopay_day_pending
+            if not pending_day:
+                flash("No pending schedule to approve.", "info")
+            else:
+                client.autopay_day = pending_day
+                client.autopay_day_pending = None
+                db.session.commit()
+                notify_autopay_schedule_update(client, pending_day, "approved")
+                flash(
+                    f"Approved autopay for day {pending_day} of each month.", "success"
+                )
+            redirect_url = next_url or url_for(
+                "admin_client_account", client_id=client.id
+            )
+            return redirect(redirect_url)
+
+        if action == "reject":
+            pending_day = client.autopay_day_pending
+            if not pending_day:
+                flash("No pending schedule to reject.", "info")
+            else:
+                client.autopay_day_pending = None
+                db.session.commit()
+                notify_autopay_schedule_update(
+                    client, client.autopay_day, "rejected"
+                )
+                flash("Autopay schedule request dismissed.", "info")
+            redirect_url = next_url or url_for(
+                "admin_client_account", client_id=client.id
+            )
+            return redirect(redirect_url)
+
+        day_value = (request.form.get("autopay_day") or "").strip()
+        if not day_value:
+            cleared = client.autopay_day is not None or client.autopay_day_pending is not None
+            client.autopay_day = None
+            client.autopay_day_pending = None
+            db.session.commit()
+            if cleared:
+                notify_autopay_schedule_update(client, None, "cleared")
+                flash("Autopay will run on each invoice due date.", "info")
+            else:
+                flash("Autopay schedule unchanged.", "info")
+            redirect_url = next_url or url_for(
+                "admin_client_account", client_id=client.id
+            )
+            return redirect(redirect_url)
+
+        try:
+            selected_day = int(day_value)
+        except ValueError:
+            flash("Select a valid autopay day between 1 and 28.", "danger")
+            return redirect(
+                next_url or url_for("admin_client_account", client_id=client.id)
+            )
+
+        if selected_day < 1 or selected_day > 28:
+            flash("Select a valid autopay day between 1 and 28.", "danger")
+            return redirect(
+                next_url or url_for("admin_client_account", client_id=client.id)
+            )
+
+        if client.autopay_day == selected_day and not client.autopay_day_pending:
+            flash("Autopay is already scheduled for that day.", "info")
+            return redirect(
+                next_url or url_for("admin_client_account", client_id=client.id)
+            )
+
+        client.autopay_day = selected_day
+        client.autopay_day_pending = None
+        db.session.commit()
+
+        notify_autopay_schedule_update(client, selected_day, "updated")
+        flash(f"Autopay will process on day {selected_day} each month.", "success")
+
+        redirect_url = next_url or url_for("admin_client_account", client_id=client.id)
+        return redirect(redirect_url)
+
     @app.post("/autopay/run")
     @login_required
     def run_autopay():
-        if not stripe_active():
-            flash(
-                "Stripe is not configured, so autopay cannot process charges.",
-                "warning",
-            )
-            return _redirect_back_to_dashboard("billing")
+        result = process_autopay_run()
+        summary = result.get("summary") or "Autopay run completed"
+        if not summary.endswith("."):
+            summary += "."
 
-        today = date.today()
-        autopay_clients = Client.query.filter_by(autopay_enabled=True).all()
-        processed_accounts = 0
-        submitted_charges = 0
-        failed_charges = 0
-        skipped_accounts = 0
+        if result.get("status") == "disabled":
+            flash(summary, "warning")
+        else:
+            category = "info" if result.get("failed_charges", 0) == 0 else "warning"
+            flash(summary, category)
 
-        for client in autopay_clients:
-            default_method = client.default_payment_method()
-            due_invoices = [
-                invoice
-                for invoice in client.invoices
-                if invoice.status in {"Pending", "Overdue"}
-                and (invoice.due_date is None or invoice.due_date <= today)
-            ]
-
-            if not due_invoices:
-                if default_method:
-                    record_autopay_event(
-                        client=client,
-                        invoice=None,
-                        payment_method=default_method,
-                        status="skipped",
-                        message="No invoices due",
-                        amount_cents=0,
-                    )
-                skipped_accounts += 1
-                continue
-
-            processed_accounts += 1
-
-            if (
-                default_method is None
-                or not default_method.token
-                or not default_method.token.startswith("pm_")
-            ):
-                for invoice in due_invoices:
-                    invoice.autopay_attempted_at = utcnow()
-                    invoice.autopay_status = "Missing Method"
-                    record_autopay_event(
-                        client=client,
-                        invoice=invoice,
-                        payment_method=None,
-                        status="failed",
-                        message="Autopay failed: no default method",
-                        amount_cents=invoice.amount_cents,
-                    )
-                    failed_charges += 1
-                recalculate_client_billing_state(client)
-                continue
-
-            try:
-                sync_stripe_payment_method(client, default_method.token, set_default=True)
-            except StripeError as error:
-                for invoice in due_invoices:
-                    invoice.autopay_attempted_at = utcnow()
-                    invoice.autopay_status = "Failed"
-                    record_autopay_event(
-                        client=client,
-                        invoice=invoice,
-                        payment_method=default_method,
-                        status="failed",
-                        message=f"Autopay failed to sync card: {describe_stripe_error(error)}",
-                        amount_cents=invoice.amount_cents,
-                    )
-                    failed_charges += 1
-                recalculate_client_billing_state(client)
-                continue
-
-            for invoice in due_invoices:
-                try:
-                    payment_intent = ensure_invoice_payment_intent(
-                        invoice,
-                        autopay=True,
-                        client=client,
-                        payment_method_id=default_method.token,
-                    )
-                except StripeError as error:
-                    invoice.autopay_attempted_at = utcnow()
-                    invoice.autopay_status = "Failed"
-                    record_autopay_event(
-                        client=client,
-                        invoice=invoice,
-                        payment_method=default_method,
-                        status="failed",
-                        message=describe_stripe_error(error),
-                        amount_cents=invoice.amount_cents,
-                    )
-                    failed_charges += 1
-                    continue
-
-                invoice.autopay_attempted_at = utcnow()
-                if payment_intent is None:
-                    invoice.autopay_status = "Manual"
-                    continue
-
-                invoice.autopay_status = "Processing"
-                record_autopay_event(
-                    client=client,
-                    invoice=invoice,
-                    payment_method=default_method,
-                    status="pending",
-                    message="Submitted to Stripe for processing",
-                    amount_cents=invoice.amount_cents,
-                    stripe_payment_intent_id=payment_intent.id,
-                )
-                submitted_charges += 1
-
-            recalculate_client_billing_state(client)
-
-        for client in Client.query.filter_by(autopay_enabled=False).all():
-            recalculate_client_billing_state(client)
-
-        db.session.commit()
-
-        summary = (
-            f"Autopay processed {processed_accounts} accounts and submitted "
-            f"{submitted_charges} payments to Stripe"
-        )
-        if failed_charges:
-            summary += f" and {failed_charges} failures"
-        if skipped_accounts:
-            summary += f"; {skipped_accounts} accounts had nothing due"
-
-        flash(summary + ".", "info" if failed_charges == 0 else "warning")
         return _redirect_back_to_dashboard("billing")
 
     @app.post("/stripe/webhook")
@@ -6442,6 +8164,27 @@ def register_routes(app: Flask) -> None:
         recalculate_client_billing_state(client)
         db.session.commit()
 
+        if client.email:
+            amount_display = f"${(Decimal(invoice.amount_cents) / Decimal(100)).quantize(Decimal('0.01')):,.2f}"
+            due_line = (
+                f"Due date: {invoice.due_date.strftime('%Y-%m-%d')}"
+                if invoice.due_date
+                else "Due date: Not set"
+            )
+            dispatch_notification(
+                client.email,
+                f"Invoice posted: {invoice.description}",
+                (
+                    f"Hello {client.name},\n\n"
+                    f"We've posted a new invoice (#{invoice.id}) for {amount_display}.\n"
+                    f"Description: {invoice.description}\n"
+                    f"{due_line}\n"
+                    f"Status: {invoice.status}\n\n"
+                    "You can review this invoice and make payments in your customer portal."
+                ),
+                category="billing",
+            )
+
         flash(f"Invoice added for {client.name}.", "success")
         return _redirect_back_to_dashboard("billing")
 
@@ -6498,6 +8241,29 @@ def register_routes(app: Flask) -> None:
         recalculate_client_billing_state(invoice.client)
         db.session.commit()
 
+        client = invoice.client
+        if client and client.email:
+            amount_display = f"${(Decimal(invoice.amount_cents) / Decimal(100)).quantize(Decimal('0.01')):,.2f}"
+            due_line = (
+                f"Due date: {invoice.due_date.strftime('%Y-%m-%d')}"
+                if invoice.due_date
+                else "Due date: Not set"
+            )
+            dispatch_notification(
+                client.email,
+                f"Invoice updated: {invoice.description}",
+                (
+                    f"Hello {client.name},\n\n"
+                    f"We've updated your invoice (#{invoice.id}).\n"
+                    f"Description: {invoice.description}\n"
+                    f"Amount: {amount_display}\n"
+                    f"{due_line}\n"
+                    f"Status: {invoice.status}\n\n"
+                    "Log in to your customer portal to review the latest details."
+                ),
+                category="billing",
+            )
+
         flash("Invoice updated.", "success")
         return _redirect_back_to_dashboard("billing")
 
@@ -6550,6 +8316,402 @@ def register_routes(app: Flask) -> None:
         flash("Refund initiated with Stripe.", "success")
         return _redirect_back_to_dashboard("billing", focus=invoice.client_id)
 
+    @app.post("/uisp/config")
+    @login_required
+    def update_uisp_config():
+        base_url = (request.form.get("base_url") or "").strip()
+        api_token = (request.form.get("api_token") or "").strip()
+        auto_sync_enabled = is_truthy(request.form.get("auto_sync_enabled"))
+        interval_raw = (request.form.get("auto_sync_interval") or "").strip()
+
+        if interval_raw:
+            try:
+                interval = int(interval_raw)
+            except ValueError:
+                flash("Sync interval must be a valid number of minutes.", "danger")
+                return _redirect_back_to_dashboard("network")
+        else:
+            interval = 30
+
+        interval = max(5, min(interval, 1440))
+
+        config = _get_uisp_config()
+        if not config:
+            config = UispConfig()
+            db.session.add(config)
+
+        config.base_url = base_url or None
+        config.api_token = api_token or None
+        config.auto_sync_enabled = auto_sync_enabled
+        config.auto_sync_interval_minutes = interval
+        config.updated_at = utcnow()
+        db.session.commit()
+
+        if base_url:
+            app.config["UISP_BASE_URL"] = base_url
+        if api_token:
+            app.config["UISP_API_TOKEN"] = api_token
+
+        flash("UISP settings updated.", "success")
+        return _redirect_back_to_dashboard("network")
+
+    @app.post("/network/towers")
+    @login_required
+    def create_network_tower():
+        name = (request.form.get("name") or "").strip()
+        location = (request.form.get("location") or "").strip() or None
+        notes = (request.form.get("notes") or "").strip() or None
+
+        if not name:
+            flash("Tower name is required.", "danger")
+            return _redirect_back_to_dashboard("network")
+
+        tower = NetworkTower(name=name, location=location, notes=notes)
+        db.session.add(tower)
+        db.session.commit()
+
+        flash(f"Tower {tower.name} added.", "success")
+        return _redirect_back_to_dashboard("network")
+
+    @app.post("/network/towers/<int:tower_id>/update")
+    @login_required
+    def update_network_tower(tower_id: int):
+        tower = NetworkTower.query.get_or_404(tower_id)
+        name = (request.form.get("name") or "").strip()
+        location = (request.form.get("location") or "").strip() or None
+        notes = (request.form.get("notes") or "").strip() or None
+
+        if not name:
+            flash("Tower name is required.", "danger")
+            return _redirect_back_to_dashboard("network")
+
+        tower.name = name
+        tower.location = location
+        tower.notes = notes
+        tower.updated_at = utcnow()
+        db.session.commit()
+
+        flash("Tower details updated.", "success")
+        return _redirect_back_to_dashboard("network")
+
+    @app.post("/network/towers/<int:tower_id>/delete")
+    @login_required
+    def delete_network_tower(tower_id: int):
+        tower = NetworkTower.query.get_or_404(tower_id)
+        for device in tower.devices:
+            device.tower = None
+            device.updated_at = utcnow()
+        db.session.delete(tower)
+        db.session.commit()
+
+        flash("Tower removed.", "info")
+        return _redirect_back_to_dashboard("network")
+
+    @app.post("/uisp/devices/import")
+    @login_required
+    def import_uisp_devices():
+        try:
+            api_client = _build_uisp_client()
+        except UispApiError:
+            flash(
+                "Add your UISP base URL and API token before syncing devices.",
+                "danger",
+            )
+            return _redirect_back_to_dashboard("network")
+
+        try:
+            payload = api_client.fetch_devices()
+        except UispApiError as exc:
+            flash(f"Unable to sync UISP devices: {exc}", "danger")
+            return _redirect_back_to_dashboard("network")
+
+        if not payload:
+            flash("No devices were returned from UISP.", "info")
+            return _redirect_back_to_dashboard("network")
+
+        def _clean_string(value: object | None) -> str | None:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                cleaned = value.strip()
+            else:
+                cleaned = str(value).strip()
+            return cleaned or None
+
+        created = 0
+        updated = 0
+        outages = 0
+        now = utcnow()
+        _, _, config = _resolve_uisp_credentials()
+        towers_by_name = {
+            tower.name.lower(): tower
+            for tower in NetworkTower.query.order_by(NetworkTower.name.asc()).all()
+        }
+
+        for entry in payload:
+            identification = entry.get("identification") or {}
+
+            id_candidates = [
+                entry.get("id"),
+                entry.get("_id"),
+                identification.get("id"),
+                identification.get("_id"),
+                identification.get("uid"),
+                identification.get("deviceId"),
+                identification.get("device_id"),
+                entry.get("uid"),
+                entry.get("deviceId"),
+                entry.get("device_id"),
+            ]
+
+            uisp_id = None
+            for candidate in id_candidates:
+                cleaned_candidate = _clean_string(candidate)
+                if cleaned_candidate:
+                    uisp_id = cleaned_candidate
+                    break
+
+            if not uisp_id:
+                fallback_mac = _clean_string(
+                    identification.get("mac")
+                    or entry.get("macAddress")
+                    or entry.get("mac")
+                )
+                if fallback_mac:
+                    uisp_id = fallback_mac
+
+            if not uisp_id:
+                fallback_serial = _clean_string(
+                    identification.get("serialNumber")
+                    or identification.get("serial_number")
+                    or entry.get("serialNumber")
+                    or entry.get("serial_number")
+                )
+                if fallback_serial:
+                    uisp_id = fallback_serial
+
+            if not uisp_id:
+                current_app.logger.debug(
+                    "Skipping UISP device without identifier: %s", entry
+                )
+                continue
+
+            name = (
+                _clean_string(identification.get("name") or entry.get("name"))
+                or f"UISP Device {uisp_id}"
+            )
+            model = _clean_string(identification.get("model") or entry.get("model"))
+            mac = _clean_string(
+                identification.get("mac")
+                or entry.get("macAddress")
+                or entry.get("mac")
+            )
+            site_info = entry.get("site") or {}
+            site_name = _clean_string(site_info.get("name") or entry.get("siteName"))
+            ip_address = _clean_string(entry.get("ipAddress") or entry.get("ip"))
+
+            status_info = entry.get("status") or {}
+            status_raw = (
+                status_info.get("value")
+                or status_info.get("state")
+                or entry.get("status")
+            )
+            if status_raw is None and isinstance(status_info.get("online"), bool):
+                status_raw = "online" if status_info.get("online") else "offline"
+            status_value = (_clean_string(status_raw) or "unknown").lower()
+            if status_value not in {"online", "offline"}:
+                if "off" in status_value:
+                    status_value = "offline"
+                elif "on" in status_value:
+                    status_value = "online"
+                else:
+                    status_value = "unknown"
+
+            last_seen = parse_uisp_timestamp(
+                status_info.get("lastSeen")
+                or status_info.get("last_seen")
+                or entry.get("lastSeen")
+                or entry.get("last_seen")
+            )
+
+            firmware_info = entry.get("firmware") or {}
+            firmware_version = _clean_string(
+                firmware_info.get("version")
+                or entry.get("firmwareVersion")
+                or entry.get("firmware_version")
+            )
+
+            device = UispDevice.query.filter_by(uisp_id=uisp_id).first()
+            is_new = False
+            if not device:
+                device = UispDevice(uisp_id=uisp_id, name=name)
+                db.session.add(device)
+                created += 1
+                is_new = True
+
+            previous_status = device.status
+            previous_values = (
+                device.name,
+                device.model,
+                device.mac_address,
+                device.site_name,
+                device.ip_address,
+                device.firmware_version,
+                device.last_seen_at,
+            )
+
+            device.name = name
+            device.model = model
+            device.mac_address = mac
+            device.site_name = site_name
+            device.ip_address = ip_address
+            device.firmware_version = firmware_version
+            device.last_seen_at = last_seen
+            device.updated_at = now
+
+            if site_name and not device.tower_id:
+                matched = towers_by_name.get(site_name.lower())
+                if matched:
+                    device.tower = matched
+
+            status_changed = previous_status != status_value
+            device.status = status_value
+
+            if not is_new:
+                if (
+                    previous_values
+                    != (
+                        name,
+                        model,
+                        mac,
+                        site_name,
+                        ip_address,
+                        firmware_version,
+                        last_seen,
+                    )
+                    or status_changed
+                ):
+                    updated += 1
+
+            should_notify_outage = (
+                status_value == "offline"
+                and (device.outage_notified_at is None or status_changed)
+            )
+
+            if should_notify_outage:
+                recipients = _collect_outage_recipients(device)
+                if recipients:
+                    subject = f"Outage detected: {device.display_name()}"
+                    body = (
+                        "Hello,\n\n"
+                        f"UISP has reported that {device.display_name()} is offline.\n"
+                        f"Site: {device.site_name or 'Unknown'}\n"
+                        f"Tower: {device.tower.name if device.tower else 'Unassigned'}\n"
+                        f"IP address: {device.ip_address or 'N/A'}\n"
+                        f"MAC address: {device.mac_address or 'N/A'}\n"
+                        f"Last seen: {_format_last_seen(device.last_seen_at)}\n"
+                        f"Assigned customer: {device.client.name if device.client else 'Unassigned'}\n\n"
+                        "Technicians and administrators have been notified so service can be restored."
+                    )
+                    for recipient in recipients:
+                        dispatch_notification(
+                            recipient,
+                            subject,
+                            body,
+                            category="network",
+                        )
+                device.outage_notified_at = now
+                outages += 1
+            elif status_value == "online" and status_changed:
+                device.outage_notified_at = None
+
+        db.session.commit()
+
+        if config:
+            config.last_synced_at = now
+            config.updated_at = now
+            db.session.commit()
+
+        flash(
+            (
+                f"Synced {created} new UISP device{'s' if created != 1 else ''}"
+                f" and updated {updated}."
+                + (
+                    f" Triggered {outages} outage alert{'s' if outages != 1 else ''}."
+                    if outages
+                    else ""
+                )
+            ),
+            "success" if created or updated else "info",
+        )
+
+        return _redirect_back_to_dashboard("network")
+
+    @app.post("/uisp/devices/<int:device_id>/assign")
+    @login_required
+    def assign_uisp_device(device_id: int):
+        device = UispDevice.query.get_or_404(device_id)
+        nickname = (request.form.get("nickname") or "").strip() or None
+        notes = (request.form.get("notes") or "").strip() or None
+        client_id_raw = (request.form.get("client_id") or "").strip()
+        tower_id_raw = (request.form.get("tower_id") or "").strip()
+
+        target_client: Client | None = None
+        if client_id_raw:
+            try:
+                client_id = int(client_id_raw)
+            except (TypeError, ValueError):
+                flash("Select a valid customer for this device.", "danger")
+                return _redirect_back_to_dashboard("network")
+
+            target_client = Client.query.get(client_id)
+            if not target_client:
+                flash("The selected customer could not be found.", "danger")
+                return _redirect_back_to_dashboard("network")
+
+        target_tower: NetworkTower | None = None
+        if tower_id_raw:
+            try:
+                tower_id = int(tower_id_raw)
+            except (TypeError, ValueError):
+                flash("Select a valid tower for this device.", "danger")
+                return _redirect_back_to_dashboard("network")
+            target_tower = NetworkTower.query.get(tower_id)
+            if not target_tower:
+                flash("The selected tower could not be found.", "danger")
+                return _redirect_back_to_dashboard("network")
+
+        previous_client_id = device.client_id
+        previous_tower_id = device.tower_id
+        device.nickname = nickname
+        device.notes = notes
+        device.client_id = target_client.id if target_client else None
+        device.tower = target_tower
+        device.updated_at = utcnow()
+
+        if device.status == "online" and target_client is None:
+            device.outage_notified_at = None
+
+        db.session.commit()
+
+        messages: list[str] = []
+        if target_client and target_client.id != previous_client_id:
+            messages.append(f"{device.display_name()} assigned to {target_client.name}.")
+        elif target_client is None and previous_client_id is not None:
+            messages.append(f"{device.display_name()} is now unassigned.")
+
+        if target_tower and target_tower.id != previous_tower_id:
+            messages.append(f"Linked to tower {target_tower.name}.")
+        elif target_tower is None and previous_tower_id is not None:
+            messages.append("Removed from its tower assignment.")
+
+        if not messages:
+            messages.append("UISP device details updated.")
+
+        flash(" ".join(messages), "success")
+
+        return _redirect_back_to_dashboard("network")
+
     @app.post("/clients/<int:client_id>/equipment")
     @login_required
     def create_equipment(client_id: int):
@@ -6583,6 +8745,29 @@ def register_routes(app: Flask) -> None:
         db.session.add(equipment)
         db.session.commit()
 
+        if client.email:
+            installed_line = (
+                f"Installed on: {equipment.installed_on.strftime('%Y-%m-%d')}"
+                if equipment.installed_on
+                else "Installed on: Not set"
+            )
+            notes_line = f"Notes: {equipment.notes}\n" if equipment.notes else ""
+            dispatch_notification(
+                client.email,
+                f"Equipment added: {equipment.name}",
+                (
+                    f"Hello {client.name},\n\n"
+                    "We've added new equipment to your account.\n"
+                    f"Name: {equipment.name}\n"
+                    f"Model: {equipment.model or 'Not provided'}\n"
+                    f"Serial: {equipment.serial_number or 'Not provided'}\n"
+                    f"{installed_line}\n"
+                    f"{notes_line}"
+                    "\nYou can review your equipment details in the customer portal."
+                ),
+                category="account",
+            )
+
         flash(f"Equipment added for {client.name}.", "success")
         return _redirect_back_to_dashboard("network")
 
@@ -6614,6 +8799,30 @@ def register_routes(app: Flask) -> None:
         equipment.installed_on = installed_on_value
         equipment.notes = notes
         db.session.commit()
+
+        client = equipment.client
+        if client and client.email:
+            installed_line = (
+                f"Installed on: {equipment.installed_on.strftime('%Y-%m-%d')}"
+                if equipment.installed_on
+                else "Installed on: Not set"
+            )
+            notes_line = f"Notes: {equipment.notes}\n" if equipment.notes else ""
+            dispatch_notification(
+                client.email,
+                f"Equipment updated: {equipment.name}",
+                (
+                    f"Hello {client.name},\n\n"
+                    "We've updated the equipment details on your account.\n"
+                    f"Name: {equipment.name}\n"
+                    f"Model: {equipment.model or 'Not provided'}\n"
+                    f"Serial: {equipment.serial_number or 'Not provided'}\n"
+                    f"{installed_line}\n"
+                    f"{notes_line}"
+                    "\nVisit your customer portal to review the latest equipment information."
+                ),
+                category="account",
+            )
 
         flash("Equipment updated.", "success")
         return _redirect_back_to_dashboard("network")
@@ -6994,6 +9203,61 @@ def register_routes(app: Flask) -> None:
         )
         return _redirect_back_to_dashboard("field")
 
+    @app.post("/tickets/<int:ticket_id>/messages")
+    @login_required
+    def admin_ticket_message(ticket_id: int):
+        ticket = SupportTicket.query.get_or_404(ticket_id)
+
+        body = (request.form.get("message") or "").strip()
+        uploaded_files = [
+            file
+            for file in request.files.getlist("attachments")
+            if file and getattr(file, "filename", "")
+        ]
+
+        if not body and not uploaded_files:
+            flash("Add a message or attachment before sending.", "danger")
+            next_url = request.form.get("next") or request.args.get("next")
+            return redirect(next_url or url_for("admin_client_account", client_id=ticket.client_id))
+
+        if uploaded_files:
+            ensure_file_surface_enabled("support-ticket-attachments")
+            for file in uploaded_files:
+                if not allowed_ticket_attachment(file.filename):
+                    flash(
+                        "Upload JPG, PNG, GIF, HEIC, PDF, text, spreadsheet, or document files.",
+                        "danger",
+                    )
+                    next_url = request.form.get("next") or request.args.get("next")
+                    return redirect(
+                        next_url
+                        or url_for("admin_client_account", client_id=ticket.client_id)
+                    )
+
+        message_text = body or "Attachments uploaded"
+        message_record = SupportTicketMessage(
+            ticket_id=ticket.id,
+            sender="admin",
+            body=message_text,
+            admin_id=session.get("admin_user_id"),
+        )
+        db.session.add(message_record)
+        db.session.flush()
+
+        for file in uploaded_files:
+            store_ticket_attachment(
+                current_app, ticket, file, message=message_record
+            )
+
+        ticket.updated_at = utcnow()
+        db.session.commit()
+
+        notify_ticket_message(ticket, message_record)
+
+        flash("Reply sent to the customer.", "success")
+        next_url = request.form.get("next") or request.args.get("next")
+        return redirect(next_url or url_for("admin_client_account", client_id=ticket.client_id))
+
     @app.post("/tickets/<int:ticket_id>/update")
     @login_required
     def update_ticket(ticket_id: int):
@@ -7016,7 +9280,7 @@ def register_routes(app: Flask) -> None:
         for file in uploaded_files:
             if not allowed_ticket_attachment(file.filename):
                 flash(
-                    "Upload JPG, PNG, GIF, or HEIC images for ticket attachments.",
+                    "Upload JPG, PNG, GIF, HEIC, PDF, text, spreadsheet, archive, or document files.",
                     "danger",
                 )
                 return _redirect_back_to_dashboard("support")
@@ -7176,6 +9440,9 @@ def register_routes(app: Flask) -> None:
 
         config.notify_install_activity = request.form.get("notify_installs") == "on"
         config.notify_customer_activity = request.form.get("notify_customers") == "on"
+        config.notify_all_account_activity = (
+            request.form.get("notify_all_activity") == "on"
+        )
         config.updated_at = utcnow()
 
         db.session.commit()
@@ -8008,6 +10275,108 @@ def register_routes(app: Flask) -> None:
             download_name=business.logo_original or "trusted-business",
         )
 
+    @app.post("/support-partners")
+    @login_required
+    def create_support_partner_admin():
+        name = request.form.get("name", "").strip()
+        website_url = request.form.get("website_url", "").strip() or None
+        description = request.form.get("description", "").strip() or None
+        logo = request.files.get("logo")
+
+        if not name:
+            flash("Provide a company name to highlight.", "danger")
+            return redirect(url_for("dashboard", section="story"))
+
+        next_position = (
+            db.session.query(db.func.max(SupportPartner.position)).scalar() or 0
+        ) + 1
+
+        partner = SupportPartner(
+            name=name,
+            website_url=website_url,
+            description=description,
+            position=next_position,
+        )
+        db.session.add(partner)
+        db.session.commit()
+
+        if logo and logo.filename:
+            ensure_file_surface_enabled("support-partner-logo")
+            try:
+                store_support_partner_logo(app, partner, logo)
+            except ValueError as exc:
+                db.session.delete(partner)
+                db.session.commit()
+                flash(str(exc), "danger")
+                return redirect(url_for("dashboard", section="story"))
+            else:
+                db.session.commit()
+
+        flash(f"Added {partner.name} to your operations allies.", "success")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.post("/support-partners/<int:partner_id>")
+    @login_required
+    def update_support_partner_admin(partner_id: int):
+        partner = SupportPartner.query.get_or_404(partner_id)
+
+        name = request.form.get("name", "").strip()
+        website_url = request.form.get("website_url", "").strip() or None
+        description = request.form.get("description", "").strip() or None
+        logo = request.files.get("logo")
+
+        if not name:
+            flash("Company name is required.", "danger")
+            return redirect(url_for("dashboard", section="story"))
+
+        partner.name = name
+        partner.website_url = website_url
+        partner.description = description
+
+        if logo and logo.filename:
+            ensure_file_surface_enabled("support-partner-logo")
+            try:
+                store_support_partner_logo(app, partner, logo)
+            except ValueError as exc:
+                db.session.rollback()
+                flash(str(exc), "danger")
+                return redirect(url_for("dashboard", section="story"))
+
+        db.session.commit()
+        flash(f"Updated {partner.name}.", "success")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.post("/support-partners/<int:partner_id>/delete")
+    @login_required
+    def delete_support_partner_admin(partner_id: int):
+        partner = SupportPartner.query.get_or_404(partner_id)
+
+        delete_support_partner_logo(app, partner)
+        db.session.delete(partner)
+        db.session.commit()
+
+        flash("Support partner removed.", "info")
+        return redirect(url_for("dashboard", section="story"))
+
+    @app.get("/support-partners/<int:partner_id>/logo")
+    def support_partner_logo(partner_id: int):
+        partner = SupportPartner.query.get_or_404(partner_id)
+        if not partner.logo_filename:
+            abort(404)
+
+        upload_folder = Path(app.config["SUPPORT_PARTNER_UPLOAD_FOLDER"])
+        file_path = upload_folder / partner.logo_filename
+        if not file_path.exists():
+            abort(404)
+
+        return send_site_file(
+            "support-partner-logo",
+            upload_folder,
+            partner.logo_filename,
+            as_attachment=False,
+            download_name=partner.logo_original or "support-partner",
+        )
+
     @app.post("/blog/posts/<int:post_id>/delete")
     @login_required
     def delete_blog_post(post_id: int):
@@ -8095,11 +10464,48 @@ if __name__ == "__main__":
 
     with app.app_context():
         tls_config = TLSConfig.query.first()
+        resolved: tuple[Path, Path] | None = None
         if tls_config and tls_config.certificate_ready():
-            ssl_context = (
-                str(Path(tls_config.certificate_path)),
-                str(Path(tls_config.private_key_path)),
+            resolved = (
+                Path(tls_config.certificate_path),
+                Path(tls_config.private_key_path),
             )
+        else:
+            resolved = resolve_tls_certificate_files(app, tls_config)
+            if resolved:
+                cert_path, key_path = resolved
+                if tls_config is None:
+                    tls_config = TLSConfig(
+                        certificate_path=str(cert_path),
+                        private_key_path=str(key_path),
+                        challenge_path=app.config.get("TLS_CHALLENGE_FOLDER"),
+                        status="active",
+                        last_provisioned_at=utcnow(),
+                    )
+                    db.session.add(tls_config)
+                    db.session.commit()
+                else:
+                    changed = False
+                    if tls_config.certificate_path != str(cert_path):
+                        tls_config.certificate_path = str(cert_path)
+                        changed = True
+                    if tls_config.private_key_path != str(key_path):
+                        tls_config.private_key_path = str(key_path)
+                        changed = True
+                    if tls_config.status != "active":
+                        tls_config.status = "active"
+                        changed = True
+                    if tls_config.last_error:
+                        tls_config.last_error = None
+                        changed = True
+                    if tls_config.last_provisioned_at is None:
+                        tls_config.last_provisioned_at = utcnow()
+                        changed = True
+                    if changed:
+                        db.session.commit()
+
+        if resolved:
+            ssl_context = (str(resolved[0]), str(resolved[1]))
 
     http_port = 80
     https_port = 443
