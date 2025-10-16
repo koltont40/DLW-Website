@@ -32,8 +32,11 @@
     {% endif %}
   </head>
   <body>
+    {% set header_container_class = header_container_class | default('container container-wide') %}
+    {% set main_container_class = main_container_class | default('container container-wide') %}
+    {% set footer_container_class = footer_container_class | default('container container-wide') %}
     <header class="site-header">
-      <div class="container header-content">
+      <div class="{{ header_container_class }} header-content">
         <a class="brand" href="{{ url_for('index') }}">
           {% if branding_assets.get('logo') %}
           <img src="{{ url_for('branding_file', asset_type='logo') }}" alt="DixieLand Wireless LLC logo" />
@@ -109,7 +112,7 @@
     </header>
 
     <main class="main-content">
-      <div class="container">
+      <div class="{{ main_container_class }}">
         {% with messages = get_flashed_messages(with_categories=true) %}
           {% if messages %}
             <div class="flash-wrapper">
@@ -131,7 +134,7 @@
     </main>
 
     <footer class="site-footer">
-      <div class="container footer-content">
+      <div class="{{ footer_container_class }} footer-content">
         <p>&copy; {{ current_year | default(2024) }} DIXIELAND WIRELESS LLC. All rights reserved.</p>
         <div class="footer-links">
           <a class="admin-login" href="{{ url_for('tech_login') }}">Tech Portal</a>

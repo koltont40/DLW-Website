@@ -72,6 +72,22 @@ body {
   margin: 0 auto;
 }
 
+.container.container-wide {
+  width: min(1800px, 97vw);
+}
+
+@media (min-width: 1600px) {
+  .container.container-wide {
+    width: min(1920px, 96vw);
+  }
+}
+
+@media (min-width: 1920px) {
+  .container.container-wide {
+    width: min(2040px, 96vw);
+  }
+}
+
 @media (min-width: 1440px) {
   .container {
     width: min(1500px, 92vw);
@@ -459,6 +475,11 @@ body {
   padding: 0 0 clamp(1.5rem, 2vw, 2rem);
 }
 
+.page-surface.full-bleed {
+  padding: 0;
+  gap: clamp(1.75rem, 2.5vw, 2.5rem);
+}
+
 .page-surface > * {
   background: color-mix(in srgb, var(--surface) 78%, transparent 22%);
   border-radius: clamp(18px, 2vw, 28px);
@@ -469,6 +490,14 @@ body {
   position: relative;
   isolation: isolate;
   color: var(--text);
+}
+
+.page-surface.full-bleed > * {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  backdrop-filter: none;
 }
 
 .page-surface > .surface-plain {
@@ -1058,6 +1087,7 @@ a.trusted-logo:hover {
   grid-template-columns: 280px 1fr;
   gap: 1.5rem;
   align-items: flex-start;
+  padding: 0 clamp(1.75rem, 2.5vw, 3rem) clamp(2.25rem, 3vw, 3.5rem);
 }
 
 .admin-sidebar {
@@ -2637,6 +2667,7 @@ a.trusted-logo:hover {
   grid-template-columns: minmax(220px, 260px) 1fr;
   gap: 1.5rem;
   align-items: flex-start;
+  padding: 0 clamp(1.5rem, 2.25vw, 2.75rem) clamp(2rem, 3vw, 3.25rem);
 }
 
 .portal-sidebar {
@@ -4774,6 +4805,7 @@ a.trusted-logo:hover {
   display: flex;
   flex-direction: column;
   gap: 2rem;
+  padding: 0 clamp(1.5rem, 2.5vw, 3rem) clamp(2rem, 3vw, 3.25rem);
 }
 
 .tech-header {
