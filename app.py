@@ -21,6 +21,7 @@ from email.utils import formataddr, format_datetime, make_msgid
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote_plus, urljoin
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
@@ -68,6 +69,10 @@ _stripe_schema_checked = False
 
 STRIPE_DEFAULT_CURRENCY = "usd"
 STRIPE_AUTOPAY_METADATA_FLAG = "autopay"
+
+DEFAULT_APP_TIMEZONE = "America/Chicago"
+
+_TIMEZONE_CACHE: dict[str, ZoneInfo] = {}
 
 SITE_SHELL_CACHE_KEY = "_site_shell_cache"
 SITE_SHELL_CACHE_SECONDS_DEFAULT = 15.0
@@ -119,8 +124,78 @@ def send_site_file(
     return send_from_directory(str(directory), filename, **send_kwargs)
 
 
+def parse_env_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if not normalized:
+        return default
+    return normalized in {"1", "true", "yes", "on", "y"}
+
+
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _load_timezone(name: str | None) -> ZoneInfo:
+    key = (name or "").strip() or DEFAULT_APP_TIMEZONE
+    cached = _TIMEZONE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    try:
+        timezone = ZoneInfo(key)
+    except ZoneInfoNotFoundError:
+        if key != DEFAULT_APP_TIMEZONE:
+            return _load_timezone(DEFAULT_APP_TIMEZONE)
+        timezone = ZoneInfo("UTC")
+
+    _TIMEZONE_CACHE[key] = timezone
+    return timezone
+
+
+def get_local_timezone(app: Flask | None = None) -> ZoneInfo:
+    if app is None:
+        try:
+            app = current_app._get_current_object()
+        except RuntimeError:
+            app = None
+
+    if app is not None:
+        tz_name = app.config.get("APP_TIMEZONE") or DEFAULT_APP_TIMEZONE
+    else:
+        tz_name = os.environ.get("APP_TIMEZONE", DEFAULT_APP_TIMEZONE)
+
+    return _load_timezone(tz_name)
+
+
+def local_now(app: Flask | None = None) -> datetime:
+    timezone = get_local_timezone(app)
+    return datetime.now(timezone)
+
+
+def local_today(app: Flask | None = None) -> date:
+    return local_now(app).date()
+
+
+def parse_daily_time(value: str | None, fallback: tuple[int, int] = (3, 0)) -> tuple[int, int]:
+    if not value:
+        return fallback
+
+    cleaned = value.strip()
+    if not cleaned:
+        return fallback
+
+    hour_str, _, minute_str = cleaned.partition(":")
+    try:
+        hour = int(hour_str)
+        minute = int(minute_str or "0")
+    except ValueError:
+        return fallback
+
+    hour = max(0, min(23, hour))
+    minute = max(0, min(59, minute))
+    return hour, minute
 
 
 def slugify_segment(value: str) -> str:
@@ -813,7 +888,7 @@ def recalculate_client_billing_state(client: "Client") -> None:
         for invoice in client.invoices
         if invoice.status not in {"Paid", "Cancelled", "Refunded"}
     ]
-    today = date.today()
+    today = local_today()
     has_overdue = any(
         invoice.status == "Overdue"
         or (invoice.due_date is not None and invoice.due_date < today)
@@ -867,6 +942,185 @@ def record_autopay_event(
     )
     db.session.add(event)
     return event
+
+
+def process_autopay_run(
+    *, app: Flask | None = None, today: date | None = None
+) -> dict[str, object]:
+    if app is None:
+        try:
+            app = current_app._get_current_object()
+        except RuntimeError as exc:  # pragma: no cover - defensive guard
+            raise RuntimeError("process_autopay_run requires an application context") from exc
+
+    if not stripe_active(app):
+        message = "Stripe is not configured, so autopay cannot process charges"
+        return {
+            "status": "disabled",
+            "summary": message,
+            "processed_accounts": 0,
+            "submitted_charges": 0,
+            "failed_charges": 0,
+            "skipped_accounts": 0,
+        }
+
+    if today is None:
+        today = local_today(app)
+
+    autopay_clients = Client.query.filter_by(autopay_enabled=True).all()
+
+    processed_accounts = 0
+    submitted_charges = 0
+    failed_charges = 0
+    skipped_accounts = 0
+
+    for client in autopay_clients:
+        default_method = client.default_payment_method()
+        due_invoices = [
+            invoice
+            for invoice in client.invoices
+            if invoice.status in {"Pending", "Overdue"}
+            and (invoice.due_date is None or invoice.due_date <= today)
+        ]
+
+        scheduled_day = client.autopay_day
+        if scheduled_day:
+            if today.day != scheduled_day:
+                if due_invoices:
+                    record_autopay_event(
+                        client=client,
+                        invoice=None,
+                        payment_method=default_method,
+                        status="scheduled",
+                        message=(
+                            "Waiting for scheduled autopay day "
+                            f"{scheduled_day} to process invoices"
+                        ),
+                        amount_cents=0,
+                    )
+                skipped_accounts += 1
+                continue
+
+        if not due_invoices:
+            if default_method:
+                record_autopay_event(
+                    client=client,
+                    invoice=None,
+                    payment_method=default_method,
+                    status="skipped",
+                    message="No invoices due",
+                    amount_cents=0,
+                )
+            skipped_accounts += 1
+            continue
+
+        processed_accounts += 1
+
+        if (
+            default_method is None
+            or not default_method.token
+            or not default_method.token.startswith("pm_")
+        ):
+            for invoice in due_invoices:
+                invoice.autopay_attempted_at = utcnow()
+                invoice.autopay_status = "Missing Method"
+                record_autopay_event(
+                    client=client,
+                    invoice=invoice,
+                    payment_method=None,
+                    status="failed",
+                    message="Autopay failed: no default method",
+                    amount_cents=invoice.amount_cents,
+                )
+                failed_charges += 1
+            recalculate_client_billing_state(client)
+            continue
+
+        try:
+            sync_stripe_payment_method(
+                client, default_method.token, set_default=True
+            )
+        except StripeError as error:
+            for invoice in due_invoices:
+                invoice.autopay_attempted_at = utcnow()
+                invoice.autopay_status = "Failed"
+                record_autopay_event(
+                    client=client,
+                    invoice=invoice,
+                    payment_method=default_method,
+                    status="failed",
+                    message=f"Autopay failed to sync card: {describe_stripe_error(error)}",
+                    amount_cents=invoice.amount_cents,
+                )
+                failed_charges += 1
+            recalculate_client_billing_state(client)
+            continue
+
+        for invoice in due_invoices:
+            try:
+                payment_intent = ensure_invoice_payment_intent(
+                    invoice,
+                    autopay=True,
+                    client=client,
+                    payment_method_id=default_method.token,
+                )
+            except StripeError as error:
+                invoice.autopay_attempted_at = utcnow()
+                invoice.autopay_status = "Failed"
+                record_autopay_event(
+                    client=client,
+                    invoice=invoice,
+                    payment_method=default_method,
+                    status="failed",
+                    message=describe_stripe_error(error),
+                    amount_cents=invoice.amount_cents,
+                )
+                failed_charges += 1
+                continue
+
+            invoice.autopay_attempted_at = utcnow()
+            if payment_intent is None:
+                invoice.autopay_status = "Manual"
+                continue
+
+            invoice.autopay_status = "Processing"
+            record_autopay_event(
+                client=client,
+                invoice=invoice,
+                payment_method=default_method,
+                status="pending",
+                message="Submitted to Stripe for processing",
+                amount_cents=invoice.amount_cents,
+                stripe_payment_intent_id=payment_intent.id,
+            )
+            submitted_charges += 1
+
+        recalculate_client_billing_state(client)
+
+    for client in Client.query.filter_by(autopay_enabled=False).all():
+        recalculate_client_billing_state(client)
+
+    db.session.commit()
+
+    summary = (
+        f"Autopay processed {processed_accounts} accounts and submitted "
+        f"{submitted_charges} payments to Stripe"
+    )
+    if failed_charges:
+        summary += f" and {failed_charges} failures"
+    if skipped_accounts:
+        summary += f"; {skipped_accounts} accounts had nothing due"
+
+    status = "success" if failed_charges == 0 else "warning"
+
+    return {
+        "status": status,
+        "summary": summary,
+        "processed_accounts": processed_accounts,
+        "submitted_charges": submitted_charges,
+        "failed_charges": failed_charges,
+        "skipped_accounts": skipped_accounts,
+    }
 
 
 def ensure_stripe_customer(client: "Client") -> str | None:
@@ -2245,6 +2499,79 @@ class SupportPartner(db.Model):
         return f"<SupportPartner {self.name}>"
 
 
+class AutopayScheduler:
+    def __init__(self, app: Flask):
+        self.app = app
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._last_run_date: date | None = None
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            daemon=True,
+            name="autopay-scheduler",
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        thread = self._thread
+        if thread and thread.is_alive():
+            thread.join(timeout=1.0)
+
+    def _scheduled_time(self) -> tuple[int, int]:
+        return parse_daily_time(
+            self.app.config.get("AUTOPAY_SCHEDULER_TIME"), (3, 0)
+        )
+
+    def _run_loop(self) -> None:
+        while not self._stop_event.is_set():
+            now = local_now(self.app)
+            hour, minute = self._scheduled_time()
+            run_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+            if now >= run_at:
+                if self._last_run_date != now.date():
+                    self._execute_run(now)
+                    self._last_run_date = now.date()
+                    continue
+                next_run = run_at + timedelta(days=1)
+                wait_seconds = max(1.0, (next_run - now).total_seconds())
+            else:
+                wait_seconds = max(1.0, (run_at - now).total_seconds())
+
+            if self._stop_event.wait(wait_seconds):
+                break
+
+    def _execute_run(self, current_time: datetime) -> None:
+        try:
+            with self.app.app_context():
+                result = process_autopay_run(
+                    app=self.app, today=current_time.date()
+                )
+        except Exception:  # pragma: no cover - defensive guard
+            self.app.logger.exception("Autopay scheduler run failed")
+            return
+
+        summary = result.get("summary") or "Autopay scheduler completed"
+        status = result.get("status")
+        if status == "disabled":
+            self.app.logger.info("Autopay scheduler skipped: %s", summary)
+            return
+
+        self.app.logger.info(
+            "Autopay scheduler run: %s (processed=%s, submitted=%s, failed=%s, skipped=%s)",
+            summary,
+            result.get("processed_accounts"),
+            result.get("submitted_charges"),
+            result.get("failed_charges"),
+            result.get("skipped_accounts"),
+        )
+
+
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, instance_relative_config=True)
 
@@ -2303,6 +2630,11 @@ def create_app(test_config: dict | None = None) -> Flask:
         "UISP_BASE_URL": os.environ.get("UISP_BASE_URL"),
         "UISP_API_TOKEN": os.environ.get("UISP_API_TOKEN"),
         "UISP_API_TIMEOUT": float(os.environ.get("UISP_API_TIMEOUT", "10")),
+        "APP_TIMEZONE": os.environ.get("APP_TIMEZONE", DEFAULT_APP_TIMEZONE),
+        "AUTOPAY_SCHEDULER_ENABLED": parse_env_bool(
+            os.environ.get("AUTOPAY_SCHEDULER_ENABLED"), True
+        ),
+        "AUTOPAY_SCHEDULER_TIME": os.environ.get("AUTOPAY_SCHEDULER_TIME", "03:00"),
         "SITE_SHELL_CACHE_SECONDS": float(
             os.environ.get(
                 "SITE_SHELL_CACHE_SECONDS", SITE_SHELL_CACHE_SECONDS_DEFAULT
@@ -2332,6 +2664,9 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     if test_config:
         app.config.update(test_config)
+
+    if app.config.get("TESTING"):
+        app.config["AUTOPAY_SCHEDULER_ENABLED"] = False
 
     db.init_app(app)
     init_stripe(app)
@@ -2377,6 +2712,12 @@ def create_app(test_config: dict | None = None) -> Flask:
         ensure_tls_configuration()
         ensure_site_theme()
         ensure_uisp_schema()
+
+    scheduler: AutopayScheduler | None = None
+    if app.config.get("AUTOPAY_SCHEDULER_ENABLED", True):
+        scheduler = AutopayScheduler(app)
+        scheduler.start()
+    app.autopay_scheduler = scheduler
 
     return app
 
@@ -7730,157 +8071,17 @@ def register_routes(app: Flask) -> None:
     @app.post("/autopay/run")
     @login_required
     def run_autopay():
-        if not stripe_active():
-            flash(
-                "Stripe is not configured, so autopay cannot process charges.",
-                "warning",
-            )
-            return _redirect_back_to_dashboard("billing")
+        result = process_autopay_run()
+        summary = result.get("summary") or "Autopay run completed"
+        if not summary.endswith("."):
+            summary += "."
 
-        today = date.today()
-        autopay_clients = Client.query.filter_by(autopay_enabled=True).all()
-        processed_accounts = 0
-        submitted_charges = 0
-        failed_charges = 0
-        skipped_accounts = 0
+        if result.get("status") == "disabled":
+            flash(summary, "warning")
+        else:
+            category = "info" if result.get("failed_charges", 0) == 0 else "warning"
+            flash(summary, category)
 
-        for client in autopay_clients:
-            default_method = client.default_payment_method()
-            due_invoices = [
-                invoice
-                for invoice in client.invoices
-                if invoice.status in {"Pending", "Overdue"}
-                and (invoice.due_date is None or invoice.due_date <= today)
-            ]
-
-            scheduled_day = client.autopay_day
-            if scheduled_day:
-                today_day = today.day
-                if today_day != scheduled_day:
-                    if due_invoices:
-                        record_autopay_event(
-                            client=client,
-                            invoice=None,
-                            payment_method=default_method,
-                            status="scheduled",
-                            message=(
-                                "Waiting for scheduled autopay day "
-                                f"{scheduled_day} to process invoices"
-                            ),
-                            amount_cents=0,
-                        )
-                    skipped_accounts += 1
-                    continue
-
-            if not due_invoices:
-                if default_method:
-                    record_autopay_event(
-                        client=client,
-                        invoice=None,
-                        payment_method=default_method,
-                        status="skipped",
-                        message="No invoices due",
-                        amount_cents=0,
-                    )
-                skipped_accounts += 1
-                continue
-
-            processed_accounts += 1
-
-            if (
-                default_method is None
-                or not default_method.token
-                or not default_method.token.startswith("pm_")
-            ):
-                for invoice in due_invoices:
-                    invoice.autopay_attempted_at = utcnow()
-                    invoice.autopay_status = "Missing Method"
-                    record_autopay_event(
-                        client=client,
-                        invoice=invoice,
-                        payment_method=None,
-                        status="failed",
-                        message="Autopay failed: no default method",
-                        amount_cents=invoice.amount_cents,
-                    )
-                    failed_charges += 1
-                recalculate_client_billing_state(client)
-                continue
-
-            try:
-                sync_stripe_payment_method(client, default_method.token, set_default=True)
-            except StripeError as error:
-                for invoice in due_invoices:
-                    invoice.autopay_attempted_at = utcnow()
-                    invoice.autopay_status = "Failed"
-                    record_autopay_event(
-                        client=client,
-                        invoice=invoice,
-                        payment_method=default_method,
-                        status="failed",
-                        message=f"Autopay failed to sync card: {describe_stripe_error(error)}",
-                        amount_cents=invoice.amount_cents,
-                    )
-                    failed_charges += 1
-                recalculate_client_billing_state(client)
-                continue
-
-            for invoice in due_invoices:
-                try:
-                    payment_intent = ensure_invoice_payment_intent(
-                        invoice,
-                        autopay=True,
-                        client=client,
-                        payment_method_id=default_method.token,
-                    )
-                except StripeError as error:
-                    invoice.autopay_attempted_at = utcnow()
-                    invoice.autopay_status = "Failed"
-                    record_autopay_event(
-                        client=client,
-                        invoice=invoice,
-                        payment_method=default_method,
-                        status="failed",
-                        message=describe_stripe_error(error),
-                        amount_cents=invoice.amount_cents,
-                    )
-                    failed_charges += 1
-                    continue
-
-                invoice.autopay_attempted_at = utcnow()
-                if payment_intent is None:
-                    invoice.autopay_status = "Manual"
-                    continue
-
-                invoice.autopay_status = "Processing"
-                record_autopay_event(
-                    client=client,
-                    invoice=invoice,
-                    payment_method=default_method,
-                    status="pending",
-                    message="Submitted to Stripe for processing",
-                    amount_cents=invoice.amount_cents,
-                    stripe_payment_intent_id=payment_intent.id,
-                )
-                submitted_charges += 1
-
-            recalculate_client_billing_state(client)
-
-        for client in Client.query.filter_by(autopay_enabled=False).all():
-            recalculate_client_billing_state(client)
-
-        db.session.commit()
-
-        summary = (
-            f"Autopay processed {processed_accounts} accounts and submitted "
-            f"{submitted_charges} payments to Stripe"
-        )
-        if failed_charges:
-            summary += f" and {failed_charges} failures"
-        if skipped_accounts:
-            summary += f"; {skipped_accounts} accounts had nothing due"
-
-        flash(summary + ".", "info" if failed_charges == 0 else "warning")
         return _redirect_back_to_dashboard("billing")
 
     @app.post("/stripe/webhook")
@@ -8248,11 +8449,53 @@ def register_routes(app: Flask) -> None:
         }
 
         for entry in payload:
-            uisp_id = _clean_string(entry.get("id") or entry.get("_id"))
+            identification = entry.get("identification") or {}
+
+            id_candidates = [
+                entry.get("id"),
+                entry.get("_id"),
+                identification.get("id"),
+                identification.get("_id"),
+                identification.get("uid"),
+                identification.get("deviceId"),
+                identification.get("device_id"),
+                entry.get("uid"),
+                entry.get("deviceId"),
+                entry.get("device_id"),
+            ]
+
+            uisp_id = None
+            for candidate in id_candidates:
+                cleaned_candidate = _clean_string(candidate)
+                if cleaned_candidate:
+                    uisp_id = cleaned_candidate
+                    break
+
             if not uisp_id:
+                fallback_mac = _clean_string(
+                    identification.get("mac")
+                    or entry.get("macAddress")
+                    or entry.get("mac")
+                )
+                if fallback_mac:
+                    uisp_id = fallback_mac
+
+            if not uisp_id:
+                fallback_serial = _clean_string(
+                    identification.get("serialNumber")
+                    or identification.get("serial_number")
+                    or entry.get("serialNumber")
+                    or entry.get("serial_number")
+                )
+                if fallback_serial:
+                    uisp_id = fallback_serial
+
+            if not uisp_id:
+                current_app.logger.debug(
+                    "Skipping UISP device without identifier: %s", entry
+                )
                 continue
 
-            identification = entry.get("identification") or {}
             name = (
                 _clean_string(identification.get("name") or entry.get("name"))
                 or f"UISP Device {uisp_id}"

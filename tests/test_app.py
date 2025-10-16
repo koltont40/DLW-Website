@@ -1214,6 +1214,7 @@ def test_autopay_run_submits_payment_intents(app, client, monkeypatch):
     login_admin(client)
 
     with app.app_context():
+        today = app_module.local_today(app)
         customer = Client(
             name="Autopay Success",
             email="auto-success@example.com",
@@ -1229,7 +1230,7 @@ def test_autopay_run_submits_payment_intents(app, client, monkeypatch):
             brand="Visa",
             last4="1111",
             exp_month=12,
-            exp_year=date.today().year + 1,
+            exp_year=today.year + 1,
             token="pm_success",
             is_default=True,
         )
@@ -1238,7 +1239,7 @@ def test_autopay_run_submits_payment_intents(app, client, monkeypatch):
             description="Internet service",
             amount_cents=5000,
             status="Pending",
-            due_date=date.today(),
+            due_date=today,
         )
         db.session.add_all([method, invoice])
         db.session.commit()
@@ -1265,10 +1266,10 @@ def test_autopay_run_defers_until_scheduled_day(app, client, monkeypatch):
     install_stripe_stub(app, monkeypatch)
     login_admin(client)
 
-    today_day = date.today().day
-    scheduled_day = today_day + 1 if today_day < 28 else 1
-
     with app.app_context():
+        today = app_module.local_today(app)
+        today_day = today.day
+        scheduled_day = today_day + 1 if today_day < 28 else 1
         customer = Client(
             name="Autopay Scheduled",
             email="scheduled@example.com",
@@ -1285,7 +1286,7 @@ def test_autopay_run_defers_until_scheduled_day(app, client, monkeypatch):
             brand="Visa",
             last4="1111",
             exp_month=12,
-            exp_year=date.today().year + 1,
+            exp_year=today.year + 1,
             token="pm_success",
             is_default=True,
         )
@@ -1294,7 +1295,7 @@ def test_autopay_run_defers_until_scheduled_day(app, client, monkeypatch):
             description="Internet service",
             amount_cents=5000,
             status="Pending",
-            due_date=date.today(),
+            due_date=today,
         )
         db.session.add_all([method, invoice])
         db.session.commit()
@@ -1318,6 +1319,7 @@ def test_autopay_run_suspends_when_no_method(app, client, monkeypatch):
     login_admin(client)
 
     with app.app_context():
+        today = app_module.local_today(app)
         customer = Client(
             name="Autopay Failure",
             email="auto-fail@example.com",
@@ -1332,7 +1334,7 @@ def test_autopay_run_suspends_when_no_method(app, client, monkeypatch):
             description="Managed service",
             amount_cents=4200,
             status="Pending",
-            due_date=date.today(),
+            due_date=today,
         )
         db.session.add(invoice)
         db.session.commit()
@@ -1350,6 +1352,15 @@ def test_autopay_run_suspends_when_no_method(app, client, monkeypatch):
         assert customer.billing_status == "Delinquent"
         events = AutopayEvent.query.filter_by(client_id=customer_id).all()
         assert any(event.status == "failed" for event in events)
+
+
+def test_process_autopay_run_disabled_without_stripe(app):
+    with app.app_context():
+        app.config["STRIPE_SECRET_KEY"] = None
+        result = app_module.process_autopay_run(app=app)
+
+    assert result["status"] == "disabled"
+    assert "Stripe is not configured" in result["summary"]
 
 
 def test_autopay_schedule_request_and_approval(app, client, monkeypatch):
@@ -1424,6 +1435,7 @@ def test_stripe_webhook_marks_invoice_paid(app, client, monkeypatch):
     stub = install_stripe_stub(app, monkeypatch)
 
     with app.app_context():
+        today = app_module.local_today(app)
         customer = Client(
             name="Webhook Client",
             email="webhook@example.com",
@@ -1439,7 +1451,7 @@ def test_stripe_webhook_marks_invoice_paid(app, client, monkeypatch):
             brand="Visa",
             last4="4242",
             exp_month=1,
-            exp_year=date.today().year + 2,
+            exp_year=today.year + 2,
             token="pm_webhook",
             is_default=True,
         )
@@ -1448,7 +1460,7 @@ def test_stripe_webhook_marks_invoice_paid(app, client, monkeypatch):
             description="Monthly service",
             amount_cents=7500,
             status="Pending",
-            due_date=date.today(),
+            due_date=today,
             autopay_status="Processing",
             stripe_payment_intent_id="pi_webhook",
         )
@@ -1596,7 +1608,19 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
                     "ipAddress": "10.0.0.10",
                     "macAddress": "AA:BB:CC:DD:EE:01",
                     "firmware": {"version": "1.2.3"},
-                }
+                },
+                {
+                    "identification": {
+                        "uid": "device-3",
+                        "name": "Lake Sector",
+                        "model": "UISP Prism",
+                    },
+                    "site": {"name": "Lake Tower"},
+                    "status": {"value": "online", "lastSeen": "2024-05-01T12:05:00Z"},
+                    "ipAddress": "10.0.0.12",
+                    "macAddress": "AA:BB:CC:DD:EE:03",
+                    "firmware": {"version": "2.0.0"},
+                },
             ],
             "_links": {"next": "/nms/api/v2.1/devices?page=2"},
             "pagination": {"page": 1, "perPage": 200, "totalPages": 2},
@@ -1673,13 +1697,15 @@ def test_admin_syncs_uisp_devices_and_assigns_to_customer(app, client, monkeypat
         assert config is not None
         assert config.last_synced_at is not None
         devices = UispDevice.query.order_by(UispDevice.uisp_id.asc()).all()
-        assert len(devices) == 2
+        assert len(devices) == 3
         online_device = next(device for device in devices if device.uisp_id == "device-1")
         assert online_device.tower_id == north_tower_id
         offline_device = next(device for device in devices if device.uisp_id == "device-2")
         assert offline_device.status == "offline"
         assert offline_device.outage_notified_at is not None
         offline_id = offline_device.id
+        lake_device = next(device for device in devices if device.uisp_id == "device-3")
+        assert lake_device.tower_id == lake_tower_id
 
     recipients = {entry[0] for entry in sent_notifications}
     assert "ops@example.com" in recipients
