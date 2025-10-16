@@ -20,7 +20,7 @@ from email.message import EmailMessage
 from email.utils import formataddr, format_datetime, make_msgid
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin
 
 import requests
 
@@ -183,19 +183,128 @@ class UispApiClient:
             "accept": "application/json",
             "x-auth-token": self.token,
         }
-        response = requests.get(endpoint, headers=headers, timeout=self.timeout)
-        if response.status_code != 200:
-            raise UispApiError(
-                f"UISP API responded with HTTP {response.status_code}: {response.text}"
-            )
-        try:
-            payload = response.json()
-        except ValueError as exc:  # pragma: no cover - defensive guard
-            raise UispApiError("UISP API returned an invalid JSON payload.") from exc
 
-        if not isinstance(payload, list):
-            raise UispApiError("Unexpected UISP API response structure.")
-        return payload
+        devices: list[dict] = []
+        page = 1
+        per_page = 200
+        next_url: str | None = endpoint
+        params: dict[str, object] | None = {"page": page, "perPage": per_page}
+
+        while next_url:
+            response = requests.get(
+                next_url,
+                headers=headers,
+                params=params if params else None,
+                timeout=self.timeout,
+            )
+            if response.status_code != 200:
+                raise UispApiError(
+                    f"UISP API responded with HTTP {response.status_code}: {response.text}"
+                )
+
+            try:
+                payload = response.json()
+            except ValueError as exc:  # pragma: no cover - defensive guard
+                raise UispApiError("UISP API returned an invalid JSON payload.") from exc
+
+            chunk: list[dict]
+            pagination: dict[str, object] | None = None
+            next_link: str | None = None
+
+            if isinstance(payload, list):
+                chunk = payload
+                pagination = None
+                next_link = None
+            elif isinstance(payload, dict):
+                data_field: list[dict] | None = None
+                for key in ("items", "data", "devices"):
+                    value = payload.get(key)
+                    if isinstance(value, list):
+                        data_field = value
+                        break
+                if data_field is None:
+                    raise UispApiError("Unexpected UISP API response structure.")
+                chunk = data_field
+
+                links = payload.get("_links") or payload.get("links") or {}
+                if isinstance(links, dict):
+                    next_candidate = links.get("next")
+                    if isinstance(next_candidate, dict):
+                        next_link = next_candidate.get("href") or next_candidate.get("url")
+                    elif isinstance(next_candidate, list):
+                        next_link = None
+                        for entry in next_candidate:
+                            if isinstance(entry, dict):
+                                next_link = entry.get("href") or entry.get("url")
+                                if next_link:
+                                    break
+                            elif isinstance(entry, str) and entry:
+                                next_link = entry
+                                break
+                    elif isinstance(next_candidate, str) and next_candidate:
+                        next_link = next_candidate
+
+                pagination = payload.get("pagination")
+                if not isinstance(pagination, dict):
+                    meta = payload.get("meta")
+                    if isinstance(meta, dict):
+                        pagination_meta = meta.get("pagination")
+                        if isinstance(pagination_meta, dict):
+                            pagination = pagination_meta
+            else:
+                raise UispApiError("Unexpected UISP API response structure.")
+
+            devices.extend(chunk)
+
+            next_url = None
+            params = None
+
+            if next_link:
+                next_url = urljoin(self.base_url + "/", next_link)
+            elif pagination:
+                current_page = _coerce_int(pagination.get("page") or pagination.get("current"))
+                total_pages = _coerce_int(
+                    pagination.get("totalPages")
+                    or pagination.get("total_pages")
+                    or pagination.get("pages")
+                )
+                per_page_value = _coerce_int(
+                    pagination.get("perPage")
+                    or pagination.get("per_page")
+                    or pagination.get("limit")
+                )
+                if per_page_value:
+                    per_page = per_page_value
+                if total_pages and current_page and current_page < total_pages:
+                    page = current_page + 1
+                    next_url = endpoint
+                    params = {"page": page, "perPage": per_page}
+
+        return devices
+
+def _coerce_int(value: object | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value != value:  # NaN check
+            return None
+        return int(value)
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return int(cleaned)
+        except ValueError:
+            try:
+                return int(float(cleaned))
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
 def parse_uisp_timestamp(value: str | None) -> datetime | None:
